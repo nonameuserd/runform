@@ -25,6 +25,7 @@ dev = [
     "mypy>=1.13",
     "pre-commit>=4.0",
     "types-PyYAML>=6.0.0.0",
+    "python-semantic-release>=9.8",
 ]
 
 # Ingestion extras (Phase 1)
@@ -130,3 +131,12 @@ exclude_lines = [
     "def __repr__",
     "raise NotImplementedError",
 ]
+
+[tool.semantic_release]
+version_variable = "pyproject.toml:version"
+branch = "main"
+changelog_file = "CHANGELOG.md"
+build_command = "uv build"
+upload_to_pypi = false
+upload_to_release = true
+commit_author = "github-actions <github-actions@github.com>"

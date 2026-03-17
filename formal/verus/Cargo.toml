@@ -1,0 +1,18 @@
+[package]
+name = "akc_formal_verus"
+version = "0.1.0"
+edition = "2021"
+
+# This crate is a tiny Verus verification slice for the Agentic Knowledge
+# Compiler. It is not intended to be built as a normal Rust crate; instead,
+# Verus tooling will consume it via:
+#
+#   cargo verus -p akc_formal_verus
+#
+# The code in src/lib.rs mirrors a subset of the Python path-sanitization
+# logic used in the Phase 5 verifier, proving simple invariants about
+# traversal rejection.
+
+[lib]
+path = "src/lib.rs"
+
