@@ -45,4 +45,9 @@ These can support a future “correctness guarantees” phase (e.g. Dafny/Verus 
 - **Docs/APIs:** Chunking, embedding, retrieval; optional schema extraction (OpenAPI) for API-derived workflows.
 - **Living docs:** Bidirectional sync and validation (e.g. SpecWeave-style) can be a later “living system” feature.
 
+## Ingestion-specific choices
+
+- **Chunking:** Default to recursive/structure-aware chunking with overlap to preserve coherence and improve retrieval quality. This aligns with common RAG chunking guidance (e.g. Glukhov/Firecrawl surveys of chunking strategies).
+- **OpenAPI ingestion:** Prefer operation-level chunks (“`GET /users`”) plus an endpoint inventory document, matching the “discover relevant endpoints, then retrieve details” pattern described in recent OpenAPI-for-agents work.
+
 When implementing features, we align with and cite these works where relevant.

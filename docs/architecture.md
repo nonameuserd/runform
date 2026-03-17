@@ -61,8 +61,10 @@ flowchart LR
 ### 2. Ingestion (`src/akc/ingest/`)
 
 - **Connectors:** Plugins per source type (docs, API, messaging). Each connector fetches and normalizes into a common shape.
-- **Chunk / Normalize:** Chunking for retrieval, optional embedding; normalization so downstream components see a consistent structure.
-- **Structured Index:** Vector store (and optional graph) for retrieval during compilation. Enables “retrieve before generate” (ARCS/DeepCode-style).
+- **Chunk / Normalize:** Chunking for retrieval with overlap; connectors and chunking must preserve **tenant isolation** via `tenant_id` in metadata.
+- **Embedding:** Optional step that converts chunks into vectors for similarity search (remote providers or local/deterministic embeddings for tests).
+- **Structured Index:** Vector store (and optional graph) for retrieval during compilation. All search APIs are tenant-scoped to prevent cross-tenant retrieval. Enables “retrieve before generate” (ARCS/DeepCode-style).
+- **Ingestion state (incremental):** Optional per-tenant state to support incremental re-ingestion (e.g. file mtimes, Slack cursors, OpenAPI ETag) without re-indexing everything.
 
 ### 3. Memory & State (`src/akc/memory/`)
 
