@@ -15,8 +15,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from akc.compile.controller_config import ControllerConfig, TierConfig
+from akc.compile.executors import run_stage
 from akc.compile.interfaces import (
-    ExecutionRequest,
     ExecutionResult,
     Executor,
     LLMBackend,
@@ -28,7 +28,6 @@ from akc.compile.interfaces import (
 from akc.compile.planner import advance_plan
 from akc.compile.repair import build_repair_prompt, parse_execution_failure
 from akc.compile.retriever import retrieve_context
-from akc.compile.executors import run_stage
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
 from akc.memory.code_memory import make_item
 from akc.memory.models import PlanState, PlanStep, now_ms, require_non_empty
@@ -156,22 +155,36 @@ def _is_test_path(p: str) -> bool:
     leaf = parts[-1]
     if leaf.startswith("test_") and leaf.endswith(".py"):
         return True
-    if leaf.endswith("_test.py"):
-        return True
-    return False
+    return bool(leaf.endswith("_test.py"))
 
 
-def _policy_requires_tests(*, touched_paths: list[str], require_tests_for_non_test_changes: bool) -> tuple[bool, dict[str, Any]]:
+def _policy_requires_tests(
+    *,
+    touched_paths: list[str],
+    require_tests_for_non_test_changes: bool,
+) -> tuple[bool, dict[str, Any]]:
     """Return (ok, evidence) for the tests-generated-by-default heuristic."""
 
     tests = [p for p in touched_paths if _is_test_path(p)]
     non_tests = [p for p in touched_paths if not _is_test_path(p)]
     if not require_tests_for_non_test_changes:
-        return True, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
+        return True, {
+            "touched_paths": touched_paths,
+            "test_paths": tests,
+            "non_test_paths": non_tests,
+        }
     # Only require tests if the patch touches at least one non-test path.
     if non_tests and not tests:
-        return False, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
-    return True, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
+        return False, {
+            "touched_paths": touched_paths,
+            "test_paths": tests,
+            "non_test_paths": non_tests,
+        }
+    return True, {
+        "touched_paths": touched_paths,
+        "test_paths": tests,
+        "non_test_paths": non_tests,
+    }
 
 
 def _score_execution(result: ExecutionResult | None) -> int:

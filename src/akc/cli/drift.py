@@ -7,6 +7,7 @@ from akc.compile.interfaces import TenantRepoScope
 from akc.outputs.drift import drift_report, write_baseline
 from akc.outputs.fingerprints import fingerprint_ingestion_state
 from akc.outputs.watch import WatchConfig, watch_for_changes
+
 from .common import configure_logging
 
 
@@ -18,7 +19,10 @@ def cmd_drift(args: argparse.Namespace) -> int:
 
     ingest_fp = None
     if args.ingest_state is not None:
-        ingest_fp = fingerprint_ingestion_state(tenant_id=scope.tenant_id, state_path=args.ingest_state)
+        ingest_fp = fingerprint_ingestion_state(
+            tenant_id=scope.tenant_id,
+            state_path=args.ingest_state,
+        )
 
     baseline_path = (
         Path(args.baseline_path).expanduser()
@@ -65,7 +69,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
     if ingest_state is None:
         raise SystemExit("--ingest-state is required for watch mode (source trigger)")
 
-    cfg = WatchConfig(poll_interval_s=float(args.poll_interval_s), debounce_s=float(args.debounce_s))
+    cfg = WatchConfig(
+        poll_interval_s=float(args.poll_interval_s),
+        debounce_s=float(args.debounce_s),
+    )
     watched = [Path(ingest_state).expanduser()]
 
     print(f"Watching for drift. scope={scope.tenant_id}/{scope.repo_id}")

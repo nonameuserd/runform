@@ -49,7 +49,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--embedder",
         choices=["hash", "openai", "gemini", "none"],
         default="none",
-        help="Embedding provider (default: none, offline). Use openai/gemini only when explicitly configured.",
+        help=(
+            "Embedding provider (default: none, offline). "
+            "Use openai/gemini only when explicitly configured."
+        ),
     )
     ingest.add_argument("--openai-api-key", help="OpenAI-compatible API key")
     ingest.add_argument("--openai-base-url", help="OpenAI-compatible base URL (default: OpenAI)")
@@ -62,7 +65,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--index-backend",
         choices=["memory", "sqlite", "pgvector"],
         default="memory",
-        help="Pluggable vector index backend (default: memory; use sqlite/pgvector for persistence)",
+        help=(
+            "Pluggable vector index backend (default: memory; "
+            "use sqlite/pgvector for persistence)"
+        ),
     )
     ingest.add_argument("--no-index", action="store_true", help="Run ingest without indexing")
     ingest.add_argument("--sqlite-path", help="SQLite DB path (for --index-backend sqlite)")

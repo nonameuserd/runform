@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from akc.compile import Budget, CompileSession, ControllerConfig, TierConfig, SubprocessExecutor
+from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+
 from .common import configure_logging
 
 
@@ -16,7 +17,16 @@ class _OfflineLLM(LLMBackend):
     tests-by-default and policy logic remain exercised.
     """
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+    def complete(
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:  # type: ignore[override]
+        # The offline backend ignores the incoming request and returns
+        # a deterministic patch that exercises both code and tests.
+        _ = request
         text = "\n".join(
             [
                 "--- a/src/akc_compiled.py",

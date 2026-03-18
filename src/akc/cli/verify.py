@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from akc.compile.interfaces import TenantRepoScope
+
 from .common import configure_logging
 
 
@@ -40,7 +41,11 @@ def _run_formal_command(
     summary = proc.stderr.strip() or proc.stdout.strip() or f"{name}: failed"
     if strict:
         return False, f"{name}: FAILED (exit_code={proc.returncode})\n{summary}"
-    return False, f"{name}: failed but ignored in relaxed mode (exit_code={proc.returncode})\n{summary}"
+    return (
+        False,
+        f"{name}: failed but ignored in relaxed mode "
+        f"(exit_code={proc.returncode})\n{summary}",
+    )
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
