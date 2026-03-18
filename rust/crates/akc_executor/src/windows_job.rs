@@ -42,7 +42,7 @@ impl WindowsJob {
 impl Drop for WindowsJob {
     fn drop(&mut self) {
         unsafe {
-            if self.handle != std::ptr::null_mut() {
+            if !self.handle.is_null() {
                 // `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ensures the whole tree is terminated.
                 let _ = CloseHandle(self.handle);
             }
@@ -164,7 +164,7 @@ pub(crate) fn try_create_and_assign_job(
     unsafe {
         // Unnamed job object: avoids collisions between concurrent executions.
         let job: HANDLE = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-        if job == std::ptr::null_mut() {
+        if job.is_null() {
             let _err = GetLastError();
             return JobSetupResult { job: None, report };
         }

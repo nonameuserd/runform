@@ -4,6 +4,9 @@ name: CI
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   push:
     branches:
@@ -50,6 +53,7 @@ jobs:
         run: uv run pytest
 
   rust:
+    name: Rust checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,7 +96,7 @@ jobs:
           fi
 
   rust_bwrap:
-    name: Rust (linux bubblewrap hardened tests)
+    name: Linux bwrap hardened isolation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +120,7 @@ jobs:
           cargo test -p akc_executor --test tenant_isolation
 
   rust_windows:
-    name: Rust (windows)
+    name: Windows sandbox
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
