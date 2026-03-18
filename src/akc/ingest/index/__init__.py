@@ -6,7 +6,7 @@ Phase 1 focuses on:
 - Optional persistence via pluggable backends
 """
 
-from akc.ingest.index.facade import Index, IndexConfig
+from akc.ingest.index.facade import Index, IndexConfig, build_index
 from akc.ingest.index.graph import (
     Edge,
     GraphStore,
@@ -33,6 +33,7 @@ __all__ = [
     "PgVectorStore",
     "Index",
     "IndexConfig",
+    "build_index",
     "Node",
     "SQLiteGraphStore",
     "SQLiteVectorStore",
