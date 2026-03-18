@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use akc_executor::run_exec;
+#[cfg(windows)]
+use akc_executor::ExecutorError;
 use akc_protocol::{Capabilities, ExecLane, ExecRequest, FsPolicy, Limits, RunId, TenantId};
 
 fn make_request_with_limits(module_path: String, limits: Limits) -> ExecRequest {
@@ -23,7 +25,7 @@ fn make_request(module_path: String) -> ExecRequest {
     make_request_with_limits(
         module_path,
         Limits {
-            wall_time_ms: Some(250),
+            wall_time_ms: None,
             memory_bytes: None,
             stdout_max_bytes: Some(1024),
             stderr_max_bytes: Some(1024),
@@ -86,16 +88,42 @@ fn wasm_lane_times_out_on_infinite_loop() {
     let wasm_path = dir.path().join("loop.wasm");
     fs::write(&wasm_path, wasm_bytes).unwrap();
 
-    let req = make_request(wasm_path.to_string_lossy().into_owned());
-    let res = run_exec(req).unwrap();
-
-    assert!(!res.ok);
-    assert!(
-        res.exit_code == 124 || res.exit_code == 137,
-        "expected timeout-like exit code, got {} (stderr: {})",
-        res.exit_code,
-        res.stderr
+    let req = make_request_with_limits(
+        wasm_path.to_string_lossy().into_owned(),
+        Limits {
+            wall_time_ms: Some(250),
+            memory_bytes: None,
+            stdout_max_bytes: Some(1024),
+            stderr_max_bytes: Some(1024),
+        },
     );
+    let result = run_exec(req);
+
+    #[cfg(windows)]
+    {
+        let err = result.unwrap_err();
+        match err {
+            ExecutorError::Wasm(message) => {
+                assert!(
+                    message.contains("unsupported on Windows"),
+                    "unexpected wasm error: {message}"
+                );
+            }
+            other => panic!("expected windows wasm timeout guard, got {other:?}"),
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let res = result.unwrap();
+        assert!(!res.ok);
+        assert!(
+            res.exit_code == 124 || res.exit_code == 137,
+            "expected timeout-like exit code, got {} (stderr: {})",
+            res.exit_code,
+            res.stderr
+        );
+    }
 }
 
 #[test]
@@ -129,7 +157,7 @@ fn wasm_lane_truncates_stdout_to_limit() {
     let req = make_request_with_limits(
         wasm_path.to_string_lossy().into_owned(),
         Limits {
-            wall_time_ms: Some(250),
+            wall_time_ms: None,
             memory_bytes: None,
             stdout_max_bytes: Some(64),
             stderr_max_bytes: Some(1024),
@@ -177,7 +205,7 @@ fn wasm_lane_truncates_stderr_to_limit() {
     let req = make_request_with_limits(
         wasm_path.to_string_lossy().into_owned(),
         Limits {
-            wall_time_ms: Some(250),
+            wall_time_ms: None,
             memory_bytes: None,
             stdout_max_bytes: Some(1024),
             stderr_max_bytes: Some(64),

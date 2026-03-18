@@ -2,7 +2,6 @@ use akc_protocol::observability::{log_event, LogLevel};
 use akc_protocol::{ExecRequest, ExecResponse, RunId, TenantId};
 use serde_json::json;
 use std::fs;
-use std::time::Duration;
 use wasmtime::{Config, Engine, Linker, Module, Store, Trap};
 use wasmtime_wasi::pipe;
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
@@ -15,6 +14,13 @@ use crate::ExecutorError;
 pub(crate) fn run_wasm_lane(request: ExecRequest) -> Result<ExecResponse, ExecutorError> {
     if request.command.is_empty() {
         return Err(ExecutorError::EmptyCommand);
+    }
+
+    #[cfg(windows)]
+    if request.limits.wall_time_ms.is_some() {
+        return Err(ExecutorError::Wasm(
+            "wasm wall-time limits are currently unsupported on Windows".to_string(),
+        ));
     }
 
     let tenant_id: TenantId = request.tenant_id.clone();
@@ -36,18 +42,12 @@ pub(crate) fn run_wasm_lane(request: ExecRequest) -> Result<ExecResponse, Execut
         .next()
         .expect("command is non-empty; we checked above");
     let module_id = compact_artifact_id(Some(&module_path));
-    let wall_time_ms = request.limits.wall_time_ms;
-    let use_epoch_timeout = cfg!(windows) && wall_time_ms.is_some();
 
     let mut config = Config::new();
-    if use_epoch_timeout {
-        // Windows CI currently aborts when Wasmtime traps on fuel exhaustion for
-        // tight infinite loops, so use epoch interruption for wall-clock
-        // deadlines there instead.
-        config.epoch_interruption(true);
-    } else {
-        config.consume_fuel(true);
-    }
+    // Wall-timeouts are enforced via fuel exhaustion (`Trap::OutOfFuel`) on
+    // supported platforms. Windows is rejected above because Wasmtime aborts
+    // the process on the timeout path in our CI environment.
+    config.consume_fuel(true);
 
     let engine = Engine::new(&config).map_err(|e| ExecutorError::Wasm(e.to_string()))?;
     let module =
@@ -84,22 +84,14 @@ pub(crate) fn run_wasm_lane(request: ExecRequest) -> Result<ExecResponse, Execut
     let wasi_ctx: WasiP1Ctx = wasi_builder.build_p1();
     let mut store: Store<WasiP1Ctx> = Store::new(&engine, wasi_ctx);
 
-    if use_epoch_timeout {
-        store.set_epoch_deadline(1);
-        let engine_for_timer = engine.clone();
-        let wall_ms = wall_time_ms.expect("wall_time_ms is present when epoch timeout is enabled");
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(wall_ms));
-            engine_for_timer.increment_epoch();
-        });
-    } else {
-        let fuel: u64 = wall_time_ms
-            .map(|ms| ms.saturating_mul(50_000).clamp(5_000_000, 2_000_000_000))
-            .unwrap_or(50_000_000);
-        store
-            .set_fuel(fuel)
-            .map_err(|e| ExecutorError::Wasm(e.to_string()))?;
-    }
+    let fuel: u64 = request
+        .limits
+        .wall_time_ms
+        .map(|ms| ms.saturating_mul(50_000).clamp(5_000_000, 2_000_000_000))
+        .unwrap_or(50_000_000);
+    store
+        .set_fuel(fuel)
+        .map_err(|e| ExecutorError::Wasm(e.to_string()))?;
 
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
     preview1::add_to_linker_sync(&mut linker, |ctx: &mut WasiP1Ctx| ctx)
