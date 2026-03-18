@@ -15,9 +15,9 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 from akc.compile.interfaces import ExecutionRequest, ExecutionResult, Executor, TenantRepoScope
 from akc.memory.models import require_non_empty

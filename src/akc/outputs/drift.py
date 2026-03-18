@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
-from akc.outputs.fingerprints import IngestStateFingerprint, fingerprint_file_bytes, stable_json_fingerprint
-
+from akc.outputs.fingerprints import (
+    IngestStateFingerprint,
+    fingerprint_file_bytes,
+    stable_json_fingerprint,
+)
 
 DriftKind = Literal["changed_sources", "changed_outputs", "missing_manifest"]
 DriftSeverity = Literal["low", "med", "high"]

@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from akc import __version__
+
 from .compile import cmd_compile
 from .drift import cmd_drift, cmd_watch
 from .ingest import cmd_ingest, cmd_slack_list_channels
@@ -171,7 +172,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     drift.add_argument(
         "--baseline-path",
-        help="Explicit baseline path (default: <outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)",
+        help=(
+            "Explicit baseline path (default: "
+            "<outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)"
+        ),
     )
     drift.add_argument(
         "--update-baseline",
@@ -196,7 +200,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument(
         "--baseline-path",
-        help="Explicit baseline path (default: <outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)",
+        help=(
+            "Explicit baseline path (default: "
+            "<outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)"
+        ),
     )
     watch.add_argument(
         "--poll-interval-s",

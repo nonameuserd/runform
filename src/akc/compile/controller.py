@@ -33,7 +33,6 @@ from akc.memory.code_memory import make_item
 from akc.memory.models import PlanState, PlanStep, now_ms, require_non_empty
 from akc.memory.plan_state import PlanStateStore
 
-
 RunStatus = Literal["succeeded", "failed", "budget_exhausted"]
 
 
@@ -360,7 +359,9 @@ def run_compile_loop(
         else _derive_full_test_command(smoke_command)
     )
     full_timeout_s_raw = (config.metadata or {}).get("full_test_timeout_s")
-    full_timeout_s_f = float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
+    full_timeout_s_f = (
+        float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
+    )
 
     smoke_stage_name = "tests_smoke"
     full_stage_name = "tests_full"
@@ -394,7 +395,9 @@ def run_compile_loop(
         if stage == "generate":
             test_policy = {
                 "tests_generated_by_default": bool(config.generate_tests_by_default),
-                "require_tests_for_non_test_changes": bool(config.require_tests_for_non_test_changes),
+                "require_tests_for_non_test_changes": bool(
+                    config.require_tests_for_non_test_changes
+                ),
                 "smoke_test_command": list(smoke_command),
                 "full_test_command": list(full_command),
             }
@@ -407,8 +410,10 @@ def run_compile_loop(
                 "Output format:\n"
                 "- Return ONLY a unified diff (git-style) patch.\n"
                 "- Do not include prose, explanations, or Markdown fences.\n"
-                "- The patch must be tenant-safe: never read/write outside this repo and never mix tenants.\n"
-                "- By default, include relevant test changes in the same patch (add/update tests that cover your change).\n"
+                "- The patch must be tenant-safe: never read/write outside this repo "
+                "and never mix tenants.\n"
+                "- By default, include relevant test changes in the same patch "
+                "(add/update tests that cover your change).\n"
             )
         else:
             # Repair stage: parse failure and build a more structured prompt.
@@ -533,7 +538,8 @@ def run_compile_loop(
 
         # Promotion gate:
         # - full mode: a passing full stage can promote
-        # - smoke mode: only a passing *full* stage can promote (smoke-only passes are not promotable)
+        # - smoke mode: only a passing *full* stage can promote
+        #   (smoke-only passes are not promotable)
         promotable = int(exec_result.exit_code) == 0 and (
             config.test_mode != "smoke" or full_res is not None
         )
@@ -566,7 +572,10 @@ def run_compile_loop(
             continue
         if promotable:
             # Phase 5 verifier gate: can veto promotion even after tests pass.
-            policy = VerifierPolicy(enabled=bool(config.verifier_enabled), strict=bool(config.verifier_strict))
+            policy = VerifierPolicy(
+                enabled=bool(config.verifier_enabled),
+                strict=bool(config.verifier_strict),
+            )
             vres = verifier.verify(
                 scope=scope,
                 plan_id=plan.id,
@@ -649,7 +658,8 @@ def run_compile_loop(
                         artifact_id=plan.id,
                         item_id=full_item_id,
                         kind="test_full_result",
-                        content=exec_result.stdout + ("\n" + exec_result.stderr if exec_result.stderr else ""),
+                        content=exec_result.stdout
+                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
                         metadata={
                             "plan_id": plan.id,
                             "step_id": step_id,
@@ -670,14 +680,17 @@ def run_compile_loop(
                         artifact_id=plan.id,
                         item_id=test_item_id,
                         kind="test_result",
-                        content=exec_result.stdout + ("\n" + exec_result.stderr if exec_result.stderr else ""),
+                        content=exec_result.stdout
+                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
                         metadata={
                             "plan_id": plan.id,
                             "step_id": step_id,
                             "stage": (full_res.stage if full_res is not None else smoke_res.stage),
                             "exit_code": int(exec_result.exit_code),
                             "duration_ms": int(exec_result.duration_ms),
-                            "command": list(full_res.command if full_res is not None else smoke_res.command),
+                            "command": list(
+                                full_res.command if full_res is not None else smoke_res.command
+                            ),
                             "paths": patch_paths,
                         },
                         created_at_ms=tms,
@@ -703,10 +716,20 @@ def run_compile_loop(
                 plan_store=plan_store,
                 feedback={"status": "passed", "step_id": step_id},
             )
-            return ControllerResult(status="succeeded", plan=plan, best_candidate=best, accounting=accounting)
+            return ControllerResult(
+                status="succeeded",
+                plan=plan,
+                best_candidate=best,
+                accounting=accounting,
+            )
 
-        # Smoke-only pass without a full gate: keep iterating without consuming a repair.
-        if config.test_mode == "smoke" and int(smoke_res.result.exit_code) == 0 and full_res is None:
+        # Smoke-only pass without a full gate:
+        # keep iterating without consuming a repair.
+        if (
+            config.test_mode == "smoke"
+            and int(smoke_res.result.exit_code) == 0
+            and full_res is None
+        ):
             stage = "generate"
             continue
 
@@ -730,7 +753,11 @@ def run_compile_loop(
         status="failed",
         notes="compile loop did not produce a passing candidate within budget",
     )
-    plan = replace(plan, last_feedback={"status": str(status), "step_id": step_id}, updated_at_ms=now_ms())
+    plan = replace(
+        plan,
+        last_feedback={"status": str(status), "step_id": step_id},
+        updated_at_ms=now_ms(),
+    )
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
     plan = advance_plan(
         tenant_id=tenant_id,

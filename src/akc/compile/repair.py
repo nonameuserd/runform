@@ -10,12 +10,12 @@ The controller is responsible for enforcing budgets and tier policy.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from akc.compile.interfaces import ExecutionResult
 from akc.memory.models import JSONValue, require_non_empty
-
 
 _PYTEST_FAIL_LINE_RE = re.compile(r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$")
 _PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(r"^=+\s*short test summary info\s*=+\s*$", re.IGNORECASE)

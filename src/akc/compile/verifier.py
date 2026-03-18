@@ -6,12 +6,12 @@ policy-driven checks that can veto promotion of a candidate even after tests pas
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from akc.compile.interfaces import ExecutionResult, TenantRepoScope
 from akc.memory.models import JSONValue, now_ms, require_non_empty
-
 
 VerifierSeverity = Literal["error", "warning"]
 
@@ -223,7 +223,7 @@ class DeterministicVerifier(Verifier):
             # why a promotion is disallowed when budget would be exceeded.
             try:
                 llm_calls = int(accounting.get("llm_calls", 0))
-                max_llm_calls = int(getattr(budget, "max_llm_calls"))
+                max_llm_calls = int(budget.max_llm_calls)
                 if llm_calls > max_llm_calls:
                     findings.append(
                         VerifierFinding(

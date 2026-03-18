@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal, Mapping, Sequence, cast
+from typing import Any, Literal, cast
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty

@@ -18,8 +18,8 @@ from akc.compile.planner import advance_plan, create_or_resume_plan
 from akc.compile.repair import FailureSummary, build_repair_prompt, parse_execution_failure
 from akc.compile.retriever import retrieve_context
 from akc.compile.session import CompileSession
-from akc.compile.verifier import DeterministicVerifier, VerifierPolicy, VerifierResult
 from akc.compile.vectorstore_index_adapter import VectorStoreIndexAdapter
+from akc.compile.verifier import DeterministicVerifier, VerifierPolicy, VerifierResult
 
 __all__ = [
     "Budget",

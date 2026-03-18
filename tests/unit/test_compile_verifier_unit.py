@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from akc.compile.controller_config import Budget
 from akc.compile.interfaces import ExecutionResult, TenantRepoScope
