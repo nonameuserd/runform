@@ -11,14 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from akc.compile.controller import ControllerResult, run_compile_loop
+from akc.compile.controller_config import ControllerConfig
+from akc.compile.executors import SubprocessExecutor
+from akc.compile.interfaces import Executor, Index, LLMBackend, TenantRepoScope
 from akc.compile.planner import advance_plan, create_or_resume_plan
 from akc.compile.retriever import retrieve_context
-from akc.compile.controller import run_compile_loop, ControllerResult
-from akc.compile.controller_config import ControllerConfig
-from akc.compile.interfaces import Index
-from akc.compile.interfaces import Executor, LLMBackend
-from akc.compile.interfaces import TenantRepoScope
-from akc.compile.executors import SubprocessExecutor
 from akc.memory.facade import Memory, MemoryBackend, build_memory
 from akc.memory.models import PlanState, normalize_repo_id, require_non_empty
 from akc.memory.why_graph import WhyGraphStore
@@ -60,7 +58,12 @@ class CompileSession:
     ) -> CompileSession:
         """Create a session with in-memory stores (fast, test-friendly)."""
 
-        return cls.from_backend(tenant_id=tenant_id, repo_id=repo_id, backend="memory", index=index)
+        return cls.from_backend(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            backend="memory",
+            index=index,
+        )
 
     @classmethod
     def from_sqlite(
@@ -139,7 +142,11 @@ class CompileSession:
 
         plan = self.plan(goal=goal)
         # Ensure the plan exists and is active before running.
-        self.memory.plan_state.set_active_plan(tenant_id=self.tenant_id, repo_id=self.repo_id, plan_id=plan.id)
+        self.memory.plan_state.set_active_plan(
+            tenant_id=self.tenant_id,
+            repo_id=self.repo_id,
+            plan_id=plan.id,
+        )
         result = run_compile_loop(
             tenant_id=self.tenant_id,
             repo_id=self.repo_id,
@@ -158,9 +165,17 @@ class CompileSession:
         #
         # This keeps the controller focused on the ARCS loop and makes emission opt-in
         # by requiring `outputs_root`.
-        if outputs_root is not None and result.status == "succeeded" and result.best_candidate is not None:
+        if (
+            outputs_root is not None
+            and result.status == "succeeded"
+            and result.best_candidate is not None
+        ):
             scope = TenantRepoScope(tenant_id=result.plan.tenant_id, repo_id=result.plan.repo_id)
-            step_id = result.plan.last_feedback.get("step_id") if isinstance(result.plan.last_feedback, dict) else None
+            step_id = (
+                result.plan.last_feedback.get("step_id")
+                if isinstance(result.plan.last_feedback, dict)
+                else None
+            )
             step_id_s = str(step_id) if step_id is not None else "unknown_step"
             step = next((s for s in result.plan.steps if s.id == step_id_s), None)
             step_outputs = dict(step.outputs or {}) if step is not None else {}
@@ -174,7 +189,7 @@ class CompileSession:
                 )
             ]
 
-            def _emit_stage(*, name: str, payload: dict[str, object]) -> None:
+            def _emit_stage(*, name: str, payload: dict[str, Any]) -> None:
                 stdout = str(payload.get("stdout") or "")
                 stderr = str(payload.get("stderr") or "")
                 combined = (stdout + ("\n" + stderr if stderr else "")) or "(no output)"
@@ -183,7 +198,12 @@ class CompileSession:
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.stdout.txt",
                         text=stdout or "(no stdout)",
                         media_type="text/plain; charset=utf-8",
-                        metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stage": name, "stream": "stdout"},
+                        metadata={
+                            "plan_id": result.plan.id,
+                            "step_id": step_id_s,
+                            "stage": name,
+                            "stream": "stdout",
+                        },
                     )
                 )
                 artifacts.append(
@@ -191,7 +211,12 @@ class CompileSession:
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.stderr.txt",
                         text=stderr or "(no stderr)",
                         media_type="text/plain; charset=utf-8",
-                        metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stage": name, "stream": "stderr"},
+                        metadata={
+                            "plan_id": result.plan.id,
+                            "step_id": step_id_s,
+                            "stage": name,
+                            "stream": "stderr",
+                        },
                     )
                 )
                 artifacts.append(
@@ -203,6 +228,8 @@ class CompileSession:
                     )
                 )
                 # Keep a structured record, too.
+                cmd_raw = payload.get("command")
+                cmd_list: list[str] = [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.json",
@@ -210,7 +237,7 @@ class CompileSession:
                             "plan_id": result.plan.id,
                             "step_id": step_id_s,
                             "stage": payload.get("stage"),
-                            "command": list(payload.get("command") or []),  # type: ignore[list-item]
+                            "command": cmd_list,
                             "exit_code": payload.get("exit_code"),
                             "duration_ms": payload.get("duration_ms"),
                         },
@@ -219,13 +246,14 @@ class CompileSession:
                 )
 
             if result.best_candidate.execution is not None:
-                # Prefer step outputs when available (smoke+full); otherwise fall back to best_candidate.
+                # Prefer step outputs when available (smoke+full);
+                # otherwise fall back to best_candidate.
                 last_smoke = step_outputs.get("last_tests_smoke")
                 last_full = step_outputs.get("last_tests_full")
                 if isinstance(last_smoke, dict):
-                    _emit_stage(name="smoke", payload=last_smoke)  # type: ignore[arg-type]
+                    _emit_stage(name="smoke", payload=dict(last_smoke))
                 if isinstance(last_full, dict):
-                    _emit_stage(name="full", payload=last_full)  # type: ignore[arg-type]
+                    _emit_stage(name="full", payload=dict(last_full))
 
                 if not isinstance(last_smoke, dict) and not isinstance(last_full, dict):
                     stdout = result.best_candidate.execution.stdout or ""
@@ -236,7 +264,11 @@ class CompileSession:
                             path=f".akc/tests/{result.plan.id}_{step_id_s}.stdout.txt",
                             text=stdout or "(no stdout)",
                             media_type="text/plain; charset=utf-8",
-                            metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stream": "stdout"},
+                            metadata={
+                                "plan_id": result.plan.id,
+                                "step_id": step_id_s,
+                                "stream": "stdout",
+                            },
                         )
                     )
                     artifacts.append(
@@ -244,7 +276,11 @@ class CompileSession:
                             path=f".akc/tests/{result.plan.id}_{step_id_s}.stderr.txt",
                             text=stderr or "(no stderr)",
                             media_type="text/plain; charset=utf-8",
-                            metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stream": "stderr"},
+                            metadata={
+                                "plan_id": result.plan.id,
+                                "step_id": step_id_s,
+                                "stream": "stderr",
+                            },
                         )
                     )
                     artifacts.append(
@@ -262,7 +298,14 @@ class CompileSession:
                                 "plan_id": result.plan.id,
                                 "step_id": step_id_s,
                                 "stage": getattr(result.best_candidate, "execution_stage", None),
-                                "command": list(getattr(result.best_candidate, "execution_command", None) or []),
+                                "command": list(
+                                    getattr(
+                                        result.best_candidate,
+                                        "execution_command",
+                                        None,
+                                    )
+                                    or []
+                                ),
                                 "exit_code": int(result.best_candidate.execution.exit_code),
                                 "duration_ms": result.best_candidate.execution.duration_ms,
                             },
@@ -284,4 +327,3 @@ class CompileSession:
             (emitter or JsonManifestEmitter()).emit(bundle=bundle, root=outputs_root)
 
         return result
-

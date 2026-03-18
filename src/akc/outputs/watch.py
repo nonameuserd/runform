@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +43,7 @@ def snapshot_mtime_ns(paths: Sequence[str | Path]) -> dict[str, int]:
 def has_changes(prev: dict[str, int], curr: dict[str, int]) -> bool:
     if prev.keys() != curr.keys():
         return True
-    for k, v in curr.items():
-        if prev.get(k) != v:
-            return True
-    return False
+    return any(prev.get(k) != v for k, v in curr.items())
 
 
 def watch_for_changes(*, paths: Sequence[str | Path], cfg: WatchConfig) -> Iterable[None]:
@@ -64,4 +61,3 @@ def watch_for_changes(*, paths: Sequence[str | Path], cfg: WatchConfig) -> Itera
         if last_change_at is not None and (time.time() - last_change_at) >= float(cfg.debounce_s):
             last_change_at = None
             yield None
-

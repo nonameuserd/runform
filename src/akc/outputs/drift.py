@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
-from akc.outputs.fingerprints import IngestStateFingerprint, fingerprint_file_bytes, stable_json_fingerprint
-
+from akc.outputs.fingerprints import (
+    IngestStateFingerprint,
+    fingerprint_file_bytes,
+    stable_json_fingerprint,
+)
 
 DriftKind = Literal["changed_sources", "changed_outputs", "missing_manifest"]
 DriftSeverity = Literal["low", "med", "high"]
@@ -150,15 +154,18 @@ def drift_report(
             mismatched.append(relpath)
 
     if invalid or missing or mismatched:
+        invalid_v: list[JSONValue] = [str(p) for p in invalid]
+        missing_v: list[JSONValue] = [str(p) for p in missing]
+        mismatched_v: list[JSONValue] = [str(p) for p in mismatched]
         findings.append(
             DriftFinding(
                 kind="changed_outputs",
                 severity="high",
                 details={
                     "manifest_path": str(manifest_path),
-                    "invalid_artifacts": invalid,
-                    "missing_artifacts": missing,
-                    "mismatched_artifacts": mismatched,
+                    "invalid_artifacts": invalid_v,
+                    "missing_artifacts": missing_v,
+                    "mismatched_artifacts": mismatched_v,
                 },
             )
         )
@@ -213,11 +220,12 @@ def write_baseline(
     scoped = _scope_dir(root=root, scope=scope)
     manifest_path = scoped / "manifest.json"
     if manifest_path.exists():
-        payload["manifest_sha256"] = stable_json_fingerprint(_read_json_object(manifest_path, what="manifest"))
+        payload["manifest_sha256"] = stable_json_fingerprint(
+            _read_json_object(manifest_path, what="manifest")
+        )
         payload["manifest_path"] = str(manifest_path)
 
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(p)
     return p
-

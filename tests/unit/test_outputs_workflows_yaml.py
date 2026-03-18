@@ -73,4 +73,3 @@ def test_workflow_to_artifact_defaults_to_github_workflows_dir_and_yml() -> None
     assert art.path == ".github/workflows/ci.yml"
     assert art.media_type.startswith("application/yaml")
     assert "name: CI\n" in art.text()
-

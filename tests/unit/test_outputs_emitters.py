@@ -54,4 +54,3 @@ def test_manifest_emitter_writes_manifest(tmp_path: Path) -> None:
     assert payload["name"] == "demo"
     assert payload["artifacts"][0]["path"] == "out.txt"
     assert payload["artifacts"][0]["sha256"] == art.sha256_hex()
-

@@ -87,4 +87,3 @@ def test_retrieve_context_rejects_plan_scope_mismatch() -> None:
             index=None,
             limit=5,
         )
-

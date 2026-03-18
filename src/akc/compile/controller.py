@@ -11,12 +11,13 @@ Design goals:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from akc.compile.controller_config import ControllerConfig, TierConfig
+from akc.compile.executors import run_stage
 from akc.compile.interfaces import (
-    ExecutionRequest,
     ExecutionResult,
     Executor,
     LLMBackend,
@@ -28,12 +29,10 @@ from akc.compile.interfaces import (
 from akc.compile.planner import advance_plan
 from akc.compile.repair import build_repair_prompt, parse_execution_failure
 from akc.compile.retriever import retrieve_context
-from akc.compile.executors import run_stage
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
 from akc.memory.code_memory import make_item
-from akc.memory.models import PlanState, PlanStep, now_ms, require_non_empty
+from akc.memory.models import PlanState, PlanStep, PlanStepStatus, now_ms, require_non_empty
 from akc.memory.plan_state import PlanStateStore
-
 
 RunStatus = Literal["succeeded", "failed", "budget_exhausted"]
 
@@ -156,22 +155,36 @@ def _is_test_path(p: str) -> bool:
     leaf = parts[-1]
     if leaf.startswith("test_") and leaf.endswith(".py"):
         return True
-    if leaf.endswith("_test.py"):
-        return True
-    return False
+    return bool(leaf.endswith("_test.py"))
 
 
-def _policy_requires_tests(*, touched_paths: list[str], require_tests_for_non_test_changes: bool) -> tuple[bool, dict[str, Any]]:
+def _policy_requires_tests(
+    *,
+    touched_paths: list[str],
+    require_tests_for_non_test_changes: bool,
+) -> tuple[bool, dict[str, Any]]:
     """Return (ok, evidence) for the tests-generated-by-default heuristic."""
 
     tests = [p for p in touched_paths if _is_test_path(p)]
     non_tests = [p for p in touched_paths if not _is_test_path(p)]
     if not require_tests_for_non_test_changes:
-        return True, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
+        return True, {
+            "touched_paths": touched_paths,
+            "test_paths": tests,
+            "non_test_paths": non_tests,
+        }
     # Only require tests if the patch touches at least one non-test path.
     if non_tests and not tests:
-        return False, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
-    return True, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
+        return False, {
+            "touched_paths": touched_paths,
+            "test_paths": tests,
+            "non_test_paths": non_tests,
+        }
+    return True, {
+        "touched_paths": touched_paths,
+        "test_paths": tests,
+        "non_test_paths": non_tests,
+    }
 
 
 def _score_execution(result: ExecutionResult | None) -> int:
@@ -198,7 +211,7 @@ def _update_step(
     *,
     plan: PlanState,
     step_id: str,
-    mutate: callable[[PlanStep], PlanStep],
+    mutate: Callable[[PlanStep], PlanStep],
 ) -> PlanState:
     require_non_empty(step_id, name="step_id")
     steps2: list[PlanStep] = []
@@ -232,7 +245,7 @@ def _set_step_status(
     *,
     plan: PlanState,
     step_id: str,
-    status: str,
+    status: PlanStepStatus,
     notes: str | None = None,
 ) -> PlanState:
     t = now_ms()
@@ -247,7 +260,7 @@ def _set_step_status(
         return PlanStep(
             id=s.id,
             title=s.title,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             order_idx=s.order_idx,
             started_at_ms=started,
             finished_at_ms=finished,
@@ -265,9 +278,9 @@ def run_compile_loop(
     repo_id: str,
     goal: str,
     plan_store: PlanStateStore,
-    code_memory,  # CodeMemoryStore (kept untyped here to avoid import cycle)
-    why_graph,
-    index,
+    code_memory: Any,  # CodeMemoryStore (kept untyped here to avoid import cycle)
+    why_graph: Any,
+    index: Any,
     llm: LLMBackend,
     executor: Executor,
     config: ControllerConfig,
@@ -287,7 +300,7 @@ def run_compile_loop(
     plan = advance_plan(
         tenant_id=tenant_id,
         repo_id=repo_id,
-        plan_id=plan_store.get_active_plan_id(tenant_id=tenant_id, repo_id=repo_id)  # type: ignore[arg-type]
+        plan_id=plan_store.get_active_plan_id(tenant_id=tenant_id, repo_id=repo_id)
         or plan_store.create_plan(tenant_id=tenant_id, repo_id=repo_id, goal=goal).id,
         plan_store=plan_store,
         feedback=None,
@@ -330,8 +343,7 @@ def run_compile_loop(
     smoke_command = list(
         config.test_command
         if config.test_command is not None
-        else (config.metadata or {}).get("execute_command")
-        or ["python", "-m", "pytest", "-q"]
+        else (config.metadata or {}).get("execute_command") or ["python", "-m", "pytest", "-q"]
     )
     smoke_timeout_s_raw = (
         config.test_timeout_s
@@ -347,7 +359,9 @@ def run_compile_loop(
         else _derive_full_test_command(smoke_command)
     )
     full_timeout_s_raw = (config.metadata or {}).get("full_test_timeout_s")
-    full_timeout_s_f = float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
+    full_timeout_s_f = (
+        float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
+    )
 
     smoke_stage_name = "tests_smoke"
     full_stage_name = "tests_full"
@@ -381,7 +395,9 @@ def run_compile_loop(
         if stage == "generate":
             test_policy = {
                 "tests_generated_by_default": bool(config.generate_tests_by_default),
-                "require_tests_for_non_test_changes": bool(config.require_tests_for_non_test_changes),
+                "require_tests_for_non_test_changes": bool(
+                    config.require_tests_for_non_test_changes
+                ),
                 "smoke_test_command": list(smoke_command),
                 "full_test_command": list(full_command),
             }
@@ -394,8 +410,10 @@ def run_compile_loop(
                 "Output format:\n"
                 "- Return ONLY a unified diff (git-style) patch.\n"
                 "- Do not include prose, explanations, or Markdown fences.\n"
-                "- The patch must be tenant-safe: never read/write outside this repo and never mix tenants.\n"
-                "- By default, include relevant test changes in the same patch (add/update tests that cover your change).\n"
+                "- The patch must be tenant-safe: never read/write outside this repo "
+                "and never mix tenants.\n"
+                "- By default, include relevant test changes in the same patch "
+                "(add/update tests that cover your change).\n"
             )
         else:
             # Repair stage: parse failure and build a more structured prompt.
@@ -520,7 +538,8 @@ def run_compile_loop(
 
         # Promotion gate:
         # - full mode: a passing full stage can promote
-        # - smoke mode: only a passing *full* stage can promote (smoke-only passes are not promotable)
+        # - smoke mode: only a passing *full* stage can promote
+        #   (smoke-only passes are not promotable)
         promotable = int(exec_result.exit_code) == 0 and (
             config.test_mode != "smoke" or full_res is not None
         )
@@ -553,7 +572,10 @@ def run_compile_loop(
             continue
         if promotable:
             # Phase 5 verifier gate: can veto promotion even after tests pass.
-            policy = VerifierPolicy(enabled=bool(config.verifier_enabled), strict=bool(config.verifier_strict))
+            policy = VerifierPolicy(
+                enabled=bool(config.verifier_enabled),
+                strict=bool(config.verifier_strict),
+            )
             vres = verifier.verify(
                 scope=scope,
                 plan_id=plan.id,
@@ -623,7 +645,7 @@ def run_compile_loop(
                             "step_id": step_id,
                             "stage": smoke_res.stage,
                             "exit_code": int(smoke_res.result.exit_code),
-                            "duration_ms": int(smoke_res.result.duration_ms),
+                            "duration_ms": smoke_res.result.duration_ms,
                             "command": list(smoke_res.command),
                             "paths": patch_paths,
                         },
@@ -636,13 +658,14 @@ def run_compile_loop(
                         artifact_id=plan.id,
                         item_id=full_item_id,
                         kind="test_full_result",
-                        content=exec_result.stdout + ("\n" + exec_result.stderr if exec_result.stderr else ""),
+                        content=exec_result.stdout
+                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
                         metadata={
                             "plan_id": plan.id,
                             "step_id": step_id,
                             "stage": (full_res.stage if full_res is not None else smoke_res.stage),
                             "exit_code": int(exec_result.exit_code),
-                            "duration_ms": int(exec_result.duration_ms),
+                            "duration_ms": exec_result.duration_ms,
                             "command": list(
                                 full_res.command if full_res is not None else smoke_res.command
                             ),
@@ -657,14 +680,17 @@ def run_compile_loop(
                         artifact_id=plan.id,
                         item_id=test_item_id,
                         kind="test_result",
-                        content=exec_result.stdout + ("\n" + exec_result.stderr if exec_result.stderr else ""),
+                        content=exec_result.stdout
+                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
                         metadata={
                             "plan_id": plan.id,
                             "step_id": step_id,
                             "stage": (full_res.stage if full_res is not None else smoke_res.stage),
                             "exit_code": int(exec_result.exit_code),
-                            "duration_ms": int(exec_result.duration_ms),
-                            "command": list(full_res.command if full_res is not None else smoke_res.command),
+                            "duration_ms": exec_result.duration_ms,
+                            "command": list(
+                                full_res.command if full_res is not None else smoke_res.command
+                            ),
                             "paths": patch_paths,
                         },
                         created_at_ms=tms,
@@ -690,10 +716,20 @@ def run_compile_loop(
                 plan_store=plan_store,
                 feedback={"status": "passed", "step_id": step_id},
             )
-            return ControllerResult(status="succeeded", plan=plan, best_candidate=best, accounting=accounting)
+            return ControllerResult(
+                status="succeeded",
+                plan=plan,
+                best_candidate=best,
+                accounting=accounting,
+            )
 
-        # Smoke-only pass without a full gate: keep iterating without consuming a repair.
-        if config.test_mode == "smoke" and int(smoke_res.result.exit_code) == 0 and full_res is None:
+        # Smoke-only pass without a full gate:
+        # keep iterating without consuming a repair.
+        if (
+            config.test_mode == "smoke"
+            and int(smoke_res.result.exit_code) == 0
+            and full_res is None
+        ):
             stage = "generate"
             continue
 
@@ -717,7 +753,11 @@ def run_compile_loop(
         status="failed",
         notes="compile loop did not produce a passing candidate within budget",
     )
-    plan = replace(plan, last_feedback={"status": str(status), "step_id": step_id}, updated_at_ms=now_ms())
+    plan = replace(
+        plan,
+        last_feedback={"status": str(status), "step_id": step_id},
+        updated_at_ms=now_ms(),
+    )
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
     plan = advance_plan(
         tenant_id=tenant_id,
@@ -727,4 +767,3 @@ def run_compile_loop(
         feedback={"status": str(status), "step_id": step_id},
     )
     return ControllerResult(status=status, plan=plan, best_candidate=best, accounting=accounting)
-

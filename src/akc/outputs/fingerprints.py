@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from akc.memory.models import JSONValue, require_non_empty
 
@@ -42,7 +43,11 @@ class IngestStateFingerprint:
         }
 
 
-def fingerprint_ingestion_state(*, tenant_id: str, state_path: str | Path) -> IngestStateFingerprint:
+def fingerprint_ingestion_state(
+    *,
+    tenant_id: str,
+    state_path: str | Path,
+) -> IngestStateFingerprint:
     """Fingerprint `IngestionStateStore` JSON (best-effort source set fingerprint).
 
     The state file uses keys of the form: `<tenant_id>::<connector>::<source_id>`.
@@ -73,4 +78,3 @@ def fingerprint_ingestion_state(*, tenant_id: str, state_path: str | Path) -> In
 def fingerprint_file_bytes(*, path: str | Path) -> str:
     p = Path(path)
     return _sha256_hex(p.read_bytes())
-

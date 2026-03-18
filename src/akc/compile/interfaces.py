@@ -16,7 +16,6 @@ from typing import Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
 
-
 Stage: TypeAlias = Literal["plan", "retrieve", "generate", "execute", "repair"]
 
 
@@ -166,4 +165,3 @@ class Executor(Protocol):
         request: ExecutionRequest,
     ) -> ExecutionResult:
         """Run a command in a sandbox and return captured output."""
-

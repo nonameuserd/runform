@@ -22,6 +22,8 @@ CodeMemoryKind = Literal[
     "file_snapshot",
     "patch",
     "test_result",
+    "test_smoke_result",
+    "test_full_result",
     "conflict_report",
     "note",
 ]

@@ -33,4 +33,3 @@ def test_compile_session_from_constructors(tmp_path: Path) -> None:
     s3 = CompileSession.from_backend(tenant_id="t1", repo_id="repo1", backend="memory")
     p3 = s3.plan(goal="goal3")
     assert p3.repo_id == "repo1"
-

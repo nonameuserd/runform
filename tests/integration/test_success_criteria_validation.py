@@ -32,9 +32,7 @@ def _write_minimal_repo(root: Path) -> None:
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tests / "test_module.py").write_text(
-        "from src import module\n\n"
-        "def test_smoke() -> None:\n"
-        "    assert module.VALUE == 1\n",
+        "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
         encoding="utf-8",
     )
 
@@ -177,7 +175,9 @@ def test_success_criteria_documented_readme_contains_one_liner_and_offline() -> 
     readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
     assert "akc compile" in readme, "README must mention akc compile"
     assert "outputs-root" in readme or "outputs_root" in readme, "README must show outputs-root"
-    assert "offline" in readme.lower() or "no API keys" in readme, "README must state offline/no API keys"
+    assert "offline" in readme.lower() or "no API keys" in readme, (
+        "README must state offline/no API keys"
+    )
     assert "opt-in" in readme.lower(), "README must state cloud/opt-in"
 
 
@@ -236,7 +236,7 @@ def test_success_criteria_extensible_ingest_connector_pluggable() -> None:
 
 
 def test_success_criteria_extensible_compile_no_connector_required() -> None:
-    """Extensible: Compile does not require a specific connector; uses tenant/repo/outputs-root only."""
+    """Extensible: Compile doesn't require a connector; uses tenant/repo/outputs-root only."""
     from akc.cli import _build_parser
 
     parser = _build_parser()
@@ -268,8 +268,8 @@ def test_success_criteria_transparent_compile_help_offline_default() -> None:
     compile_parser = _get_command_subparsers(parser)["compile"]
     dests = {a.dest for a in compile_parser._actions if getattr(a, "dest", None)}
     api_key_like = {d for d in dests if d and ("api_key" in d or "token" in d)}
-    assert not api_key_like, (
-        "compile must not require API keys; found options: " + ", ".join(sorted(api_key_like))
+    assert not api_key_like, "compile must not require API keys; found options: " + ", ".join(
+        sorted(api_key_like)
     )
     # Main parser help (akc -h) includes compile description with "offline"
     full_help = parser.format_help()

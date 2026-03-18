@@ -17,6 +17,7 @@ from akc.ingest.pipeline import (
     default_state_path,
     run_ingest,
 )
+
 from .common import configure_logging, env
 
 
@@ -173,4 +174,3 @@ def cmd_slack_list_channels(args: argparse.Namespace) -> int:
         name = c.name or ""
         print(f"{c.id}\t{name}")
     return 0
-
