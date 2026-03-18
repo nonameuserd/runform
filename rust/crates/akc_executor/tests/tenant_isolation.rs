@@ -713,11 +713,7 @@ fn backend_parity_native_vs_bwrap_timeout_exit_code() {
     // `ENV_LOCK`.
     std::env::set_var("AKC_EXEC_BACKEND", "bwrap");
     let mut probe_req = make_process_request(&root_canon, None, FsPolicy::default());
-    probe_req.command = vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        "echo probe".to_string(),
-    ];
+    probe_req.command = vec!["sh".to_string(), "-c".to_string(), "echo probe".to_string()];
     let probe = match run_exec(probe_req) {
         Ok(r) => r,
         Err(_) => return,
