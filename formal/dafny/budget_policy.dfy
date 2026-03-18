@@ -21,7 +21,7 @@ datatype Budget = Budget(
 // This mirrors the intent of Budget.effective_max_repairs_per_step() in the
 // Python controller configuration: the effective repairs must never exceed the
 // total iteration budget and must be bounded by the explicit maxRepairsPerStep.
-function method EffectiveRepairs(b: Budget): nat
+function EffectiveRepairs(b: Budget): nat
   ensures EffectiveRepairs(b) <= b.maxRepairsPerStep
   ensures EffectiveRepairs(b) <= b.maxIterationsTotal
 {
