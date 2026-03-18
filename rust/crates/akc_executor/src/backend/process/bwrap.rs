@@ -42,6 +42,36 @@ fn push_ro_bind_if_exists(args: &mut Vec<String>, host: &str) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn has_cap_net_admin() -> bool {
+    // Used to decide whether `--unshare-net` is likely to succeed.
+    // Without CAP_NET_ADMIN, bubblewrap may fail configuring loopback
+    // (e.g. `RTM_NEWADDR: Operation not permitted`), which should not
+    // prevent running sandboxed processes in best-effort environments.
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return false;
+    };
+    let cap_eff_line = status
+        .lines()
+        .find(|l| l.starts_with("CapEff:"))
+        .unwrap_or_default();
+
+    // CapEff is a hex bitmap (often 16 hex digits) like: `CapEff:\t0000000000000400`
+    let hex = cap_eff_line.trim_start_matches("CapEff:").trim();
+    let Ok(v) = u64::from_str_radix(hex, 16) else {
+        return false;
+    };
+
+    // CAP_NET_ADMIN is capability number 12.
+    let cap_net_admin_bit: u64 = 1u64 << 12;
+    (v & cap_net_admin_bit) != 0
+}
+
+#[cfg(not(target_os = "linux"))]
+fn has_cap_net_admin() -> bool {
+    false
+}
+
 fn is_program_allowed(program: &str) -> bool {
     if let Ok(raw) = std::env::var("AKC_EXEC_ALLOWLIST") {
         if raw.trim().is_empty() {
@@ -93,16 +123,23 @@ pub(crate) fn run_process_lane_bwrap(
 
     let bwrap = bwrap_path().ok_or(ExecutorError::PolicyDenied)?;
 
-    let mut args: Vec<String> = Vec::new();
-    args.push("--die-with-parent".to_string());
-    args.push("--new-session".to_string());
-    args.push("--unshare-net".to_string());
-    args.push("--proc".to_string());
-    args.push("/proc".to_string());
-    args.push("--dev".to_string());
-    args.push("/dev".to_string());
-    args.push("--tmpfs".to_string());
-    args.push("/tmp".to_string());
+    let mut args: Vec<String> = vec![
+        "--die-with-parent".to_string(),
+        "--new-session".to_string(),
+        "--proc".to_string(),
+        "/proc".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+        "--tmpfs".to_string(),
+        "/tmp".to_string(),
+    ];
+
+    // Best-effort network isolation:
+    // - when the caller indicates networking should be disabled, prefer unsharing net
+    // - but if we can't (missing CAP_NET_ADMIN), skip it instead of failing exec
+    if !request.capabilities.network && has_cap_net_admin() {
+        args.insert(2, "--unshare-net".to_string());
+    }
 
     // Allowlisted runtime mounts required for most dynamically-linked binaries.
     // These are mounted read-only; the workspace remains the only RW tree by default.

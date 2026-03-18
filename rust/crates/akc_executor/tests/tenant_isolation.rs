@@ -14,7 +14,10 @@ fn with_exec_env<T>(root: &PathBuf, backend: &str, f: impl FnOnce() -> T) -> T {
     std::env::set_var("AKC_EXEC_ROOT", root);
     std::env::set_var("AKC_EXEC_BACKEND", backend);
     // Ensure tests are not coupled via a previously-set allowlist.
-    std::env::set_var("AKC_EXEC_ALLOWLIST", "echo");
+    // Keep a small default allowlist that includes commands used by bwrap
+    // filesystem tests. Most tests that need a different allowlist set it
+    // explicitly inside the closure.
+    std::env::set_var("AKC_EXEC_ALLOWLIST", "echo:sh:/usr/bin/cat:/bin/cat");
     f()
 }
 

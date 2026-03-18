@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::io;
 
 #[cfg(unix)]
@@ -107,9 +108,7 @@ impl LinuxCgroupV2Guard {
         run_id: &RunId,
         memory_bytes: Option<u64>,
     ) -> Option<Self> {
-        let Some(mem) = memory_bytes else {
-            return None;
-        };
+        let mem = memory_bytes?;
         if !should_try_cgroup_v2() {
             return None;
         }

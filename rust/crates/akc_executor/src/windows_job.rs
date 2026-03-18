@@ -42,7 +42,7 @@ impl WindowsJob {
 impl Drop for WindowsJob {
     fn drop(&mut self) {
         unsafe {
-            if self.handle != 0 {
+            if self.handle != std::ptr::null_mut() {
                 // `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ensures the whole tree is terminated.
                 let _ = CloseHandle(self.handle);
             }
@@ -126,7 +126,7 @@ fn try_set_job_cpu_rate(job: HANDLE, percent: u32) -> bool {
         let mut info: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = std::mem::zeroed();
         info.ControlFlags =
             JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
-        info.CpuRate = cpu_rate;
+        info.Anonymous.CpuRate = cpu_rate;
 
         let ok = SetInformationJobObject(
             job,
@@ -164,7 +164,7 @@ pub(crate) fn try_create_and_assign_job(
     unsafe {
         // Unnamed job object: avoids collisions between concurrent executions.
         let job: HANDLE = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-        if job == 0 {
+        if job == std::ptr::null_mut() {
             let _err = GetLastError();
             return JobSetupResult { job: None, report };
         }
