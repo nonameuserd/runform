@@ -37,7 +37,9 @@ def test_agent_spec_renders_deterministic_json_and_binds_scope() -> None:
         roles=[
             AgentRoleSpec(name="planner", tools=["index.query"], budget=AgentBudget(max_steps=10)),
             AgentRoleSpec(
-                name="writer", tools=["fs.write", "python"], instructions="Prefer small diffs."
+                name="writer",
+                tools=["fs.write", "python"],
+                instructions="Prefer small diffs.",
             ),
         ],
         metadata={"purpose": "unit-test"},

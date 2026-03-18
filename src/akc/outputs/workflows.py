@@ -85,7 +85,10 @@ class WorkflowJob:
             raise ValueError("job.needs must be a sequence of non-empty strings")
 
     def to_obj(self) -> dict[str, Any]:
-        obj: dict[str, Any] = {"runs-on": self.runs_on, "steps": [s.to_obj() for s in self.steps]}
+        obj: dict[str, Any] = {
+            "runs-on": self.runs_on,
+            "steps": [s.to_obj() for s in self.steps],
+        }
         if self.name is not None:
             obj["name"] = self.name
         if self.needs:
@@ -115,12 +118,7 @@ class GithubActionsWorkflow:
             require_non_empty(str(job_id), name="workflow.job_id")
 
     def to_obj(self) -> dict[str, Any]:
-        # `on` is either a mapping (e.g. cron/workflow_dispatch objects) or a
-        # sequence of event names. Narrow explicitly for mypy.
-        if isinstance(self.on, Mapping):
-            on_obj: Any = dict(self.on)
-        else:
-            on_obj = list(self.on)
+        on_obj: Any = dict(self.on) if isinstance(self.on, Mapping) else list(self.on)
         return {
             "name": self.name,
             "on": on_obj,
@@ -145,5 +143,8 @@ class GithubActionsWorkflow:
             fn = f"{fn}.yml"
         path = f"{directory.rstrip('/')}/{fn}"
         return OutputArtifact.from_text(
-            path=path, text=self.render_yaml(), media_type=media_type, metadata=metadata
+            path=path,
+            text=self.render_yaml(),
+            media_type=media_type,
+            metadata=metadata,
         )

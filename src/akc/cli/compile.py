@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal
 
 from akc.compile import (
     Budget,
@@ -11,7 +12,7 @@ from akc.compile import (
     SubprocessExecutor,
     TierConfig,
 )
-from akc.compile.controller_config import TestMode, TierName
+from akc.compile.controller_config import TestMode
 from akc.compile.interfaces import Executor, LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
 from akc.compile.rust_bridge import BackendMode, ExecLane, RustExecConfig
 
@@ -26,9 +27,15 @@ class _OfflineLLM(LLMBackend):
     tests-by-default and policy logic remain exercised.
     """
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:
-        # `request` is part of the LLMBackend interface but the offline backend
-        # intentionally ignores it.
+    def complete(
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        # The offline backend ignores the incoming request and returns
+        # a deterministic patch that exercises both code and tests.
         _ = request
         text = "\n".join(
             [
@@ -55,7 +62,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
     - thorough: larger budget, full tests every iteration.
     """
 
-    tiers: dict[TierName, TierConfig] = {
+    tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
         "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
         "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
         "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),

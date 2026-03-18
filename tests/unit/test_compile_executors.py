@@ -31,7 +31,10 @@ def test_subprocess_executor_rejects_cwd_escape(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="within executor work_root"):
         ex.run(
             scope=scope,
-            request=ExecutionRequest(command=["python", "-c", "print('x')"], cwd=str(outside)),
+            request=ExecutionRequest(
+                command=["python", "-c", "print('x')"],
+                cwd=str(outside),
+            ),
         )
 
 
@@ -59,7 +62,10 @@ def test_docker_executor_builds_expected_docker_command(
     scope = TenantRepoScope(tenant_id="t1", repo_id="repo1")
     res = ex.run(
         scope=scope,
-        request=ExecutionRequest(command=["python", "-c", "print('ok')"], env={"X": "1"}),
+        request=ExecutionRequest(
+            command=["python", "-c", "print('ok')"],
+            env={"X": "1"},
+        ),
     )
 
     assert res.exit_code == 0
@@ -82,5 +88,8 @@ def test_docker_executor_rejects_cwd_escape(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="within executor work_root"):
         ex.run(
             scope=scope,
-            request=ExecutionRequest(command=["python", "-c", "print('x')"], cwd=str(outside)),
+            request=ExecutionRequest(
+                command=["python", "-c", "print('x')"],
+                cwd=str(outside),
+            ),
         )

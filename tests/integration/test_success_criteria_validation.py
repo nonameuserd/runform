@@ -236,8 +236,7 @@ def test_success_criteria_extensible_ingest_connector_pluggable() -> None:
 
 
 def test_success_criteria_extensible_compile_no_connector_required() -> None:
-    """Extensible: Compile does not require a specific connector; uses
-    tenant/repo/outputs-root only."""
+    """Extensible: Compile doesn't require a connector; uses tenant/repo/outputs-root only."""
     from akc.cli import _build_parser
 
     parser = _build_parser()

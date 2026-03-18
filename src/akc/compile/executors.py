@@ -95,7 +95,8 @@ def _ensure_under_root(*, root: Path, p: Path) -> None:
 
 
 def _sanitize_env(
-    base: Mapping[str, str] | None, extra: Mapping[str, str] | None
+    base: Mapping[str, str] | None,
+    extra: Mapping[str, str] | None,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
     if base:
@@ -163,7 +164,10 @@ class SubprocessExecutor(Executor):
                 else e.stderr.decode("utf-8", "replace")
             )
             return ExecutionResult(
-                exit_code=124, stdout=out, stderr=err or "timed out", duration_ms=dur_ms
+                exit_code=124,
+                stdout=out,
+                stderr=err or "timed out",
+                duration_ms=dur_ms,
             )
         except FileNotFoundError as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)
@@ -251,7 +255,10 @@ class DockerExecutor(Executor):
                 else e.stderr.decode("utf-8", "replace")
             )
             return ExecutionResult(
-                exit_code=124, stdout=out, stderr=err or "timed out", duration_ms=dur_ms
+                exit_code=124,
+                stdout=out,
+                stderr=err or "timed out",
+                duration_ms=dur_ms,
             )
         except FileNotFoundError as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)

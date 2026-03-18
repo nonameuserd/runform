@@ -44,7 +44,9 @@ class IngestStateFingerprint:
 
 
 def fingerprint_ingestion_state(
-    *, tenant_id: str, state_path: str | Path
+    *,
+    tenant_id: str,
+    state_path: str | Path,
 ) -> IngestStateFingerprint:
     """Fingerprint `IngestionStateStore` JSON (best-effort source set fingerprint).
 

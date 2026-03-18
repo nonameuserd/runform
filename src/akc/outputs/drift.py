@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
@@ -154,19 +154,18 @@ def drift_report(
             mismatched.append(relpath)
 
     if invalid or missing or mismatched:
+        invalid_v: list[JSONValue] = [str(p) for p in invalid]
+        missing_v: list[JSONValue] = [str(p) for p in missing]
+        mismatched_v: list[JSONValue] = [str(p) for p in mismatched]
         findings.append(
             DriftFinding(
                 kind="changed_outputs",
                 severity="high",
                 details={
                     "manifest_path": str(manifest_path),
-                    # JSON discipline: details must be JSONValue-typed.
-                    # `invalid`/`missing`/`mismatched` are `list[str]`, so cast
-                    # them to `list[JSONValue]` elementwise (values are still
-                    # JSON strings; this is purely a typing reconciliation).
-                    "invalid_artifacts": cast(list[JSONValue], invalid),
-                    "missing_artifacts": cast(list[JSONValue], missing),
-                    "mismatched_artifacts": cast(list[JSONValue], mismatched),
+                    "invalid_artifacts": invalid_v,
+                    "missing_artifacts": missing_v,
+                    "mismatched_artifacts": mismatched_v,
                 },
             )
         )

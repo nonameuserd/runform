@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import ControllerConfig
@@ -58,7 +58,12 @@ class CompileSession:
     ) -> CompileSession:
         """Create a session with in-memory stores (fast, test-friendly)."""
 
-        return cls.from_backend(tenant_id=tenant_id, repo_id=repo_id, backend="memory", index=index)
+        return cls.from_backend(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            backend="memory",
+            index=index,
+        )
 
     @classmethod
     def from_sqlite(
@@ -138,7 +143,9 @@ class CompileSession:
         plan = self.plan(goal=goal)
         # Ensure the plan exists and is active before running.
         self.memory.plan_state.set_active_plan(
-            tenant_id=self.tenant_id, repo_id=self.repo_id, plan_id=plan.id
+            tenant_id=self.tenant_id,
+            repo_id=self.repo_id,
+            plan_id=plan.id,
         )
         result = run_compile_loop(
             tenant_id=self.tenant_id,
@@ -221,6 +228,8 @@ class CompileSession:
                     )
                 )
                 # Keep a structured record, too.
+                cmd_raw = payload.get("command")
+                cmd_list: list[str] = [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.json",
@@ -228,11 +237,7 @@ class CompileSession:
                             "plan_id": result.plan.id,
                             "step_id": step_id_s,
                             "stage": payload.get("stage"),
-                            "command": (
-                                [str(x) for x in payload["command"]]
-                                if isinstance(payload.get("command"), list)
-                                else []
-                            ),
+                            "command": cmd_list,
                             "exit_code": payload.get("exit_code"),
                             "duration_ms": payload.get("duration_ms"),
                         },
@@ -241,14 +246,14 @@ class CompileSession:
                 )
 
             if result.best_candidate.execution is not None:
-                # Prefer step outputs when available (smoke+full); otherwise fall
-                # back to best_candidate.
+                # Prefer step outputs when available (smoke+full);
+                # otherwise fall back to best_candidate.
                 last_smoke = step_outputs.get("last_tests_smoke")
                 last_full = step_outputs.get("last_tests_full")
                 if isinstance(last_smoke, dict):
-                    _emit_stage(name="smoke", payload=cast(dict[str, Any], last_smoke))
+                    _emit_stage(name="smoke", payload=dict(last_smoke))
                 if isinstance(last_full, dict):
-                    _emit_stage(name="full", payload=cast(dict[str, Any], last_full))
+                    _emit_stage(name="full", payload=dict(last_full))
 
                 if not isinstance(last_smoke, dict) and not isinstance(last_full, dict):
                     stdout = result.best_candidate.execution.stdout or ""
@@ -294,7 +299,12 @@ class CompileSession:
                                 "step_id": step_id_s,
                                 "stage": getattr(result.best_candidate, "execution_stage", None),
                                 "command": list(
-                                    getattr(result.best_candidate, "execution_command", None) or []
+                                    getattr(
+                                        result.best_candidate,
+                                        "execution_command",
+                                        None,
+                                    )
+                                    or []
                                 ),
                                 "exit_code": int(result.best_candidate.execution.exit_code),
                                 "duration_ms": result.best_candidate.execution.duration_ms,

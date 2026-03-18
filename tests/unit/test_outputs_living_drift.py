@@ -70,20 +70,37 @@ def test_drift_report_detects_changed_sources_when_baseline_present(tmp_path: Pa
     state_path = tmp_path / "docs.state.json"
     state_path.write_text(
         json.dumps(
-            {"t1::docs::a.md": {"kind": "docs", "path": "/x/a.md", "mtime_ns": 1, "size": 10}}
+            {
+                "t1::docs::a.md": {
+                    "kind": "docs",
+                    "path": "/x/a.md",
+                    "mtime_ns": 1,
+                    "size": 10,
+                }
+            }
         ),
         encoding="utf-8",
     )
     fp1 = fingerprint_ingestion_state(tenant_id="t1", state_path=state_path)
     baseline_path = tmp_path / "t1" / "repo1" / ".akc" / "living" / "baseline.json"
     write_baseline(
-        scope=scope, outputs_root=tmp_path, ingest_fingerprint=fp1, baseline_path=baseline_path
+        scope=scope,
+        outputs_root=tmp_path,
+        ingest_fingerprint=fp1,
+        baseline_path=baseline_path,
     )
 
     # Change the ingestion state.
     state_path.write_text(
         json.dumps(
-            {"t1::docs::a.md": {"kind": "docs", "path": "/x/a.md", "mtime_ns": 2, "size": 10}}
+            {
+                "t1::docs::a.md": {
+                    "kind": "docs",
+                    "path": "/x/a.md",
+                    "mtime_ns": 2,
+                    "size": 10,
+                }
+            }
         ),
         encoding="utf-8",
     )

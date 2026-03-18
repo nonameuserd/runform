@@ -51,8 +51,8 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["hash", "openai", "gemini", "none"],
         default="none",
         help=(
-            "Embedding provider (default: none, offline). Use openai/gemini "
-            "only when explicitly configured."
+            "Embedding provider (default: none, offline). "
+            "Use openai/gemini only when explicitly configured."
         ),
     )
     ingest.add_argument("--openai-api-key", help="OpenAI-compatible API key")

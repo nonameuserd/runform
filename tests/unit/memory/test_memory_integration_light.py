@@ -52,7 +52,9 @@ def _assert_end_to_end_conflict_flow(*, backend: str, sqlite_path: str | None = 
 
     detector = ConflictDetector()
     constraints = mem.why_graph.list_nodes_by_type(
-        tenant_id="t", repo_id="repo", node_type="constraint"
+        tenant_id="t",
+        repo_id="repo",
+        node_type="constraint",
     )
     reports = detector.detect_constraint_contradictions(
         tenant_id="t",

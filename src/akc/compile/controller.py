@@ -31,7 +31,7 @@ from akc.compile.repair import build_repair_prompt, parse_execution_failure
 from akc.compile.retriever import retrieve_context
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
 from akc.memory.code_memory import make_item
-from akc.memory.models import PlanState, PlanStep, now_ms, require_non_empty
+from akc.memory.models import PlanState, PlanStep, PlanStepStatus, now_ms, require_non_empty
 from akc.memory.plan_state import PlanStateStore
 
 RunStatus = Literal["succeeded", "failed", "budget_exhausted"]
@@ -159,7 +159,9 @@ def _is_test_path(p: str) -> bool:
 
 
 def _policy_requires_tests(
-    *, touched_paths: list[str], require_tests_for_non_test_changes: bool
+    *,
+    touched_paths: list[str],
+    require_tests_for_non_test_changes: bool,
 ) -> tuple[bool, dict[str, Any]]:
     """Return (ok, evidence) for the tests-generated-by-default heuristic."""
 
@@ -178,7 +180,11 @@ def _policy_requires_tests(
             "test_paths": tests,
             "non_test_paths": non_tests,
         }
-    return True, {"touched_paths": touched_paths, "test_paths": tests, "non_test_paths": non_tests}
+    return True, {
+        "touched_paths": touched_paths,
+        "test_paths": tests,
+        "non_test_paths": non_tests,
+    }
 
 
 def _score_execution(result: ExecutionResult | None) -> int:
@@ -239,7 +245,7 @@ def _set_step_status(
     *,
     plan: PlanState,
     step_id: str,
-    status: str,
+    status: PlanStepStatus,
     notes: str | None = None,
 ) -> PlanState:
     t = now_ms()
@@ -254,7 +260,7 @@ def _set_step_status(
         return PlanStep(
             id=s.id,
             title=s.title,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             order_idx=s.order_idx,
             started_at_ms=started,
             finished_at_ms=finished,
@@ -272,7 +278,7 @@ def run_compile_loop(
     repo_id: str,
     goal: str,
     plan_store: PlanStateStore,
-    code_memory: Any,  # CodeMemoryStore (kept untyped to avoid import cycle)
+    code_memory: Any,  # CodeMemoryStore (kept untyped here to avoid import cycle)
     why_graph: Any,
     index: Any,
     llm: LLMBackend,
@@ -567,7 +573,8 @@ def run_compile_loop(
         if promotable:
             # Phase 5 verifier gate: can veto promotion even after tests pass.
             policy = VerifierPolicy(
-                enabled=bool(config.verifier_enabled), strict=bool(config.verifier_strict)
+                enabled=bool(config.verifier_enabled),
+                strict=bool(config.verifier_strict),
             )
             vres = verifier.verify(
                 scope=scope,
@@ -650,7 +657,7 @@ def run_compile_loop(
                         repo_id=repo_id,
                         artifact_id=plan.id,
                         item_id=full_item_id,
-                        kind="test_result",
+                        kind="test_full_result",
                         content=exec_result.stdout
                         + ("\n" + exec_result.stderr if exec_result.stderr else ""),
                         metadata={
@@ -710,10 +717,14 @@ def run_compile_loop(
                 feedback={"status": "passed", "step_id": step_id},
             )
             return ControllerResult(
-                status="succeeded", plan=plan, best_candidate=best, accounting=accounting
+                status="succeeded",
+                plan=plan,
+                best_candidate=best,
+                accounting=accounting,
             )
 
-        # Smoke-only pass without a full gate: keep iterating without consuming a repair.
+        # Smoke-only pass without a full gate:
+        # keep iterating without consuming a repair.
         if (
             config.test_mode == "smoke"
             and int(smoke_res.result.exit_code) == 0
@@ -743,7 +754,9 @@ def run_compile_loop(
         notes="compile loop did not produce a passing candidate within budget",
     )
     plan = replace(
-        plan, last_feedback={"status": str(status), "step_id": step_id}, updated_at_ms=now_ms()
+        plan,
+        last_feedback={"status": str(status), "step_id": step_id},
+        updated_at_ms=now_ms(),
     )
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
     plan = advance_plan(

@@ -20,7 +20,13 @@ from akc.memory.facade import build_memory
 class _FakeLLM(LLMBackend):
     """Deterministic fake backend that echoes tier+stage."""
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+    def complete(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
         tier = None
         if request.metadata is not None:
             tier = request.metadata.get("tier")
@@ -50,10 +56,16 @@ class _ScriptedLLM(LLMBackend):
     texts: list[str]
     calls: int = 0
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
-        # Keep the full signature (called via keyword args), but the scripted
-        # backend returns pre-programmed responses.
-        _ = (scope, stage, request)
+    def complete(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        _ = scope
+        _ = stage
+        _ = request
         txt = self.texts[min(self.calls, len(self.texts) - 1)]
         self.calls += 1
         return LLMResponse(text=txt, raw=None, usage=None)
@@ -66,13 +78,21 @@ class _ScriptedExecutor(Executor):
     exit_codes: list[int]
     calls: int = 0
 
-    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:  # type: ignore[override]
-        # The scripted executor ignores tenant scope and request details.
-        _ = (scope, request)
+    def run(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        request: ExecutionRequest,
+    ) -> ExecutionResult:
+        _ = scope
+        _ = request
         code = self.exit_codes[min(self.calls, len(self.exit_codes) - 1)]
         self.calls += 1
         return ExecutionResult(
-            exit_code=int(code), stdout=f"call={self.calls}", stderr="", duration_ms=1
+            exit_code=int(code),
+            stdout=f"call={self.calls}",
+            stderr="",
+            duration_ms=1,
         )
 
 
@@ -149,7 +169,10 @@ def test_controller_persists_best_candidate_and_marks_step_done_on_success() -> 
         f"{plan.id}:{step.id}:test_result",
     ]
     items = mem.code_memory.list_items(
-        tenant_id="t1", repo_id="repo1", artifact_id=plan.id, limit=10
+        tenant_id="t1",
+        repo_id="repo1",
+        artifact_id=plan.id,
+        limit=10,
     )
     kinds = {i.kind for i in items}
     assert "patch" in kinds

@@ -51,7 +51,10 @@ class OutputArtifact:
     ) -> OutputArtifact:
         require_non_empty(text, name="text")
         return cls(
-            path=path, content=text.encode("utf-8"), media_type=media_type, metadata=metadata
+            path=path,
+            content=text.encode("utf-8"),
+            media_type=media_type,
+            metadata=metadata,
         )
 
     @classmethod
@@ -260,7 +263,10 @@ class AgentSpec:
             fn = f"{fn}.json"
         path = f"{directory.rstrip('/')}/{fn}"
         return OutputArtifact.from_text(
-            path=path, text=self.render_json(), media_type=media_type, metadata=metadata
+            path=path,
+            text=self.render_json(),
+            media_type=media_type,
+            metadata=metadata,
         )
 
     def to_artifact_yaml(
@@ -278,5 +284,8 @@ class AgentSpec:
             fn = f"{fn}.yml"
         path = f"{directory.rstrip('/')}/{fn}"
         return OutputArtifact.from_text(
-            path=path, text=self.render_yaml(), media_type=media_type, metadata=metadata
+            path=path,
+            text=self.render_yaml(),
+            media_type=media_type,
+            metadata=metadata,
         )

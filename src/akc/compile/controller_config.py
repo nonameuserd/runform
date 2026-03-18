@@ -7,6 +7,7 @@ enforce per-run budgets (calls, tokens, wall time, etc.).
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
@@ -26,10 +27,11 @@ class Budget:
     """
 
     max_llm_calls: int = 10
-    # Back-compat: older name used by early Phase 3 controller. Prefer max_repairs_per_step.
+    # Deprecated (back-compat): older name used by early Phase 3 controller.
+    # Prefer `max_repairs_per_step`. This may be removed in a future major version.
     max_repair_iterations: int | None = None
-    # Maximum repair iterations within a single plan step (not counting the initial
-    # generate attempt).
+    # Maximum repair iterations within a single plan step
+    # (not counting the initial generate attempt).
     max_repairs_per_step: int = 3
     # Total (generate+repair) iterations allowed for a single plan step.
     max_iterations_total: int = 5
@@ -42,6 +44,12 @@ class Budget:
             raise ValueError("max_llm_calls must be > 0")
         if self.max_repair_iterations is not None and int(self.max_repair_iterations) < 0:
             raise ValueError("max_repair_iterations must be >= 0 when set")
+        if self.max_repair_iterations is not None:
+            warnings.warn(
+                "Budget.max_repair_iterations is deprecated; use max_repairs_per_step instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if int(self.max_repairs_per_step) < 0:
             raise ValueError("max_repairs_per_step must be >= 0")
         if int(self.max_iterations_total) <= 0:

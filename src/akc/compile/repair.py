@@ -19,7 +19,8 @@ from akc.memory.models import JSONValue, require_non_empty
 
 _PYTEST_FAIL_LINE_RE = re.compile(r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$")
 _PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(
-    r"^=+\s*short test summary info\s*=+\s*$", re.IGNORECASE
+    r"^=+\s*short test summary info\s*=+\s*$",
+    re.IGNORECASE,
 )
 _TRACEBACK_HEADER_RE = re.compile(
     r"^=+\s*FAILURES\s*=+\s*$|^Traceback \(most recent call last\):\s*$"
