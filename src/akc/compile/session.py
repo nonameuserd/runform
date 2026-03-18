@@ -229,9 +229,7 @@ class CompileSession:
                 )
                 # Keep a structured record, too.
                 cmd_raw = payload.get("command")
-                cmd_list: list[str] = (
-                    [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
-                )
+                cmd_list: list[str] = [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.json",
