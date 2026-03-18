@@ -11,6 +11,7 @@ Design goals:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -30,7 +31,7 @@ from akc.compile.repair import build_repair_prompt, parse_execution_failure
 from akc.compile.retriever import retrieve_context
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
 from akc.memory.code_memory import make_item
-from akc.memory.models import PlanState, PlanStep, now_ms, require_non_empty
+from akc.memory.models import PlanState, PlanStep, PlanStepStatus, now_ms, require_non_empty
 from akc.memory.plan_state import PlanStateStore
 
 RunStatus = Literal["succeeded", "failed", "budget_exhausted"]
@@ -210,7 +211,7 @@ def _update_step(
     *,
     plan: PlanState,
     step_id: str,
-    mutate: callable[[PlanStep], PlanStep],
+    mutate: Callable[[PlanStep], PlanStep],
 ) -> PlanState:
     require_non_empty(step_id, name="step_id")
     steps2: list[PlanStep] = []
@@ -244,7 +245,7 @@ def _set_step_status(
     *,
     plan: PlanState,
     step_id: str,
-    status: str,
+    status: PlanStepStatus,
     notes: str | None = None,
 ) -> PlanState:
     t = now_ms()
@@ -259,7 +260,7 @@ def _set_step_status(
         return PlanStep(
             id=s.id,
             title=s.title,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             order_idx=s.order_idx,
             started_at_ms=started,
             finished_at_ms=finished,
@@ -277,9 +278,9 @@ def run_compile_loop(
     repo_id: str,
     goal: str,
     plan_store: PlanStateStore,
-    code_memory,  # CodeMemoryStore (kept untyped here to avoid import cycle)
-    why_graph,
-    index,
+    code_memory: Any,  # CodeMemoryStore (kept untyped here to avoid import cycle)
+    why_graph: Any,
+    index: Any,
     llm: LLMBackend,
     executor: Executor,
     config: ControllerConfig,
@@ -299,7 +300,7 @@ def run_compile_loop(
     plan = advance_plan(
         tenant_id=tenant_id,
         repo_id=repo_id,
-        plan_id=plan_store.get_active_plan_id(tenant_id=tenant_id, repo_id=repo_id)  # type: ignore[arg-type]
+        plan_id=plan_store.get_active_plan_id(tenant_id=tenant_id, repo_id=repo_id)
         or plan_store.create_plan(tenant_id=tenant_id, repo_id=repo_id, goal=goal).id,
         plan_store=plan_store,
         feedback=None,
@@ -644,7 +645,7 @@ def run_compile_loop(
                             "step_id": step_id,
                             "stage": smoke_res.stage,
                             "exit_code": int(smoke_res.result.exit_code),
-                            "duration_ms": int(smoke_res.result.duration_ms),
+                            "duration_ms": smoke_res.result.duration_ms,
                             "command": list(smoke_res.command),
                             "paths": patch_paths,
                         },
@@ -664,7 +665,7 @@ def run_compile_loop(
                             "step_id": step_id,
                             "stage": (full_res.stage if full_res is not None else smoke_res.stage),
                             "exit_code": int(exec_result.exit_code),
-                            "duration_ms": int(exec_result.duration_ms),
+                            "duration_ms": exec_result.duration_ms,
                             "command": list(
                                 full_res.command if full_res is not None else smoke_res.command
                             ),
@@ -686,7 +687,7 @@ def run_compile_loop(
                             "step_id": step_id,
                             "stage": (full_res.stage if full_res is not None else smoke_res.stage),
                             "exit_code": int(exec_result.exit_code),
-                            "duration_ms": int(exec_result.duration_ms),
+                            "duration_ms": exec_result.duration_ms,
                             "command": list(
                                 full_res.command if full_res is not None else smoke_res.command
                             ),

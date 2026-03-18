@@ -118,7 +118,11 @@ class GithubActionsWorkflow:
             require_non_empty(str(job_id), name="workflow.job_id")
 
     def to_obj(self) -> dict[str, Any]:
-        on_obj = list(self.on) if isinstance(self.on, (list, tuple)) else dict(self.on)
+        on_obj: Any
+        if isinstance(self.on, Mapping):
+            on_obj = dict(self.on)
+        else:
+            on_obj = list(self.on)
         return {
             "name": self.name,
             "on": on_obj,

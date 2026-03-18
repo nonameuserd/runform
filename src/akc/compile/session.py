@@ -189,7 +189,7 @@ class CompileSession:
                 )
             ]
 
-            def _emit_stage(*, name: str, payload: dict[str, object]) -> None:
+            def _emit_stage(*, name: str, payload: dict[str, Any]) -> None:
                 stdout = str(payload.get("stdout") or "")
                 stderr = str(payload.get("stderr") or "")
                 combined = (stdout + ("\n" + stderr if stderr else "")) or "(no output)"
@@ -228,6 +228,10 @@ class CompileSession:
                     )
                 )
                 # Keep a structured record, too.
+                cmd_raw = payload.get("command")
+                cmd_list: list[str] = (
+                    [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
+                )
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.json",
@@ -235,7 +239,7 @@ class CompileSession:
                             "plan_id": result.plan.id,
                             "step_id": step_id_s,
                             "stage": payload.get("stage"),
-                            "command": list(payload.get("command") or []),  # type: ignore[list-item]
+                            "command": cmd_list,
                             "exit_code": payload.get("exit_code"),
                             "duration_ms": payload.get("duration_ms"),
                         },
@@ -249,9 +253,9 @@ class CompileSession:
                 last_smoke = step_outputs.get("last_tests_smoke")
                 last_full = step_outputs.get("last_tests_full")
                 if isinstance(last_smoke, dict):
-                    _emit_stage(name="smoke", payload=last_smoke)  # type: ignore[arg-type]
+                    _emit_stage(name="smoke", payload=dict(last_smoke))
                 if isinstance(last_full, dict):
-                    _emit_stage(name="full", payload=last_full)  # type: ignore[arg-type]
+                    _emit_stage(name="full", payload=dict(last_full))
 
                 if not isinstance(last_smoke, dict) and not isinstance(last_full, dict):
                     stdout = result.best_candidate.execution.stdout or ""

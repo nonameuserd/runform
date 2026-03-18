@@ -118,7 +118,7 @@ class SubprocessExecutor(Executor):
     def _work_root_path(self) -> Path:
         return Path(self.work_root) if self.work_root is not None else _default_work_root()
 
-    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:  # type: ignore[override]
+    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
         root = self._work_root_path()
         root.mkdir(parents=True, exist_ok=True)
 
@@ -192,7 +192,7 @@ class DockerExecutor(Executor):
     def _work_root_path(self) -> Path:
         return Path(self.work_root) if self.work_root is not None else _default_work_root()
 
-    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:  # type: ignore[override]
+    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
         root = self._work_root_path()
         root.mkdir(parents=True, exist_ok=True)
 

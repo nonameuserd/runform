@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal
 
 from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
@@ -23,7 +24,7 @@ class _OfflineLLM(LLMBackend):
         scope: TenantRepoScope,
         stage: str,
         request: LLMRequest,
-    ) -> LLMResponse:  # type: ignore[override]
+    ) -> LLMResponse:
         # The offline backend ignores the incoming request and returns
         # a deterministic patch that exercises both code and tests.
         _ = request
@@ -52,7 +53,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
     - thorough: larger budget, full tests every iteration.
     """
 
-    tiers = {
+    tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
         "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
         "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
         "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
@@ -60,7 +61,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=12, max_repairs_per_step=4, max_iterations_total=8)
-        test_mode: str = "full"
+        test_mode: Literal["smoke", "full"] = "full"
         full_every: int | None = None
     else:
         budget = Budget(max_llm_calls=4, max_repairs_per_step=2, max_iterations_total=4)
@@ -71,7 +72,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
         tiers=tiers,
         stage_tiers={"generate": "small", "repair": "small"},
         budget=budget,
-        test_mode=test_mode,  # type: ignore[arg-type]
+        test_mode=test_mode,
         full_test_every_n_iterations=full_every,
     )
 

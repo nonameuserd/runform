@@ -140,7 +140,7 @@ def _is_path_suspicious(p: str) -> tuple[bool, str]:
 class DeterministicVerifier(Verifier):
     """Default production verifier: deterministic policy checks only."""
 
-    def verify(  # type: ignore[override]
+    def verify(
         self,
         *,
         scope: TenantRepoScope,

@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
@@ -84,9 +84,7 @@ class OutputArtifact:
             "media_type": self.media_type,
             "sha256": self.sha256_hex(),
             "size_bytes": self.size_bytes(),
-            "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
-            ),
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
 
 
@@ -114,9 +112,7 @@ class OutputBundle:
             "repo_id": self.scope.repo_id,
             "name": self.name,
             "artifacts": [a.to_json_obj() for a in self.artifacts],
-            "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
-            ),
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
 
 
@@ -242,9 +238,7 @@ class AgentSpec:
             "name": self.name,
             "llm": self.llm.to_json_obj(),
             "roles": [r.to_json_obj() for r in self.roles],
-            "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
-            ),
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
         return {k: v for k, v in obj.items() if v is not None}
 

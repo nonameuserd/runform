@@ -154,15 +154,18 @@ def drift_report(
             mismatched.append(relpath)
 
     if invalid or missing or mismatched:
+        invalid_v: list[JSONValue] = [str(p) for p in invalid]
+        missing_v: list[JSONValue] = [str(p) for p in missing]
+        mismatched_v: list[JSONValue] = [str(p) for p in mismatched]
         findings.append(
             DriftFinding(
                 kind="changed_outputs",
                 severity="high",
                 details={
                     "manifest_path": str(manifest_path),
-                    "invalid_artifacts": invalid,
-                    "missing_artifacts": missing,
-                    "mismatched_artifacts": mismatched,
+                    "invalid_artifacts": invalid_v,
+                    "missing_artifacts": missing_v,
+                    "mismatched_artifacts": mismatched_v,
                 },
             )
         )

@@ -39,7 +39,7 @@ class FileSystemEmitter(Emitter):
 
     create_parents: bool = True
 
-    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:  # type: ignore[override]
+    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
         root_p = Path(root)
         if self.create_parents:
             root_p.mkdir(parents=True, exist_ok=True)
@@ -67,7 +67,7 @@ class JsonManifestEmitter(Emitter):
     manifest_name: str = "manifest.json"
     artifacts: FileSystemEmitter = FileSystemEmitter()
 
-    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:  # type: ignore[override]
+    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
         require_non_empty(self.manifest_name, name="manifest_name")
         root_p = Path(root)
         root_p.mkdir(parents=True, exist_ok=True)
