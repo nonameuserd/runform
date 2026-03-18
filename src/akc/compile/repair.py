@@ -17,9 +17,7 @@ from typing import Any
 from akc.compile.interfaces import ExecutionResult
 from akc.memory.models import JSONValue, require_non_empty
 
-_PYTEST_FAIL_LINE_RE = re.compile(
-    r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$"
-)
+_PYTEST_FAIL_LINE_RE = re.compile(r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$")
 _PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(
     r"^=+\s*short test summary info\s*=+\s*$",
     re.IGNORECASE,
@@ -147,4 +145,3 @@ def build_repair_prompt(
         "- The patch must be tenant-safe: never read/write outside this repo "
         "and never mix tenants.\n"
     )
-

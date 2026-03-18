@@ -51,7 +51,7 @@ class FileSystemEmitter(Emitter):
 
         written: list[Path] = []
         for a in bundle.artifacts:
-            fp = (out_dir / a.path)
+            fp = out_dir / a.path
             # Ensure the resolved path stays inside the scoped dir.
             _ensure_under_root(root=out_dir, p=fp)
             fp.parent.mkdir(parents=True, exist_ok=True)
@@ -86,4 +86,3 @@ class JsonManifestEmitter(Emitter):
         )
         written.append(mpath)
         return written
-

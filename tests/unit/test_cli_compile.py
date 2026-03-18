@@ -23,9 +23,7 @@ def _write_minimal_repo(root: Path) -> None:
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tests / "test_module.py").write_text(
-        "from src import module\n\n"
-        "def test_smoke() -> None:\n"
-        "    assert module.VALUE == 1\n",
+        "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
         encoding="utf-8",
     )
 
@@ -275,4 +273,3 @@ def test_cli_compile_custom_goal_used(tmp_path: Path) -> None:
         )
     assert excinfo.value.code == 0
     assert (base / "manifest.json").exists()
-

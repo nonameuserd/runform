@@ -149,9 +149,7 @@ class ControllerConfig:
         if self.stage_tiers is not None:
             for _stage, tier_name in self.stage_tiers.items():
                 if tier_name not in self.tiers:
-                    raise ValueError(
-                        f"stage_tiers references unknown tier: {tier_name}"
-                    )
+                    raise ValueError(f"stage_tiers references unknown tier: {tier_name}")
         if self.test_command is not None and len(self.test_command) == 0:
             raise ValueError("test_command must be non-empty when set")
         if self.test_timeout_s is not None and float(self.test_timeout_s) <= 0:
@@ -184,4 +182,3 @@ class ControllerConfig:
                 return self.tiers["medium"]
             return self.tiers[sorted(self.tiers.keys())[0]]
         return self.tiers[name]
-

@@ -124,4 +124,3 @@ def test_write_baseline_requires_scope_ids(tmp_path: Path) -> None:
             ingest_fingerprint=None,
             baseline_path=tmp_path / "baseline.json",
         )
-

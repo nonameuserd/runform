@@ -61,4 +61,3 @@ def watch_for_changes(*, paths: Sequence[str | Path], cfg: WatchConfig) -> Itera
         if last_change_at is not None and (time.time() - last_change_at) >= float(cfg.debounce_s):
             last_change_at = None
             yield None
-

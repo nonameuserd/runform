@@ -210,9 +210,7 @@ def test_controller_escalates_generation_tier_after_failures() -> None:
     assert res.status == "succeeded"
     assert res.accounting["tier_history"]
     tiers = [
-        e["tier"]
-        for e in res.accounting["tier_history"]
-        if e["stage"] in {"generate", "repair"}
+        e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}
     ]
     # Starts at small and should reach at least medium after failures (given all tiers present).
     assert "small" in tiers
@@ -313,9 +311,7 @@ def test_controller_escalation_stops_at_largest_tier() -> None:
 
     assert res.status == "succeeded"
     tiers = [
-        e["tier"]
-        for e in res.accounting["tier_history"]
-        if e["stage"] in {"generate", "repair"}
+        e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}
     ]
     assert "large" in tiers
     assert tiers[-1] == "large"

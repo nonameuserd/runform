@@ -86,4 +86,3 @@ def dump_yaml(value: Any) -> str:
 
     emit(value, 0)
     return "\n".join(lines) + "\n"
-

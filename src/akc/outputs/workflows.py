@@ -118,9 +118,7 @@ class GithubActionsWorkflow:
             require_non_empty(str(job_id), name="workflow.job_id")
 
     def to_obj(self) -> dict[str, Any]:
-        on_obj = (
-            list(self.on) if isinstance(self.on, (list, tuple)) else dict(self.on)
-        )
+        on_obj = list(self.on) if isinstance(self.on, (list, tuple)) else dict(self.on)
         return {
             "name": self.name,
             "on": on_obj,
@@ -150,4 +148,3 @@ class GithubActionsWorkflow:
             media_type=media_type,
             metadata=metadata,
         )
-

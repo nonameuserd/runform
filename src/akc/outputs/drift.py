@@ -226,4 +226,3 @@ def write_baseline(
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(p)
     return p
-

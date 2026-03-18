@@ -92,4 +92,3 @@ def test_verifier_budget_accounting_exceeded_emits_error_and_blocks() -> None:
     )
     assert passed is False
     assert any(f.code == "budget.llm_calls_exceeded" for f in findings)
-

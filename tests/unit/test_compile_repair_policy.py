@@ -48,4 +48,3 @@ FAILED tests/test_x.py::test_addition - boom
     assert "Execution failure summary (parsed)" in prompt
     assert "max" not in prompt  # prompt builder itself does not enforce budgets
     assert "Return ONLY a unified diff" in prompt
-

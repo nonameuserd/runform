@@ -72,4 +72,3 @@ def test_agent_spec_to_artifacts_default_to_akc_agents_dir() -> None:
     assert a_yml.path == ".akc/agents/demo.yml"
     assert a_json.media_type.startswith("application/json")
     assert a_yml.media_type.startswith("application/yaml")
-

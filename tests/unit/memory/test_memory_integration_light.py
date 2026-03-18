@@ -89,4 +89,3 @@ def test_integration_light_conflict_flow_in_memory() -> None:
 
 def test_integration_light_conflict_flow_sqlite(tmp_path: Path) -> None:
     _assert_end_to_end_conflict_flow(backend="sqlite", sqlite_path=str(tmp_path / "phase2.sqlite3"))
-

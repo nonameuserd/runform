@@ -67,8 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["memory", "sqlite", "pgvector"],
         default="memory",
         help=(
-            "Pluggable vector index backend (default: memory; "
-            "use sqlite/pgvector for persistence)"
+            "Pluggable vector index backend (default: memory; use sqlite/pgvector for persistence)"
         ),
     )
     ingest.add_argument("--no-index", action="store_true", help="Run ingest without indexing")
@@ -311,5 +310,3 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     sys.exit(code)
-
-

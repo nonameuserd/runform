@@ -325,4 +325,3 @@ class CompileSession:
             (emitter or JsonManifestEmitter()).emit(bundle=bundle, root=outputs_root)
 
         return result
-

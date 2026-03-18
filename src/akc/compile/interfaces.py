@@ -165,4 +165,3 @@ class Executor(Protocol):
         request: ExecutionRequest,
     ) -> ExecutionResult:
         """Run a command in a sandbox and return captured output."""
-

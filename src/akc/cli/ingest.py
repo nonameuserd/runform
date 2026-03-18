@@ -174,4 +174,3 @@ def cmd_slack_list_channels(args: argparse.Namespace) -> int:
         name = c.name or ""
         print(f"{c.id}\t{name}")
     return 0
-

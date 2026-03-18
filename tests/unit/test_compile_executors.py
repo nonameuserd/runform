@@ -94,4 +94,3 @@ def test_docker_executor_rejects_cwd_escape(tmp_path: Path) -> None:
                 cwd=str(outside),
             ),
         )
-

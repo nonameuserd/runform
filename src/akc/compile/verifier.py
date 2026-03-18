@@ -270,4 +270,3 @@ class DeterministicVerifier(Verifier):
             checked_at_ms=now_ms(),
             policy=policy.to_json_obj(),
         )
-

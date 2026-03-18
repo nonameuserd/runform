@@ -342,8 +342,7 @@ def run_compile_loop(
     smoke_command = list(
         config.test_command
         if config.test_command is not None
-        else (config.metadata or {}).get("execute_command")
-        or ["python", "-m", "pytest", "-q"]
+        else (config.metadata or {}).get("execute_command") or ["python", "-m", "pytest", "-q"]
     )
     smoke_timeout_s_raw = (
         config.test_timeout_s
@@ -767,4 +766,3 @@ def run_compile_loop(
         feedback={"status": str(status), "step_id": step_id},
     )
     return ControllerResult(status=status, plan=plan, best_candidate=best, accounting=accounting)
-

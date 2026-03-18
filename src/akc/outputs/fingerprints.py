@@ -78,4 +78,3 @@ def fingerprint_ingestion_state(
 def fingerprint_file_bytes(*, path: str | Path) -> str:
     p = Path(path)
     return _sha256_hex(p.read_bytes())
-

@@ -43,8 +43,7 @@ def _run_formal_command(
         return False, f"{name}: FAILED (exit_code={proc.returncode})\n{summary}"
     return (
         False,
-        f"{name}: failed but ignored in relaxed mode "
-        f"(exit_code={proc.returncode})\n{summary}",
+        f"{name}: failed but ignored in relaxed mode (exit_code={proc.returncode})\n{summary}",
     )
 
 
@@ -170,4 +169,3 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     print("Verification passed.")
     return 0
-

@@ -96,4 +96,3 @@ def cmd_watch(args: argparse.Namespace) -> int:
             print("OK: no drift detected.")
 
     return 0
-

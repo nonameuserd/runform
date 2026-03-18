@@ -85,9 +85,7 @@ class OutputArtifact:
             "sha256": self.sha256_hex(),
             "size_bytes": self.size_bytes(),
             "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata))
-                if self.metadata
-                else None
+                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
             ),
         }
 
@@ -117,9 +115,7 @@ class OutputBundle:
             "name": self.name,
             "artifacts": [a.to_json_obj() for a in self.artifacts],
             "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata))
-                if self.metadata
-                else None
+                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
             ),
         }
 
@@ -247,9 +243,7 @@ class AgentSpec:
             "llm": self.llm.to_json_obj(),
             "roles": [r.to_json_obj() for r in self.roles],
             "metadata": (
-                dict(cast(Mapping[str, JSONValue], self.metadata))
-                if self.metadata
-                else None
+                dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None
             ),
         }
         return {k: v for k, v in obj.items() if v is not None}
@@ -301,4 +295,3 @@ class AgentSpec:
             media_type=media_type,
             metadata=metadata,
         )
-

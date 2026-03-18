@@ -128,4 +128,3 @@ def cmd_compile(args: argparse.Namespace) -> int:
 
     print("Compile did not succeed within budget; see emitted artifacts for details.")
     return 2
-
