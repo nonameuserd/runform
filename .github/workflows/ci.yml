@@ -73,10 +73,28 @@ jobs:
 
       - name: Install Dafny
         if: steps.dafny_paths.outputs.has_dafny == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -L https://github.com/dafny-lang/dafny/releases/latest/download/dafny-4.9.1-x64-ubuntu.zip -o dafny.zip
+          set -euo pipefail
+
+          # Download the correct Ubuntu zip from the *current* latest release.
+          # The previous URL mixed "latest" with a pinned asset name, which breaks
+          # as soon as "latest" moves forward.
+          gh release download \
+            --repo dafny-lang/dafny \
+            --pattern '*x64-ubuntu.zip' \
+            --output dafny.zip
+
           unzip -q dafny.zip -d "$HOME/dafny"
-          echo "$HOME/dafny" >> "$GITHUB_PATH"
+
+          # Add the extracted top-level directory to PATH.
+          top_dir="$(unzip -Z1 dafny.zip | head -n 1 | cut -d/ -f1)"
+          if [ -z "${top_dir}" ] || [ ! -d "$HOME/dafny/$top_dir" ]; then
+            echo "Failed to detect Dafny install directory after unzip." >&2
+            exit 1
+          fi
+          echo "$HOME/dafny/$top_dir" >> "$GITHUB_PATH"
 
       - name: Run Dafny verification
         if: steps.dafny_paths.outputs.has_dafny == 'true'
