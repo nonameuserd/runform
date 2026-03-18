@@ -103,6 +103,26 @@ flowchart LR
 
 Output emitters are extension points so new artifact types can be added without changing the core loop.
 
+## Rust Optional Components
+
+AKC can optionally delegate two security/performance-sensitive responsibilities to Rust, while keeping the core orchestration and compilation loop in Python:
+
+- `akc_executor`: a sandboxed execution service used by the Execute phase.
+- `akc_ingest`: a high-throughput ingestion/normalization CLI used by the ingest pipeline (optional for large inputs).
+
+Invocation surfaces (same request/response schema):
+- Subprocess JSON CLI boundary (auditability and reproducibility).
+- PyO3 module embedding (low overhead when running inside the Python process).
+
+Security model alignment:
+- Every request includes `tenant_id` and `run_id`.
+- Execution is defense-in-depth with two sandbox lanes:
+  - WASM (Wasmtime + WASI Preview 2) with capability-based host interfaces.
+  - OS process sandbox with per-run working directories, env scrubbing, and resource limits.
+- Logs and outputs include tenant/run correlation ids and avoid cross-tenant leakage.
+
+See [docs/security.md](security.md) for the threat model and tenant isolation guarantees.
+
 ## Design principles
 
 - **Extension points:** New connectors and output types plug in via clear interfaces; core stays stable. Connectors and vector stores are pluggable via CLI flags (e.g. `--connector`, `--index-backend`) and ingest modules; new backends can be added without changing the core loop.

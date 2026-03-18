@@ -1,0 +1,17 @@
+[package]
+name = "akc_executor"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+akc_protocol = { path = "../akc_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+wat = "1"

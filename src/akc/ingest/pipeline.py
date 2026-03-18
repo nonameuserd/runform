@@ -27,6 +27,8 @@ from akc.ingest.connectors.openapi import build_openapi_connector
 from akc.ingest.embedding import Embedder, embed_documents
 from akc.ingest.exceptions import IngestionError
 from akc.ingest.index import InMemoryVectorStore, PgVectorStore, SQLiteVectorStore, VectorStore
+from akc.ingest.rust_port import ingest_docs_via_rust
+from akc.compile.rust_bridge import RustExecConfig
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +246,9 @@ def run_ingest(
     state_store: IngestionStateStore | None = None,
     incremental: bool = True,
     on_source_error: Literal["raise", "skip"] = "raise",
+    use_rust_ingest_docs: bool = False,
+    rust_ingest_min_bytes: int | None = None,
+    rust_ingest_mode: Literal["cli", "pyo3"] = "cli",
 ) -> IngestResult:
     """Run ingestion end-to-end for one connector + input."""
 
@@ -283,19 +288,53 @@ def run_ingest(
         ):
             sources_skipped += 1
             continue
-        try:
-            docs = list(connector.fetch(source_id))
-        except Exception as e:
-            if on_source_error == "skip":
-                _source_error(source_id, e)
-                continue
-            raise
+        chunked: list[Any] | None = None
+        rust_used = False
+        if use_rust_ingest_docs and connector.source_type == "docs" and not disable_chunking:
+            size_val = fp.get("size")
+            size_ok = (
+                rust_ingest_min_bytes is None
+                or (isinstance(size_val, int) and int(size_val) >= int(rust_ingest_min_bytes))
+            )
+            if size_ok:
+                try:
+                    rust_cfg = RustExecConfig(mode=rust_ingest_mode)
+                    max_chunk_chars = (
+                        chunking.chunk_size_chars if chunking is not None else ChunkingConfig().chunk_size_chars
+                    )
+                    chunked = ingest_docs_via_rust(
+                        tenant_id=tenant_id,
+                        input_paths=[source_id],
+                        rust_cfg=rust_cfg,
+                        max_chunk_chars=max_chunk_chars,
+                    )
+                    rust_used = True
+                except Exception as e:
+                    logger.warning(
+                        "Rust docs ingest failed; falling back to Python. source=%s error=%s",
+                        source_id,
+                        e,
+                    )
 
-        documents_fetched += len(docs)
+        if chunked is None:
+            try:
+                docs = list(connector.fetch(source_id))
+            except Exception as e:
+                if on_source_error == "skip":
+                    _source_error(source_id, e)
+                    continue
+                raise
 
-        # Normalize + optional chunk.
-        normed = list(normalize_documents(docs))
-        chunked = normed if disable_chunking else list(chunk_documents(normed, config=chunking))
+            documents_fetched += len(docs)
+
+            # Normalize + optional chunk.
+            normed = list(normalize_documents(docs))
+            chunked = normed if disable_chunking else list(chunk_documents(normed, config=chunking))
+
+        if rust_used:
+            # Each Rust docs ingest request is invoked per `source_id`; treat it as one fetched source.
+            documents_fetched += 1
+
         documents_chunked_count += len(chunked)
 
         # Optional embed + index.

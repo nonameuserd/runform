@@ -127,6 +127,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         state_store=state_store,
         incremental=not args.no_incremental,
         on_source_error="skip" if args.skip_sources_with_errors else "raise",
+        use_rust_ingest_docs=bool(args.use_rust_ingest_docs),
+        rust_ingest_min_bytes=args.rust_ingest_min_bytes,
+        rust_ingest_mode=str(args.rust_ingest_mode),
     )
 
     print("Ingest complete.")

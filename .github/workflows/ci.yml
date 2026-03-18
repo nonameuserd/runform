@@ -48,6 +48,48 @@ jobs:
       - name: pytest
         run: uv run pytest
 
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust (stable + tools)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo fmt
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        working-directory: rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        working-directory: rust
+        run: cargo test --all
+
+      - name: Install cargo-vet
+        run: cargo install cargo-vet --locked
+
+      - name: Cargo Vet (supply chain)
+        working-directory: rust
+        run: cargo vet --locked
+
+      - name: Cargo Vet exemptions guard
+        working-directory: rust
+        env:
+          MAX_EXEMPTIONS: "210"
+        run: |
+          set -euo pipefail
+          count="$(python3 -c 'from pathlib import Path; lines = Path("supply-chain/config.toml").read_text().splitlines(); print(sum(1 for l in lines if l.startswith("[[exemptions.")))')"
+          echo "cargo-vet exemptions entries: ${count} (max=${MAX_EXEMPTIONS})"
+          if [ "$count" -gt "${MAX_EXEMPTIONS}" ]; then
+            echo "Exemptions regression: update rust/supply-chain/* by importing audits or certifying crates."
+            exit 1
+          fi
+
   dafny:
     if: >
       (github.event_name == 'push' &&

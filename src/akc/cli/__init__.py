@@ -101,6 +101,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=200,
         help="Chunk overlap in characters (default: 200)",
     )
+    ingest.add_argument(
+        "--use-rust-ingest-docs",
+        action="store_true",
+        help="Use Rust `akc-ingest` docs ingestion for docs connector chunking (experimental).",
+    )
+    ingest.add_argument(
+        "--rust-ingest-min-bytes",
+        type=int,
+        default=None,
+        help="Only use Rust docs ingest for sources larger than this byte threshold.",
+    )
+    ingest.add_argument(
+        "--rust-ingest-mode",
+        choices=["cli", "pyo3"],
+        default="cli",
+        help="Rust ingest backend mode (cli=subprocess JSON boundary; pyo3=PyO3 module).",
+    )
 
     ingest.add_argument("--query", help="Run a similarity query after ingest")
     ingest.add_argument("-k", type=int, default=5, help="Number of results for --query")
@@ -280,6 +297,28 @@ def _build_parser() -> argparse.ArgumentParser:
             "Optional executor work root. "
             "Defaults to <outputs_root>/<tenant>/<repo> to preserve tenant isolation."
         ),
+    )
+    compile_cmd.add_argument(
+        "--use-rust-exec",
+        action="store_true",
+        help="Use Rust-backed sandboxed Execute (akc-exec / akc_rust) instead of subprocess.",
+    )
+    compile_cmd.add_argument(
+        "--rust-exec-mode",
+        choices=["cli", "pyo3"],
+        default="cli",
+        help="Rust executor backend mode (cli=subprocess JSON boundary; pyo3=PyO3 module).",
+    )
+    compile_cmd.add_argument(
+        "--rust-exec-lane",
+        choices=["process", "wasm"],
+        default="process",
+        help="Rust execution lane (process=OS process sandbox; wasm=reserved for future).",
+    )
+    compile_cmd.add_argument(
+        "--rust-allow-network",
+        action="store_true",
+        help="Allow network capability in the Rust executor (default: deny).",
     )
     compile_cmd.add_argument("--verbose", action="store_true", help="Enable debug logging")
     compile_cmd.set_defaults(func=cmd_compile)

@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from akc.compile import Budget, CompileSession, ControllerConfig, TierConfig, SubprocessExecutor
+from akc.compile import Budget, CompileSession, ControllerConfig, RustExecutor, TierConfig, SubprocessExecutor
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.compile.rust_bridge import RustExecConfig
 from .common import configure_logging
 
 
@@ -88,7 +89,15 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
 
     work_root = base if args.work_root is None else Path(args.work_root).expanduser()
-    executor = SubprocessExecutor(work_root=work_root)
+    if bool(getattr(args, "use_rust_exec", False)):
+        rust_cfg = RustExecConfig(
+            mode=str(getattr(args, "rust_exec_mode", "cli")),
+            lane=str(getattr(args, "rust_exec_lane", "process")),
+            allow_network=bool(getattr(args, "rust_allow_network", False)),
+        )
+        executor = RustExecutor(rust_cfg=rust_cfg, work_root=work_root)
+    else:
+        executor = SubprocessExecutor(work_root=work_root)
     config = _build_compile_config(mode=str(args.mode))
     llm = _OfflineLLM()
 

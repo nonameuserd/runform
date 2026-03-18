@@ -20,6 +20,7 @@ from akc.compile.interfaces import (
 from akc.compile.repair import FailureSummary, build_repair_prompt, parse_execution_failure
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy, VerifierResult
 from akc.compile.vectorstore_index_adapter import VectorStoreIndexAdapter
+from akc.compile.execute.rust_executor import RustExecutor
 
 __all__ = [
     "Budget",
@@ -38,6 +39,7 @@ __all__ = [
     "TenantRepoScope",
     "TierConfig",
     "SubprocessExecutor",
+    "RustExecutor",
     "DeterministicVerifier",
     "VerifierPolicy",
     "VerifierResult",
