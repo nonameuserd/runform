@@ -1,9 +1,7 @@
-use std::fs;
-use std::time::Duration;
-
 use akc_protocol::observability::{log_event, LogLevel};
 use akc_protocol::{ExecRequest, ExecResponse, RunId, TenantId};
 use serde_json::json;
+use std::fs;
 use wasmtime::{Config, Engine, Linker, Module, Store, Trap};
 use wasmtime_wasi::pipe;
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
@@ -40,7 +38,8 @@ pub(crate) fn run_wasm_lane(request: ExecRequest) -> Result<ExecResponse, Execut
 
     let mut config = Config::new();
     config.consume_fuel(true);
-    config.epoch_interruption(true);
+    // Wall-timeouts are enforced via fuel exhaustion (`Trap::OutOfFuel`).
+    // This avoids unstable epoch-interruption behavior on some Windows runners.
 
     let engine = Engine::new(&config).map_err(|e| ExecutorError::Wasm(e.to_string()))?;
     let module =
@@ -85,15 +84,6 @@ pub(crate) fn run_wasm_lane(request: ExecRequest) -> Result<ExecResponse, Execut
     store
         .set_fuel(fuel)
         .map_err(|e| ExecutorError::Wasm(e.to_string()))?;
-
-    if let Some(wall_ms) = request.limits.wall_time_ms {
-        store.set_epoch_deadline(1);
-        let engine_for_timer = engine.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(wall_ms));
-            engine_for_timer.increment_epoch();
-        });
-    }
 
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
     preview1::add_to_linker_sync(&mut linker, |ctx: &mut WasiP1Ctx| ctx)
