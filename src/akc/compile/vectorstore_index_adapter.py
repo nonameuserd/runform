@@ -63,4 +63,3 @@ class VectorStoreIndexAdapter(Index):
                 )
             )
         return docs
-

@@ -83,6 +83,11 @@ def test_run_exec_via_pyo3_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sent["lane"]["type"] == "process"
     assert sent["capabilities"]["network"] is False
     assert sent["limits"]["wall_time_ms"] == 1500
+    # New fs_policy fields are always emitted for CLI/PyO3 parity.
+    assert "fs_policy" in sent
+    assert sent["fs_policy"]["allowed_read_paths"] == []
+    assert sent["fs_policy"]["allowed_write_paths"] == []
+    assert sent["fs_policy"]["preopen_dirs"] == []
 
 
 def test_run_exec_via_cli_does_not_crash_without_binary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,6 +126,52 @@ def test_run_ingest_via_pyo3_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
     assert sent["run_id"]
 
 
+def test_run_ingest_via_pyo3_maps_messaging_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeAkcRustModule(calls=[])
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "akc_rust",
+        fake,
+    )
+
+    scope, _ = _make_scope_and_request()
+    ingest_req = IngestRequest(
+        messaging=IngestRequest.Messaging(export_path="/abs/path/to/export.jsonl")
+    )
+
+    _ = run_ingest_via_pyo3(cfg=RustExecConfig(mode="pyo3"), scope=scope, request=ingest_req)
+
+    assert len(fake.calls) == 1
+    sent = fake.calls[0]
+    assert sent["tenant_id"] == "tenant-a"
+    assert "run_id" in sent and isinstance(sent["run_id"], str) and sent["run_id"]
+    assert sent["kind"]["type"] == "messaging"
+    assert sent["kind"]["export_path"] == "/abs/path/to/export.jsonl"
+
+
+def test_run_ingest_via_pyo3_maps_api_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeAkcRustModule(calls=[])
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "akc_rust",
+        fake,
+    )
+
+    scope, _ = _make_scope_and_request()
+    ingest_req = IngestRequest(api=IngestRequest.Api(openapi_path="/abs/path/to/openapi.json"))
+
+    _ = run_ingest_via_pyo3(cfg=RustExecConfig(mode="pyo3"), scope=scope, request=ingest_req)
+
+    assert len(fake.calls) == 1
+    sent = fake.calls[0]
+    assert sent["tenant_id"] == "tenant-a"
+    assert "run_id" in sent and isinstance(sent["run_id"], str) and sent["run_id"]
+    assert sent["kind"]["type"] == "api"
+    assert sent["kind"]["openapi_path"] == "/abs/path/to/openapi.json"
+
+
 def test_run_ingest_via_cli_does_not_crash_without_binary() -> None:
     scope, _ = _make_scope_and_request()
     ingest_req = IngestRequest()
@@ -152,3 +203,13 @@ def test_rust_bridge_rejects_missing_tenant_id() -> None:
             scope=scope,
             request=req,
         )
+
+
+def test_rust_bridge_rejects_relative_fs_policy_paths() -> None:
+    scope, req = _make_scope_and_request()
+    cfg = RustExecConfig(
+        mode="pyo3",
+        allowed_read_paths=("relative/path",),
+    )
+    with pytest.raises(ValueError, match="absolute paths"):
+        _ = run_exec_via_pyo3(cfg=cfg, scope=scope, request=req)

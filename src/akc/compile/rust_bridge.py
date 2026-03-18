@@ -28,6 +28,24 @@ def _validate_tenant_id(tenant_id: str) -> None:
         raise ValueError("tenant_id contains invalid characters for Rust executor")
 
 
+def _validate_fs_policy_paths(paths: tuple[str, ...], *, field_name: str) -> None:
+    # Keep this lightweight and dependency-free; Rust enforces the real contract at
+    # deserialize time. We validate early here to produce a clearer Python error
+    # message and avoid spawning the Rust surface for obvious policy mistakes.
+    for raw in paths:
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(f"{field_name} entries must be non-empty strings")
+        if "\0" in raw:
+            raise ValueError(f"{field_name} entries must not contain NUL bytes")
+        if not os.path.isabs(raw):
+            raise ValueError(f"{field_name} entries must be absolute paths: {raw!r}")
+        # Reject traversal-ish components (`.` / `..`) to match `akc_protocol` rules.
+        # Use Path parts without touching the filesystem.
+        parts = [p for p in raw.replace("\\", "/").split("/") if p]
+        if any(p in {".", ".."} for p in parts):
+            raise ValueError(f"{field_name} entries must not contain '.' or '..': {raw!r}")
+
+
 def _emit(level: str, event: str, **fields: object) -> None:
     """Emit compact structured log lines (JSON) without payloads."""
     try:
@@ -94,13 +112,25 @@ class RustExecConfig:
     memory_bytes: int | None = None
     stdout_max_bytes: int | None = None
     stderr_max_bytes: int | None = None
+    # Filesystem capabilities/policy.
+    #
+    # These map directly into `akc_protocol::ExecRequest.fs_policy` and are enforced
+    # by Rust. By default, they are empty (deny-by-default beyond the tenant/run workspace).
+    allowed_read_paths: tuple[str, ...] = ()
+    allowed_write_paths: tuple[str, ...] = ()
+    # Only meaningful for the WASM lane (WASI preopened directories). For process lane,
+    # Rust will reject non-empty values at deserialize time.
+    preopen_dirs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class IngestRequest:
     """High-level ingest request.
 
-    v1 supports a `docs` ingest kind that maps to `akc_protocol::IngestKind::Docs`.
+    v1 supports ingest kinds that map to `akc_protocol::IngestKind`:
+    - `docs` -> `akc_protocol::IngestKind::Docs`
+    - `messaging` -> `akc_protocol::IngestKind::Messaging`
+    - `api` -> `akc_protocol::IngestKind::Api`
     Tenant/run scoping is provided separately via `TenantRepoScope`.
     """
 
@@ -112,7 +142,21 @@ class IngestRequest:
         max_chunk_chars: int | None = None
         source_root: str | None = None
 
+    @dataclass(frozen=True, slots=True)
+    class Messaging:
+        """Ingest messaging export artifacts for `akc-ingest`."""
+
+        export_path: str
+
+    @dataclass(frozen=True, slots=True)
+    class Api:
+        """Ingest OpenAPI artifacts for `akc-ingest`."""
+
+        openapi_path: str
+
     docs: Docs | None = None
+    messaging: Messaging | None = None
+    api: Api | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,10 +182,13 @@ def _chunk_record_from_any(obj: object) -> dict[str, Any]:
 
 def _request_from_scope_and_execution(
     *, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest
-) -> dict:
+) -> dict[str, Any]:
     """Translate the existing ExecutionRequest into the akc_protocol ExecRequest schema."""
 
     _validate_tenant_id(scope.tenant_id)
+    _validate_fs_policy_paths(cfg.allowed_read_paths, field_name="allowed_read_paths")
+    _validate_fs_policy_paths(cfg.allowed_write_paths, field_name="allowed_write_paths")
+    _validate_fs_policy_paths(cfg.preopen_dirs, field_name="preopen_dirs")
 
     # For v1, we use the existing tenant_id as-is and generate a fresh, UUID-like
     # run_id for each execution. The shape here must stay in lockstep with
@@ -169,10 +216,16 @@ def _request_from_scope_and_execution(
         "cwd": request.cwd,
         "env": dict(request.env) if request.env is not None else {},
         "stdin_text": request.stdin_text,
+        # Keep CLI vs PyO3 parity: always emit the same JSON payload shape.
+        "fs_policy": {
+            "allowed_read_paths": list(cfg.allowed_read_paths),
+            "allowed_write_paths": list(cfg.allowed_write_paths),
+            "preopen_dirs": list(cfg.preopen_dirs),
+        },
     }
 
 
-def _ingest_request_from_scope(*, scope: TenantRepoScope, request: IngestRequest) -> dict:
+def _ingest_request_from_scope(*, scope: TenantRepoScope, request: IngestRequest) -> dict[str, Any]:
     """Translate the ingest request into the akc_protocol IngestRequest schema."""
 
     _validate_tenant_id(scope.tenant_id)
@@ -183,14 +236,43 @@ def _ingest_request_from_scope(*, scope: TenantRepoScope, request: IngestRequest
         "run_id": run_id,
     }
 
+    kind_selections: list[tuple[str, object]] = []
     if request.docs is not None:
-        if not request.docs.input_paths:
+        kind_selections.append(("docs", request.docs))
+    if request.messaging is not None:
+        kind_selections.append(("messaging", request.messaging))
+    if request.api is not None:
+        kind_selections.append(("api", request.api))
+
+    if len(kind_selections) > 1:
+        raise ValueError("IngestRequest supports only one ingest kind per request")
+
+    selected_kind: str | None = kind_selections[0][0] if kind_selections else None
+    if selected_kind == "docs":
+        docs: IngestRequest.Docs = request.docs  # type: ignore[assignment]
+        if not docs.input_paths:
             raise ValueError("IngestRequest.docs.input_paths must be non-empty")
         payload["kind"] = {
             "type": "docs",
-            "input_paths": list(request.docs.input_paths),
-            "max_chunk_chars": request.docs.max_chunk_chars,
-            "source_root": request.docs.source_root,
+            "input_paths": list(docs.input_paths),
+            "max_chunk_chars": docs.max_chunk_chars,
+            "source_root": docs.source_root,
+        }
+    elif selected_kind == "messaging":
+        messaging: IngestRequest.Messaging = request.messaging  # type: ignore[assignment]
+        if not messaging.export_path:
+            raise ValueError("IngestRequest.messaging.export_path must be non-empty")
+        payload["kind"] = {
+            "type": "messaging",
+            "export_path": messaging.export_path,
+        }
+    elif selected_kind == "api":
+        api: IngestRequest.Api = request.api  # type: ignore[assignment]
+        if not api.openapi_path:
+            raise ValueError("IngestRequest.api.openapi_path must be non-empty")
+        payload["kind"] = {
+            "type": "api",
+            "openapi_path": api.openapi_path,
         }
 
     return payload
@@ -319,13 +401,16 @@ def run_exec_via_pyo3(
 ) -> ExecutionResult:
     """Call the `akc_rust` PyO3 module with a JSON request and map the response."""
 
+    # Build/validate payload before importing the optional PyO3 module so
+    # callers get deterministic validation errors even when `akc_rust` isn't installed.
+    payload = _request_from_scope_and_execution(cfg=cfg, scope=scope, request=request)
+
     # Import lazily to avoid hard dependency when Rust is disabled.
     try:
-        import akc_rust  # type: ignore[import-not-found]
+        import akc_rust
     except Exception as exc:  # pragma: no cover - import failure surfaced to caller
         raise RuntimeError("akc_rust PyO3 module is not available") from exc
 
-    payload = _request_from_scope_and_execution(cfg=cfg, scope=scope, request=request)
     run_id = payload["run_id"]
     program = request.command[0] if request.command else ""
     limits = payload.get("limits") or {}
@@ -377,8 +462,18 @@ def run_ingest_via_cli(
 
     payload = _ingest_request_from_scope(scope=scope, request=request)
     run_id = payload["run_id"]
-    kind_label = "docs" if request.docs is not None else "none"
-    input_paths_count = len(request.docs.input_paths) if request.docs is not None else 0
+    if request.docs is not None:
+        kind_label = "docs"
+        input_paths_count = len(request.docs.input_paths)
+    elif request.messaging is not None:
+        kind_label = "messaging"
+        input_paths_count = 1
+    elif request.api is not None:
+        kind_label = "api"
+        input_paths_count = 1
+    else:
+        kind_label = "none"
+        input_paths_count = 0
     _emit(
         "info",
         "ingest_surface_start",
@@ -467,14 +562,24 @@ def run_ingest_via_pyo3(
     _ = cfg  # reserved for future configuration options
 
     try:
-        import akc_rust  # type: ignore[import-not-found]
+        import akc_rust
     except Exception as exc:  # pragma: no cover - import failure surfaced to caller
         raise RuntimeError("akc_rust PyO3 module is not available") from exc
 
     payload = _ingest_request_from_scope(scope=scope, request=request)
     run_id = payload["run_id"]
-    kind_label = "docs" if request.docs is not None else "none"
-    input_paths_count = len(request.docs.input_paths) if request.docs is not None else 0
+    if request.docs is not None:
+        kind_label = "docs"
+        input_paths_count = len(request.docs.input_paths)
+    elif request.messaging is not None:
+        kind_label = "messaging"
+        input_paths_count = 1
+    elif request.api is not None:
+        kind_label = "api"
+        input_paths_count = 1
+    else:
+        kind_label = "none"
+        input_paths_count = 0
     _emit(
         "info",
         "ingest_surface_start",

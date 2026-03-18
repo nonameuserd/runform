@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal, Mapping, Sequence, cast
+from typing import Any, Literal
 
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
@@ -49,7 +50,9 @@ class OutputArtifact:
         metadata: Mapping[str, JSONValue] | None = None,
     ) -> OutputArtifact:
         require_non_empty(text, name="text")
-        return cls(path=path, content=text.encode("utf-8"), media_type=media_type, metadata=metadata)
+        return cls(
+            path=path, content=text.encode("utf-8"), media_type=media_type, metadata=metadata
+        )
 
     @classmethod
     def from_json(
@@ -78,7 +81,7 @@ class OutputArtifact:
             "media_type": self.media_type,
             "sha256": self.sha256_hex(),
             "size_bytes": self.size_bytes(),
-            "metadata": dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None,
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
 
 
@@ -106,7 +109,7 @@ class OutputBundle:
             "repo_id": self.scope.repo_id,
             "name": self.name,
             "artifacts": [a.to_json_obj() for a in self.artifacts],
-            "metadata": dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None,
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
 
 
@@ -138,8 +141,12 @@ class AgentBudget:
     def to_json_obj(self) -> dict[str, JSONValue]:
         obj: dict[str, JSONValue] = {
             "max_steps": int(self.max_steps) if self.max_steps is not None else None,
-            "max_input_tokens": int(self.max_input_tokens) if self.max_input_tokens is not None else None,
-            "max_output_tokens": int(self.max_output_tokens) if self.max_output_tokens is not None else None,
+            "max_input_tokens": int(self.max_input_tokens)
+            if self.max_input_tokens is not None
+            else None,
+            "max_output_tokens": int(self.max_output_tokens)
+            if self.max_output_tokens is not None
+            else None,
             "max_seconds": float(self.max_seconds) if self.max_seconds is not None else None,
         }
         # Drop nulls for compactness / readability.
@@ -228,7 +235,7 @@ class AgentSpec:
             "name": self.name,
             "llm": self.llm.to_json_obj(),
             "roles": [r.to_json_obj() for r in self.roles],
-            "metadata": dict(cast(Mapping[str, JSONValue], self.metadata)) if self.metadata else None,
+            "metadata": dict(self.metadata) if self.metadata else None,
         }
         return {k: v for k, v in obj.items() if v is not None}
 
@@ -252,7 +259,9 @@ class AgentSpec:
         if not fn.endswith(".json"):
             fn = f"{fn}.json"
         path = f"{directory.rstrip('/')}/{fn}"
-        return OutputArtifact.from_text(path=path, text=self.render_json(), media_type=media_type, metadata=metadata)
+        return OutputArtifact.from_text(
+            path=path, text=self.render_json(), media_type=media_type, metadata=metadata
+        )
 
     def to_artifact_yaml(
         self,
@@ -268,5 +277,6 @@ class AgentSpec:
         if not (fn.endswith(".yml") or fn.endswith(".yaml")):
             fn = f"{fn}.yml"
         path = f"{directory.rstrip('/')}/{fn}"
-        return OutputArtifact.from_text(path=path, text=self.render_yaml(), media_type=media_type, metadata=metadata)
-
+        return OutputArtifact.from_text(
+            path=path, text=self.render_yaml(), media_type=media_type, metadata=metadata
+        )

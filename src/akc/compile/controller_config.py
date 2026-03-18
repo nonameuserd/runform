@@ -14,7 +14,6 @@ from typing import Any, Literal, TypeAlias
 from akc.compile.interfaces import Stage
 from akc.memory.models import JSONValue, require_non_empty
 
-
 TierName: TypeAlias = Literal["small", "medium", "large"]
 TestMode: TypeAlias = Literal["smoke", "full"]
 
@@ -29,7 +28,8 @@ class Budget:
     max_llm_calls: int = 10
     # Back-compat: older name used by early Phase 3 controller. Prefer max_repairs_per_step.
     max_repair_iterations: int | None = None
-    # Maximum repair iterations within a single plan step (not counting the initial generate attempt).
+    # Maximum repair iterations within a single plan step (not counting the initial
+    # generate attempt).
     max_repairs_per_step: int = 3
     # Total (generate+repair) iterations allowed for a single plan step.
     max_iterations_total: int = 5
@@ -68,8 +68,12 @@ class Budget:
             else None,
             "max_repairs_per_step": int(self.max_repairs_per_step),
             "max_iterations_total": int(self.max_iterations_total),
-            "max_output_tokens": int(self.max_output_tokens) if self.max_output_tokens is not None else None,
-            "max_wall_time_s": float(self.max_wall_time_s) if self.max_wall_time_s is not None else None,
+            "max_output_tokens": int(self.max_output_tokens)
+            if self.max_output_tokens is not None
+            else None,
+            "max_wall_time_s": float(self.max_wall_time_s)
+            if self.max_wall_time_s is not None
+            else None,
             "max_cost_usd": float(self.max_cost_usd) if self.max_cost_usd is not None else None,
         }
         return obj
@@ -135,14 +139,17 @@ class ControllerConfig:
             if cfg.name != name:
                 raise ValueError("tiers key must match TierConfig.name")
         if self.stage_tiers is not None:
-            for stage, tier_name in self.stage_tiers.items():
+            for _stage, tier_name in self.stage_tiers.items():
                 if tier_name not in self.tiers:
                     raise ValueError(f"stage_tiers references unknown tier: {tier_name}")
         if self.test_command is not None and len(self.test_command) == 0:
             raise ValueError("test_command must be non-empty when set")
         if self.test_timeout_s is not None and float(self.test_timeout_s) <= 0:
             raise ValueError("test_timeout_s must be > 0 when set")
-        if self.full_test_every_n_iterations is not None and int(self.full_test_every_n_iterations) <= 0:
+        if (
+            self.full_test_every_n_iterations is not None
+            and int(self.full_test_every_n_iterations) <= 0
+        ):
             raise ValueError("full_test_every_n_iterations must be > 0 when set")
         if not isinstance(self.generate_tests_by_default, bool):
             raise ValueError("generate_tests_by_default must be a bool")
@@ -167,4 +174,3 @@ class ControllerConfig:
                 return self.tiers["medium"]
             return self.tiers[sorted(self.tiers.keys())[0]]
         return self.tiers[name]
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 
 def _is_safe_plain_scalar(s: str) -> bool:
@@ -15,9 +16,7 @@ def _is_safe_plain_scalar(s: str) -> bool:
     lower = s.lower()
     if lower in {"null", "true", "false", "~"}:
         return False
-    if s[0] in "-?,":
-        return False
-    return True
+    return s[0] not in "-?,"
 
 
 def _yaml_quote(s: str) -> str:
@@ -87,4 +86,3 @@ def dump_yaml(value: Any) -> str:
 
     emit(value, 0)
     return "\n".join(lines) + "\n"
-

@@ -78,4 +78,3 @@ def test_vectorstore_index_adapter_enforces_tenant_isolation() -> None:
     ids = {d.doc_id for d in out}
     assert "t1-a" in ids
     assert "t2-a" not in ids
-

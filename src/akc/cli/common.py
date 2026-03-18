@@ -15,4 +15,3 @@ def env(name: str) -> str | None:
         return None
     value = value.strip()
     return value or None
-

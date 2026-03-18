@@ -6,6 +6,3 @@ existing entrypoints such as `akc.cli:main` continue to work.
 """
 
 from __future__ import annotations
-
-from akc.cli import main  # type: ignore[F401]  # re-export for backwards compatibility
-

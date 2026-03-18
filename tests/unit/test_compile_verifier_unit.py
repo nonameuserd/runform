@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from akc.compile.controller_config import Budget
 from akc.compile.interfaces import ExecutionResult, TenantRepoScope
@@ -92,4 +92,3 @@ def test_verifier_budget_accounting_exceeded_emits_error_and_blocks() -> None:
     )
     assert passed is False
     assert any(f.code == "budget.llm_calls_exceeded" for f in findings)
-

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
-from akc.compile.rust_bridge import IngestRequest, RustExecConfig, run_ingest_with_rust
 from akc.compile.interfaces import TenantRepoScope
+from akc.compile.rust_bridge import IngestRequest, RustExecConfig, run_ingest_with_rust
 from akc.ingest.chunking import normalize_text
-from akc.ingest.models import Document
+from akc.ingest.models import Document, DocumentMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,7 @@ def _records_to_documents(*, records: Iterable[dict[str, Any]], tenant_id: str) 
         elif isinstance(chunk_index_val, float) and chunk_index_val.is_integer():
             chunk_index = int(chunk_index_val)
 
-        md_out: dict[str, Any] = {
+        md_out: DocumentMetadata = {
             "tenant_id": tenant_id,
             "source": source_id,
             "source_type": "docs",
@@ -84,4 +85,3 @@ def ingest_docs_via_rust(
     if not res.ok or not res.records:
         raise RuntimeError(res.error or "akc-ingest failed")
     return _records_to_documents(records=res.records, tenant_id=tenant_id)
-

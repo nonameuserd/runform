@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 from akc.compile.interfaces import ExecutionRequest, ExecutionResult, Executor, TenantRepoScope
 from akc.compile.rust_bridge import RustExecConfig, run_exec_with_rust
 
 
 @contextmanager
-def _temporary_env(updates: Mapping[str, str]) -> None:
+def _temporary_env(updates: Mapping[str, str]) -> Iterator[None]:
     """Temporarily update os.environ and restore previous values."""
 
     sentinel = object()
@@ -80,7 +80,7 @@ class RustExecutor(Executor):
             stdin_text=request.stdin_text,
         )
 
-    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:  # type: ignore[override]
+    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
         start = time.monotonic()
 
         env_updates: dict[str, str] = {}
@@ -102,4 +102,3 @@ class RustExecutor(Executor):
             stderr=str(rust_res.stderr or ""),
             duration_ms=duration_ms,
         )
-

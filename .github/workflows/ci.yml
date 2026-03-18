@@ -90,6 +90,57 @@ jobs:
             exit 1
           fi
 
+  rust_bwrap:
+    name: Rust (linux bubblewrap hardened tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          bwrap --version
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run hardened isolation tests (bwrap backend)
+        working-directory: rust
+        env:
+          AKC_EXEC_BACKEND: bwrap
+        run: |
+          set -euo pipefail
+          cargo test -p akc_executor --test tenant_isolation
+
+  rust_windows:
+    name: Rust (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust (stable + tools)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo fmt
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        working-directory: rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        working-directory: rust
+        run: cargo test --all
+
+      - name: Windows sandbox tests
+        working-directory: rust
+        run: cargo test -p akc_executor --test tenant_isolation
+
   dafny:
     if: >
       (github.event_name == 'push' &&

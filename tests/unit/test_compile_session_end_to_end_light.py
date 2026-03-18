@@ -13,6 +13,9 @@ class _FakeLLM(LLMBackend):
     """Minimal deterministic backend for integration-light compile runs."""
 
     def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+        # Keep signature (called via keyword args) but the offline test backend
+        # returns a fixed patch payload.
+        _ = (scope, stage, request)
         # Controller expects "unified diff only" text; default policy requires test paths
         # when non-test paths are touched. Include both a code path and a test path so
         # the loop can promote without policy veto (executor does not apply patches yet).

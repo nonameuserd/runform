@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from akc import __version__
+
 from .compile import cmd_compile
 from .drift import cmd_drift, cmd_watch
 from .ingest import cmd_ingest, cmd_slack_list_channels
@@ -49,7 +50,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--embedder",
         choices=["hash", "openai", "gemini", "none"],
         default="none",
-        help="Embedding provider (default: none, offline). Use openai/gemini only when explicitly configured.",
+        help=(
+            "Embedding provider (default: none, offline). Use openai/gemini "
+            "only when explicitly configured."
+        ),
     )
     ingest.add_argument("--openai-api-key", help="OpenAI-compatible API key")
     ingest.add_argument("--openai-base-url", help="OpenAI-compatible base URL (default: OpenAI)")
@@ -62,7 +66,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--index-backend",
         choices=["memory", "sqlite", "pgvector"],
         default="memory",
-        help="Pluggable vector index backend (default: memory; use sqlite/pgvector for persistence)",
+        help=(
+            "Pluggable vector index backend (default: memory; use sqlite/pgvector for persistence)"
+        ),
     )
     ingest.add_argument("--no-index", action="store_true", help="Run ingest without indexing")
     ingest.add_argument("--sqlite-path", help="SQLite DB path (for --index-backend sqlite)")
@@ -182,7 +188,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     drift.add_argument(
         "--baseline-path",
-        help="Explicit baseline path (default: <outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)",
+        help=(
+            "Explicit baseline path (default: "
+            "<outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)"
+        ),
     )
     drift.add_argument(
         "--update-baseline",
@@ -207,7 +216,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument(
         "--baseline-path",
-        help="Explicit baseline path (default: <outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)",
+        help=(
+            "Explicit baseline path (default: "
+            "<outputs_root>/<tenant>/<repo>/.akc/living/baseline.json)"
+        ),
     )
     watch.add_argument(
         "--poll-interval-s",
@@ -337,5 +349,3 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     sys.exit(code)
-
-

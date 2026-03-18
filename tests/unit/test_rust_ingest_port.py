@@ -8,7 +8,9 @@ from akc.compile.rust_bridge import IngestResult, RustExecConfig
 from akc.ingest.rust_port import ingest_docs_via_rust
 
 
-def test_ingest_docs_via_rust_converts_records_to_documents(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ingest_docs_via_rust_converts_records_to_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tenant_id = "t1"
     input_paths = ["/abs/path/doc1.md"]
     rust_cfg = RustExecConfig(mode="cli")
@@ -47,4 +49,3 @@ def test_ingest_docs_via_rust_converts_records_to_documents(monkeypatch: pytest.
     assert d.metadata["source_type"] == "docs"
     assert d.metadata["path"] == "/abs/path/doc1.md"
     assert d.metadata["chunk_index"] == 0
-

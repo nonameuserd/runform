@@ -23,6 +23,12 @@ pub enum ProtocolError {
     MissingIngestDocsInputPaths,
     #[error("input path contains invalid characters")]
     InvalidInputPath,
+    #[error("filesystem policy path is invalid or unsafe")]
+    InvalidFsPolicyPath,
+    #[error("cwd is invalid or unsafe")]
+    InvalidCwd,
+    #[error("preopen_dirs is only allowed for wasm lane")]
+    PreopenDirsRequiresWasmLane,
 }
 
 /// Tenant identifier.
@@ -123,7 +129,30 @@ pub enum ExecLane {
     Process,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct FsPolicy {
+    /// Explicit allowlist of host paths that may be opened for read access.
+    ///
+    /// Validation is enforced at deserialize time:
+    /// - must be absolute
+    /// - must not contain `..` or `.` components
+    /// - must not contain NUL bytes
+    #[serde(default)]
+    pub allowed_read_paths: Vec<String>,
+    /// Explicit allowlist of host paths that may be opened for write access.
+    ///
+    /// Same validation rules as `allowed_read_paths`.
+    #[serde(default)]
+    pub allowed_write_paths: Vec<String>,
+    /// WASI preopened dirs (future-proofing for a WASM lane with filesystem access).
+    ///
+    /// Validation is enforced at deserialize time. Additionally, `ExecRequest` enforces
+    /// that this is empty unless `lane == wasm`.
+    #[serde(default)]
+    pub preopen_dirs: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ExecRequest {
     pub tenant_id: TenantId,
     pub run_id: RunId,
@@ -141,6 +170,11 @@ pub struct ExecRequest {
     pub env: BTreeMap<String, String>,
     /// Optional stdin payload for the child process.
     pub stdin_text: Option<String>,
+    /// Filesystem capability/policy for this execution.
+    ///
+    /// Defaults to deny-by-default (no allowlisted paths, no preopens).
+    #[serde(default)]
+    pub fs_policy: FsPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +273,128 @@ pub fn validate_input_path(raw: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+fn validate_safe_abs_path(raw: &str) -> Result<(), ProtocolError> {
+    if raw.is_empty() || raw.contains('\0') {
+        return Err(ProtocolError::InvalidFsPolicyPath);
+    }
+    let p: &Path = Path::new(raw);
+    if !p.is_absolute() {
+        return Err(ProtocolError::InvalidFsPolicyPath);
+    }
+    if p.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(ProtocolError::InvalidFsPolicyPath);
+    }
+    Ok(())
+}
+
+fn validate_cwd(raw: &str) -> Result<(), ProtocolError> {
+    if raw.is_empty() || raw.contains('\0') {
+        return Err(ProtocolError::InvalidCwd);
+    }
+    let p: &Path = Path::new(raw);
+    if p.is_absolute() {
+        return Ok(());
+    }
+    // For relative cwd values, reject traversal-ish components early.
+    if p.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(ProtocolError::InvalidCwd);
+    }
+    Ok(())
+}
+
+impl<'de> Deserialize<'de> for FsPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawFsPolicy {
+            #[serde(default)]
+            allowed_read_paths: Vec<String>,
+            #[serde(default)]
+            allowed_write_paths: Vec<String>,
+            #[serde(default)]
+            preopen_dirs: Vec<String>,
+        }
+
+        let raw: RawFsPolicy = RawFsPolicy::deserialize(deserializer)?;
+
+        for p in raw.allowed_read_paths.iter() {
+            validate_safe_abs_path(p).map_err(serde::de::Error::custom)?;
+        }
+        for p in raw.allowed_write_paths.iter() {
+            validate_safe_abs_path(p).map_err(serde::de::Error::custom)?;
+        }
+        for p in raw.preopen_dirs.iter() {
+            validate_safe_abs_path(p).map_err(serde::de::Error::custom)?;
+        }
+
+        Ok(Self {
+            allowed_read_paths: raw.allowed_read_paths,
+            allowed_write_paths: raw.allowed_write_paths,
+            preopen_dirs: raw.preopen_dirs,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawExecRequest {
+            tenant_id: TenantId,
+            run_id: RunId,
+            lane: ExecLane,
+            capabilities: Capabilities,
+            limits: Limits,
+            command: Vec<String>,
+            cwd: Option<String>,
+            #[serde(default)]
+            env: BTreeMap<String, String>,
+            stdin_text: Option<String>,
+            #[serde(default)]
+            fs_policy: FsPolicy,
+        }
+
+        let raw: RawExecRequest = RawExecRequest::deserialize(deserializer)?;
+
+        if let Some(cwd_raw) = raw.cwd.as_deref() {
+            validate_cwd(cwd_raw).map_err(serde::de::Error::custom)?;
+        }
+
+        if raw.lane != ExecLane::Wasm && !raw.fs_policy.preopen_dirs.is_empty() {
+            return Err(serde::de::Error::custom(
+                ProtocolError::PreopenDirsRequiresWasmLane,
+            ));
+        }
+
+        Ok(Self {
+            tenant_id: raw.tenant_id,
+            run_id: raw.run_id,
+            lane: raw.lane,
+            capabilities: raw.capabilities,
+            limits: raw.limits,
+            command: raw.command,
+            cwd: raw.cwd,
+            env: raw.env,
+            stdin_text: raw.stdin_text,
+            fs_policy: raw.fs_policy,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +422,29 @@ mod tests {
     fn run_id_deserialize_enforces_invariants() {
         let err: serde_json::Error = serde_json::from_str::<RunId>("\"..\"").unwrap_err();
         assert!(err.to_string().contains("run_id"));
+    }
+
+    #[test]
+    fn fs_policy_deserialize_rejects_relative_paths() {
+        let err: serde_json::Error =
+            serde_json::from_str::<FsPolicy>(r#"{"allowed_read_paths":["relative"]}"#).unwrap_err();
+        assert!(err.to_string().contains("filesystem policy"));
+    }
+
+    #[test]
+    fn exec_request_deserialize_rejects_preopen_dirs_for_process_lane() {
+        let json = r#"
+        {
+          "tenant_id": "tenant_a",
+          "run_id": "run_1",
+          "lane": { "type": "process" },
+          "capabilities": { "network": false },
+          "limits": {},
+          "command": ["echo", "hi"],
+          "fs_policy": { "preopen_dirs": ["/tmp"] }
+        }
+        "#;
+        let err: serde_json::Error = serde_json::from_str::<ExecRequest>(json).unwrap_err();
+        assert!(err.to_string().contains("preopen_dirs"));
     }
 }

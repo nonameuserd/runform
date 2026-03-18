@@ -3,9 +3,18 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from akc.compile import Budget, CompileSession, ControllerConfig, RustExecutor, TierConfig, SubprocessExecutor
-from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
-from akc.compile.rust_bridge import RustExecConfig
+from akc.compile import (
+    Budget,
+    CompileSession,
+    ControllerConfig,
+    RustExecutor,
+    SubprocessExecutor,
+    TierConfig,
+)
+from akc.compile.controller_config import TestMode, TierName
+from akc.compile.interfaces import Executor, LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.compile.rust_bridge import BackendMode, ExecLane, RustExecConfig
+
 from .common import configure_logging
 
 
@@ -17,7 +26,10 @@ class _OfflineLLM(LLMBackend):
     tests-by-default and policy logic remain exercised.
     """
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:
+        # `request` is part of the LLMBackend interface but the offline backend
+        # intentionally ignores it.
+        _ = request
         text = "\n".join(
             [
                 "--- a/src/akc_compiled.py",
@@ -43,7 +55,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
     - thorough: larger budget, full tests every iteration.
     """
 
-    tiers = {
+    tiers: dict[TierName, TierConfig] = {
         "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
         "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
         "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
@@ -51,7 +63,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=12, max_repairs_per_step=4, max_iterations_total=8)
-        test_mode: str = "full"
+        test_mode: TestMode = "full"
         full_every: int | None = None
     else:
         budget = Budget(max_llm_calls=4, max_repairs_per_step=2, max_iterations_total=4)
@@ -62,7 +74,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
         tiers=tiers,
         stage_tiers={"generate": "small", "repair": "small"},
         budget=budget,
-        test_mode=test_mode,  # type: ignore[arg-type]
+        test_mode=test_mode,
         full_test_every_n_iterations=full_every,
     )
 
@@ -89,10 +101,15 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
 
     work_root = base if args.work_root is None else Path(args.work_root).expanduser()
+    executor: Executor
     if bool(getattr(args, "use_rust_exec", False)):
+        rust_exec_mode_raw = getattr(args, "rust_exec_mode", "cli")
+        rust_exec_mode: BackendMode = "pyo3" if rust_exec_mode_raw == "pyo3" else "cli"
+        rust_exec_lane_raw = getattr(args, "rust_exec_lane", "process")
+        rust_exec_lane: ExecLane = "wasm" if rust_exec_lane_raw == "wasm" else "process"
         rust_cfg = RustExecConfig(
-            mode=str(getattr(args, "rust_exec_mode", "cli")),
-            lane=str(getattr(args, "rust_exec_lane", "process")),
+            mode=rust_exec_mode,
+            lane=rust_exec_lane,
             allow_network=bool(getattr(args, "rust_allow_network", False)),
         )
         executor = RustExecutor(rust_cfg=rust_cfg, work_root=work_root)
@@ -127,4 +144,3 @@ def cmd_compile(args: argparse.Namespace) -> int:
 
     print("Compile did not succeed within budget; see emitted artifacts for details.")
     return 2
-

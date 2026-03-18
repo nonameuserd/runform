@@ -2,7 +2,10 @@ use std::io::{self, Read, Write};
 
 use akc_ingest::ingest;
 use akc_protocol::observability::{log_event, log_event_unscoped, LogLevel};
-use akc_protocol::{IngestDocsRequest, IngestKind, IngestRequest, RunId, TenantId};
+use akc_protocol::{
+    IngestApiRequest, IngestDocsRequest, IngestKind, IngestMessagingRequest, IngestRequest, RunId,
+    TenantId,
+};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
@@ -48,10 +51,30 @@ enum Commands {
         #[arg(long)]
         source_root: Option<String>,
     },
-    /// Messaging ingestion (not yet implemented).
-    Messaging {},
-    /// OpenAPI ingestion (not yet implemented).
-    Api {},
+    /// Messaging ingestion (deterministic chunking from export artifacts).
+    Messaging {
+        /// Tenant ID (required).
+        #[arg(long)]
+        tenant_id: String,
+        /// Run ID (required).
+        #[arg(long)]
+        run_id: String,
+        /// Input path (file or directory) for messaging export artifacts.
+        #[arg(required = true)]
+        export_path: String,
+    },
+    /// OpenAPI ingestion (deterministic chunking from spec artifacts).
+    Api {
+        /// Tenant ID (required).
+        #[arg(long)]
+        tenant_id: String,
+        /// Run ID (required).
+        #[arg(long)]
+        run_id: String,
+        /// Input path (file or directory) for OpenAPI spec artifacts.
+        #[arg(required = true)]
+        openapi_path: String,
+    },
 }
 
 fn main() {
@@ -90,12 +113,59 @@ fn main() {
                 })),
             }
         }
-        Some(Commands::Messaging {}) | Some(Commands::Api {}) => {
-            let _ = writeln!(
-                io::stderr(),
-                "unsupported subcommand in v1; only `docs` is implemented"
-            );
-            std::process::exit(30);
+        Some(Commands::Messaging {
+            tenant_id,
+            run_id,
+            export_path,
+        }) => {
+            let tenant_id: TenantId = match TenantId::parse(tenant_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = writeln!(io::stderr(), "{e}");
+                    std::process::exit(10);
+                }
+            };
+            let run_id: RunId = match RunId::parse(run_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = writeln!(io::stderr(), "{e}");
+                    std::process::exit(10);
+                }
+            };
+            IngestRequest {
+                tenant_id,
+                run_id,
+                kind: Some(IngestKind::Messaging(IngestMessagingRequest {
+                    export_path: Some(export_path),
+                })),
+            }
+        }
+        Some(Commands::Api {
+            tenant_id,
+            run_id,
+            openapi_path,
+        }) => {
+            let tenant_id: TenantId = match TenantId::parse(tenant_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = writeln!(io::stderr(), "{e}");
+                    std::process::exit(10);
+                }
+            };
+            let run_id: RunId = match RunId::parse(run_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = writeln!(io::stderr(), "{e}");
+                    std::process::exit(10);
+                }
+            };
+            IngestRequest {
+                tenant_id,
+                run_id,
+                kind: Some(IngestKind::Api(IngestApiRequest {
+                    openapi_path: Some(openapi_path),
+                })),
+            }
         }
     };
 
@@ -105,8 +175,8 @@ fn main() {
     let (kind_label, input_paths_count) = match &request.kind {
         None => ("none".to_string(), 0_usize),
         Some(IngestKind::Docs(docs)) => ("docs".to_string(), docs.input_paths.len()),
-        Some(IngestKind::Messaging(_)) => ("messaging".to_string(), 0_usize),
-        Some(IngestKind::Api(_)) => ("api".to_string(), 0_usize),
+        Some(IngestKind::Messaging(_)) => ("messaging".to_string(), 1_usize),
+        Some(IngestKind::Api(_)) => ("api".to_string(), 1_usize),
     };
 
     log_event(

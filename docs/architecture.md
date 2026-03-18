@@ -108,7 +108,7 @@ Output emitters are extension points so new artifact types can be added without 
 AKC can optionally delegate two security/performance-sensitive responsibilities to Rust, while keeping the core orchestration and compilation loop in Python:
 
 - `akc_executor`: a sandboxed execution service used by the Execute phase.
-- `akc_ingest`: a high-throughput ingestion/normalization CLI used by the ingest pipeline (optional for large inputs).
+- `akc_ingest`: a high-throughput ingestion/normalization CLI used by the ingest pipeline (currently supports the `docs` ingest kind; `messaging`/`api` kinds are protocol-defined but not yet implemented in Rust).
 
 Invocation surfaces (same request/response schema):
 - Subprocess JSON CLI boundary (auditability and reproducibility).
@@ -117,7 +117,7 @@ Invocation surfaces (same request/response schema):
 Security model alignment:
 - Every request includes `tenant_id` and `run_id`.
 - Execution is defense-in-depth with two sandbox lanes:
-  - WASM (Wasmtime + WASI Preview 2) with capability-based host interfaces.
+  - WASM (Wasmtime + WASI Preview 1) with capability-based host interfaces.
   - OS process sandbox with per-run working directories, env scrubbing, and resource limits.
 - Logs and outputs include tenant/run correlation ids and avoid cross-tenant leakage.
 

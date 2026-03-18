@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from akc.compile.rust_bridge import RustExecConfig
 from akc.ingest.chunking import ChunkingConfig, chunk_documents, normalize_documents
 from akc.ingest.connectors.base import Connector
 from akc.ingest.connectors.docs import build_docs_connector
@@ -28,7 +29,6 @@ from akc.ingest.embedding import Embedder, embed_documents
 from akc.ingest.exceptions import IngestionError
 from akc.ingest.index import InMemoryVectorStore, PgVectorStore, SQLiteVectorStore, VectorStore
 from akc.ingest.rust_port import ingest_docs_via_rust
-from akc.compile.rust_bridge import RustExecConfig
 
 logger = logging.getLogger(__name__)
 
@@ -292,15 +292,16 @@ def run_ingest(
         rust_used = False
         if use_rust_ingest_docs and connector.source_type == "docs" and not disable_chunking:
             size_val = fp.get("size")
-            size_ok = (
-                rust_ingest_min_bytes is None
-                or (isinstance(size_val, int) and int(size_val) >= int(rust_ingest_min_bytes))
+            size_ok = rust_ingest_min_bytes is None or (
+                isinstance(size_val, int) and int(size_val) >= int(rust_ingest_min_bytes)
             )
             if size_ok:
                 try:
                     rust_cfg = RustExecConfig(mode=rust_ingest_mode)
                     max_chunk_chars = (
-                        chunking.chunk_size_chars if chunking is not None else ChunkingConfig().chunk_size_chars
+                        chunking.chunk_size_chars
+                        if chunking is not None
+                        else ChunkingConfig().chunk_size_chars
                     )
                     chunked = ingest_docs_via_rust(
                         tenant_id=tenant_id,
@@ -332,7 +333,8 @@ def run_ingest(
             chunked = normed if disable_chunking else list(chunk_documents(normed, config=chunking))
 
         if rust_used:
-            # Each Rust docs ingest request is invoked per `source_id`; treat it as one fetched source.
+            # Each Rust docs ingest request is invoked per `source_id`; treat
+            # it as one fetched source.
             documents_fetched += 1
 
         documents_chunked_count += len(chunked)

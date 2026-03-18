@@ -39,7 +39,7 @@ class FileSystemEmitter(Emitter):
 
     create_parents: bool = True
 
-    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:  # type: ignore[override]
+    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
         root_p = Path(root)
         if self.create_parents:
             root_p.mkdir(parents=True, exist_ok=True)
@@ -51,7 +51,7 @@ class FileSystemEmitter(Emitter):
 
         written: list[Path] = []
         for a in bundle.artifacts:
-            fp = (out_dir / a.path)
+            fp = out_dir / a.path
             # Ensure the resolved path stays inside the scoped dir.
             _ensure_under_root(root=out_dir, p=fp)
             fp.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +67,7 @@ class JsonManifestEmitter(Emitter):
     manifest_name: str = "manifest.json"
     artifacts: FileSystemEmitter = FileSystemEmitter()
 
-    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:  # type: ignore[override]
+    def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
         require_non_empty(self.manifest_name, name="manifest_name")
         root_p = Path(root)
         root_p.mkdir(parents=True, exist_ok=True)
@@ -80,7 +80,8 @@ class JsonManifestEmitter(Emitter):
 
         mpath = out_dir / self.manifest_name
         _ensure_under_root(root=out_dir, p=mpath)
-        mpath.write_text(json.dumps(bundle.to_manifest_obj(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        mpath.write_text(
+            json.dumps(bundle.to_manifest_obj(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         written.append(mpath)
         return written
-

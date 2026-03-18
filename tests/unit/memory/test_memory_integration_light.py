@@ -51,7 +51,9 @@ def _assert_end_to_end_conflict_flow(*, backend: str, sqlite_path: str | None = 
     mem.why_graph.upsert_nodes(tenant_id="t", repo_id="repo", nodes=nodes)
 
     detector = ConflictDetector()
-    constraints = mem.why_graph.list_nodes_by_type(tenant_id="t", repo_id="repo", node_type="constraint")
+    constraints = mem.why_graph.list_nodes_by_type(
+        tenant_id="t", repo_id="repo", node_type="constraint"
+    )
     reports = detector.detect_constraint_contradictions(
         tenant_id="t",
         repo_id="repo",
@@ -85,4 +87,3 @@ def test_integration_light_conflict_flow_in_memory() -> None:
 
 def test_integration_light_conflict_flow_sqlite(tmp_path: Path) -> None:
     _assert_end_to_end_conflict_flow(backend="sqlite", sqlite_path=str(tmp_path / "phase2.sqlite3"))
-

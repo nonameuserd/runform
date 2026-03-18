@@ -41,6 +41,10 @@ criteria = "safe-to-deploy"
 version = "0.5.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.assert_cmd]]
+version = "2.2.0"
+criteria = "safe-to-run"
+
 [[exemptions.async-trait]]
 version = "0.1.89"
 criteria = "safe-to-deploy"
@@ -56,6 +60,10 @@ criteria = "safe-to-deploy"
 [[exemptions.bitflags]]
 version = "2.11.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.bstr]]
+version = "1.12.1"
+criteria = "safe-to-run"
 
 [[exemptions.bytes]]
 version = "1.11.1"
@@ -108,6 +116,10 @@ criteria = "safe-to-deploy"
 [[exemptions.crossbeam-utils]]
 version = "0.8.21"
 criteria = "safe-to-deploy"
+
+[[exemptions.difflib]]
+version = "0.4.0"
+criteria = "safe-to-run"
 
 [[exemptions.digest]]
 version = "0.10.7"
@@ -265,6 +277,18 @@ criteria = "safe-to-deploy"
 version = "0.2.21"
 criteria = "safe-to-deploy"
 
+[[exemptions.predicates]]
+version = "3.1.4"
+criteria = "safe-to-run"
+
+[[exemptions.predicates-core]]
+version = "1.0.10"
+criteria = "safe-to-run"
+
+[[exemptions.predicates-tree]]
+version = "1.0.13"
+criteria = "safe-to-run"
+
 [[exemptions.prettyplease]]
 version = "0.2.37"
 criteria = "safe-to-deploy"
@@ -316,6 +340,10 @@ criteria = "safe-to-deploy"
 [[exemptions.redox_users]]
 version = "0.4.6"
 criteria = "safe-to-deploy"
+
+[[exemptions.regex-automata]]
+version = "0.4.14"
+criteria = "safe-to-run"
 
 [[exemptions.rustc-demangle]]
 version = "0.1.27"
@@ -389,6 +417,10 @@ criteria = "safe-to-run"
 version = "1.4.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.termtree]]
+version = "0.5.1"
+criteria = "safe-to-run"
+
 [[exemptions.thiserror]]
 version = "1.0.69"
 criteria = "safe-to-deploy"
@@ -452,6 +484,10 @@ criteria = "safe-to-deploy"
 [[exemptions.version_check]]
 version = "0.9.5"
 criteria = "safe-to-deploy"
+
+[[exemptions.wait-timeout]]
+version = "0.2.1"
+criteria = "safe-to-run"
 
 [[exemptions.wasi]]
 version = "0.11.1+wasi-snapshot-preview1"
