@@ -83,7 +83,7 @@ jobs:
           # as soon as "latest" moves forward.
           gh release download \
             --repo dafny-lang/dafny \
-            --pattern '*x64-ubuntu.zip' \
+            --pattern '*x64-ubuntu-*.zip' \
             --output dafny.zip
 
           unzip -q dafny.zip -d "$HOME/dafny"
