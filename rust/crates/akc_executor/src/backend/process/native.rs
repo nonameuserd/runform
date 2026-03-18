@@ -124,7 +124,17 @@ pub(crate) fn run_process_lane_native(
     // Start from a scrubbed environment. Keep a minimal PATH so allowlisted
     // commands like `echo` can be resolved without requiring absolute paths.
     child.env_clear();
-    child.env("PATH", "/usr/bin:/bin");
+    #[cfg(windows)]
+    {
+        // Rust's process spawning is not constrained to system directories, so if we
+        // set PATH incorrectly (e.g. Unix-style `:` separators), Windows command
+        // resolution can fail for built-in spawns like `start ... ping ...`.
+        child.env("PATH", r"C:\Windows\System32;C:\Windows");
+    }
+    #[cfg(not(windows))]
+    {
+        child.env("PATH", "/usr/bin:/bin");
+    }
     child.env("AKC_TENANT_ID", &tenant_id.0);
     child.env("AKC_RUN_ID", &run_id.0);
     for (k, v) in filter_request_env(&tenant_id, &run_id, &request.env) {
