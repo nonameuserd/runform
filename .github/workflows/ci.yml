@@ -12,6 +12,7 @@ on:
       - dev
       - "release/*"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     branches:
       - main
       - master
