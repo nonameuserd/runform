@@ -163,7 +163,7 @@ class DeterministicVerifier(Verifier):
                 plan_id=plan_id,
                 step_id=step_id,
                 passed=True,
-                findings=tuple(),
+                findings=(),
                 checked_at_ms=now_ms(),
                 policy=policy.to_json_obj(),
             )

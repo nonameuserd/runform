@@ -217,7 +217,9 @@ def write_baseline(
     scoped = _scope_dir(root=root, scope=scope)
     manifest_path = scoped / "manifest.json"
     if manifest_path.exists():
-        payload["manifest_sha256"] = stable_json_fingerprint(_read_json_object(manifest_path, what="manifest"))
+        payload["manifest_sha256"] = stable_json_fingerprint(
+            _read_json_object(manifest_path, what="manifest")
+        )
         payload["manifest_path"] = str(manifest_path)
 
     tmp = p.with_suffix(p.suffix + ".tmp")

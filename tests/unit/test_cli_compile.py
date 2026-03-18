@@ -141,7 +141,6 @@ def test_cli_compile_failing_tests_exit_code_2(tmp_path: Path) -> None:
     tenant_id = "t1"
     repo_id = "repo1"
     outputs_root = tmp_path
-    base = outputs_root / tenant_id / repo_id
     _write_failing_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
     _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
 

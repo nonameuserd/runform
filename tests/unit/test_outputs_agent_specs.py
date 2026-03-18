@@ -36,7 +36,11 @@ def test_agent_spec_renders_deterministic_json_and_binds_scope() -> None:
         llm=LlmBackendSpec(backend="openai", model="gpt-5", params={"temperature": 0.2}),
         roles=[
             AgentRoleSpec(name="planner", tools=["index.query"], budget=AgentBudget(max_steps=10)),
-            AgentRoleSpec(name="writer", tools=["fs.write", "python"], instructions="Prefer small diffs."),
+            AgentRoleSpec(
+                name="writer",
+                tools=["fs.write", "python"],
+                instructions="Prefer small diffs.",
+            ),
         ],
         metadata={"purpose": "unit-test"},
     )

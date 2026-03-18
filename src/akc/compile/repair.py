@@ -17,9 +17,16 @@ from typing import Any
 from akc.compile.interfaces import ExecutionResult
 from akc.memory.models import JSONValue, require_non_empty
 
-_PYTEST_FAIL_LINE_RE = re.compile(r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$")
-_PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(r"^=+\s*short test summary info\s*=+\s*$", re.IGNORECASE)
-_TRACEBACK_HEADER_RE = re.compile(r"^=+\s*FAILURES\s*=+\s*$|^Traceback \(most recent call last\):\s*$")
+_PYTEST_FAIL_LINE_RE = re.compile(
+    r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$"
+)
+_PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(
+    r"^=+\s*short test summary info\s*=+\s*$",
+    re.IGNORECASE,
+)
+_TRACEBACK_HEADER_RE = re.compile(
+    r"^=+\s*FAILURES\s*=+\s*$|^Traceback \(most recent call last\):\s*$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +60,9 @@ def parse_execution_failure(*, result: ExecutionResult, max_lines: int = 80) -> 
     if max_lines_i <= 0:
         raise ValueError("max_lines must be > 0")
 
-    combined = (result.stdout or "") + ("\n" + (result.stderr or "") if (result.stderr or "") else "")
+    combined = (result.stdout or "") + (
+        "\n" + (result.stderr or "") if (result.stderr or "") else ""
+    )
     lines = combined.splitlines()
 
     # Scan for pytest "short test summary info" section.
@@ -130,10 +139,12 @@ def build_repair_prompt(
         "Task:\n"
         "- Diagnose the root cause of the failure.\n"
         "- Produce a minimal fix that makes tests pass.\n"
-        "- If the failure indicates missing/insufficient tests, add or update tests in the patch.\n\n"
+        "- If the failure indicates missing/insufficient tests, add or update tests "
+        "in the patch.\n\n"
         "Output format (strict):\n"
         "- Return ONLY a unified diff (git-style) patch.\n"
         "- Do not include prose, explanations, or Markdown fences.\n"
-        "- The patch must be tenant-safe: never read/write outside this repo and never mix tenants.\n"
+        "- The patch must be tenant-safe: never read/write outside this repo "
+        "and never mix tenants.\n"
     )
 

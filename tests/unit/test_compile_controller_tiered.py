@@ -20,7 +20,13 @@ from akc.memory.facade import build_memory
 class _FakeLLM(LLMBackend):
     """Deterministic fake backend that echoes tier+stage."""
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+    def complete(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
         tier = None
         if request.metadata is not None:
             tier = request.metadata.get("tier")
@@ -50,7 +56,16 @@ class _ScriptedLLM(LLMBackend):
     texts: list[str]
     calls: int = 0
 
-    def complete(self, *, scope: TenantRepoScope, stage: str, request: LLMRequest) -> LLMResponse:  # type: ignore[override]
+    def complete(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        _ = scope
+        _ = stage
+        _ = request
         txt = self.texts[min(self.calls, len(self.texts) - 1)]
         self.calls += 1
         return LLMResponse(text=txt, raw=None, usage=None)
@@ -63,10 +78,22 @@ class _ScriptedExecutor(Executor):
     exit_codes: list[int]
     calls: int = 0
 
-    def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:  # type: ignore[override]
+    def run(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        request: ExecutionRequest,
+    ) -> ExecutionResult:
+        _ = scope
+        _ = request
         code = self.exit_codes[min(self.calls, len(self.exit_codes) - 1)]
         self.calls += 1
-        return ExecutionResult(exit_code=int(code), stdout=f"call={self.calls}", stderr="", duration_ms=1)
+        return ExecutionResult(
+            exit_code=int(code),
+            stdout=f"call={self.calls}",
+            stderr="",
+            duration_ms=1,
+        )
 
 
 def _mk_config(
@@ -83,7 +110,11 @@ def _mk_config(
     kwargs: dict = {
         "tiers": tiers,
         "stage_tiers": {"generate": "small", "repair": "small"},
-        "budget": Budget(max_llm_calls=max_llm_calls, max_repairs_per_step=max_repairs, max_iterations_total=max_repairs + 1),
+        "budget": Budget(
+            max_llm_calls=max_llm_calls,
+            max_repairs_per_step=max_repairs,
+            max_iterations_total=max_repairs + 1,
+        ),
         "test_mode": "full",
         "metadata": {"execute_command": ["pytest", "-q"], "execute_timeout_s": 1.0},
     }
@@ -133,8 +164,16 @@ def test_controller_persists_best_candidate_and_marks_step_done_on_success() -> 
     assert out["best_candidate"]["execution"]["command"]
     # On success we persist patch + test_result artifacts into code memory and
     # record their ids on the step outputs.
-    assert out.get("code_memory_item_ids") == [f"{plan.id}:{step.id}:patch", f"{plan.id}:{step.id}:test_result"]
-    items = mem.code_memory.list_items(tenant_id="t1", repo_id="repo1", artifact_id=plan.id, limit=10)
+    assert out.get("code_memory_item_ids") == [
+        f"{plan.id}:{step.id}:patch",
+        f"{plan.id}:{step.id}:test_result",
+    ]
+    items = mem.code_memory.list_items(
+        tenant_id="t1",
+        repo_id="repo1",
+        artifact_id=plan.id,
+        limit=10,
+    )
     kinds = {i.kind for i in items}
     assert "patch" in kinds
     assert "test_result" in kinds
@@ -170,7 +209,11 @@ def test_controller_escalates_generation_tier_after_failures() -> None:
 
     assert res.status == "succeeded"
     assert res.accounting["tier_history"]
-    tiers = [e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}]
+    tiers = [
+        e["tier"]
+        for e in res.accounting["tier_history"]
+        if e["stage"] in {"generate", "repair"}
+    ]
     # Starts at small and should reach at least medium after failures (given all tiers present).
     assert "small" in tiers
     assert "medium" in tiers or "large" in tiers
@@ -269,7 +312,11 @@ def test_controller_escalation_stops_at_largest_tier() -> None:
     )
 
     assert res.status == "succeeded"
-    tiers = [e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}]
+    tiers = [
+        e["tier"]
+        for e in res.accounting["tier_history"]
+        if e["stage"] in {"generate", "repair"}
+    ]
     assert "large" in tiers
     assert tiers[-1] == "large"
 

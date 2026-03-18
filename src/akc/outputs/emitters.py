@@ -80,7 +80,10 @@ class JsonManifestEmitter(Emitter):
 
         mpath = out_dir / self.manifest_name
         _ensure_under_root(root=out_dir, p=mpath)
-        mpath.write_text(json.dumps(bundle.to_manifest_obj(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        mpath.write_text(
+            json.dumps(bundle.to_manifest_obj(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         written.append(mpath)
         return written
 

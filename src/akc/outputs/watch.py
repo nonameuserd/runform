@@ -43,10 +43,7 @@ def snapshot_mtime_ns(paths: Sequence[str | Path]) -> dict[str, int]:
 def has_changes(prev: dict[str, int], curr: dict[str, int]) -> bool:
     if prev.keys() != curr.keys():
         return True
-    for k, v in curr.items():
-        if prev.get(k) != v:
-            return True
-    return False
+    return any(prev.get(k) != v for k, v in curr.items())
 
 
 def watch_for_changes(*, paths: Sequence[str | Path], cfg: WatchConfig) -> Iterable[None]:

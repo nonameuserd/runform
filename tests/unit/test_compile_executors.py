@@ -29,10 +29,19 @@ def test_subprocess_executor_rejects_cwd_escape(tmp_path: Path) -> None:
 
     outside = tmp_path.parent
     with pytest.raises(ValueError, match="within executor work_root"):
-        ex.run(scope=scope, request=ExecutionRequest(command=["python", "-c", "print('x')"], cwd=str(outside)))
+        ex.run(
+            scope=scope,
+            request=ExecutionRequest(
+                command=["python", "-c", "print('x')"],
+                cwd=str(outside),
+            ),
+        )
 
 
-def test_docker_executor_builds_expected_docker_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_docker_executor_builds_expected_docker_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     calls: dict[str, Any] = {}
 
     @dataclass
@@ -52,7 +61,13 @@ def test_docker_executor_builds_expected_docker_command(monkeypatch: pytest.Monk
 
     ex = DockerExecutor(work_root=tmp_path, image="python:3.12-slim", disable_network=True)
     scope = TenantRepoScope(tenant_id="t1", repo_id="repo1")
-    res = ex.run(scope=scope, request=ExecutionRequest(command=["python", "-c", "print('ok')"], env={"X": "1"}))
+    res = ex.run(
+        scope=scope,
+        request=ExecutionRequest(
+            command=["python", "-c", "print('ok')"],
+            env={"X": "1"},
+        ),
+    )
 
     assert res.exit_code == 0
     cmd = calls["cmd"]
@@ -72,5 +87,11 @@ def test_docker_executor_rejects_cwd_escape(tmp_path: Path) -> None:
 
     outside = tmp_path.parent
     with pytest.raises(ValueError, match="within executor work_root"):
-        ex.run(scope=scope, request=ExecutionRequest(command=["python", "-c", "print('x')"], cwd=str(outside)))
+        ex.run(
+            scope=scope,
+            request=ExecutionRequest(
+                command=["python", "-c", "print('x')"],
+                cwd=str(outside),
+            ),
+        )
 

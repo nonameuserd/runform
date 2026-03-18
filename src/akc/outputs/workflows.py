@@ -79,12 +79,16 @@ class WorkflowJob:
             raise ValueError("job.steps must be non-empty")
         if self.if_ is not None:
             require_non_empty(self.if_, name="job.if")
-        if self.needs is not None:
-            if any(not isinstance(n, str) or n.strip() == "" for n in self.needs):
-                raise ValueError("job.needs must be a sequence of non-empty strings")
+        if self.needs is not None and any(
+            not isinstance(n, str) or n.strip() == "" for n in self.needs
+        ):
+            raise ValueError("job.needs must be a sequence of non-empty strings")
 
     def to_obj(self) -> dict[str, Any]:
-        obj: dict[str, Any] = {"runs-on": self.runs_on, "steps": [s.to_obj() for s in self.steps]}
+        obj: dict[str, Any] = {
+            "runs-on": self.runs_on,
+            "steps": [s.to_obj() for s in self.steps],
+        }
         if self.name is not None:
             obj["name"] = self.name
         if self.needs:
@@ -110,15 +114,13 @@ class GithubActionsWorkflow:
         require_non_empty(self.name, name="workflow.name")
         if not self.jobs:
             raise ValueError("workflow.jobs must be non-empty")
-        for job_id in self.jobs.keys():
+        for job_id in self.jobs:
             require_non_empty(str(job_id), name="workflow.job_id")
 
     def to_obj(self) -> dict[str, Any]:
-        on_obj: Any
-        if isinstance(self.on, (list, tuple)):
-            on_obj = list(self.on)
-        else:
-            on_obj = dict(self.on)
+        on_obj = (
+            list(self.on) if isinstance(self.on, (list, tuple)) else dict(self.on)
+        )
         return {
             "name": self.name,
             "on": on_obj,
@@ -142,5 +144,10 @@ class GithubActionsWorkflow:
         if not (fn.endswith(".yml") or fn.endswith(".yaml")):
             fn = f"{fn}.yml"
         path = f"{directory.rstrip('/')}/{fn}"
-        return OutputArtifact.from_text(path=path, text=self.render_yaml(), media_type=media_type, metadata=metadata)
+        return OutputArtifact.from_text(
+            path=path,
+            text=self.render_yaml(),
+            media_type=media_type,
+            metadata=metadata,
+        )
 

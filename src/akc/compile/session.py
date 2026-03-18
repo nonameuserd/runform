@@ -58,7 +58,12 @@ class CompileSession:
     ) -> CompileSession:
         """Create a session with in-memory stores (fast, test-friendly)."""
 
-        return cls.from_backend(tenant_id=tenant_id, repo_id=repo_id, backend="memory", index=index)
+        return cls.from_backend(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            backend="memory",
+            index=index,
+        )
 
     @classmethod
     def from_sqlite(
@@ -137,7 +142,11 @@ class CompileSession:
 
         plan = self.plan(goal=goal)
         # Ensure the plan exists and is active before running.
-        self.memory.plan_state.set_active_plan(tenant_id=self.tenant_id, repo_id=self.repo_id, plan_id=plan.id)
+        self.memory.plan_state.set_active_plan(
+            tenant_id=self.tenant_id,
+            repo_id=self.repo_id,
+            plan_id=plan.id,
+        )
         result = run_compile_loop(
             tenant_id=self.tenant_id,
             repo_id=self.repo_id,
@@ -156,9 +165,17 @@ class CompileSession:
         #
         # This keeps the controller focused on the ARCS loop and makes emission opt-in
         # by requiring `outputs_root`.
-        if outputs_root is not None and result.status == "succeeded" and result.best_candidate is not None:
+        if (
+            outputs_root is not None
+            and result.status == "succeeded"
+            and result.best_candidate is not None
+        ):
             scope = TenantRepoScope(tenant_id=result.plan.tenant_id, repo_id=result.plan.repo_id)
-            step_id = result.plan.last_feedback.get("step_id") if isinstance(result.plan.last_feedback, dict) else None
+            step_id = (
+                result.plan.last_feedback.get("step_id")
+                if isinstance(result.plan.last_feedback, dict)
+                else None
+            )
             step_id_s = str(step_id) if step_id is not None else "unknown_step"
             step = next((s for s in result.plan.steps if s.id == step_id_s), None)
             step_outputs = dict(step.outputs or {}) if step is not None else {}
@@ -181,7 +198,12 @@ class CompileSession:
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.stdout.txt",
                         text=stdout or "(no stdout)",
                         media_type="text/plain; charset=utf-8",
-                        metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stage": name, "stream": "stdout"},
+                        metadata={
+                            "plan_id": result.plan.id,
+                            "step_id": step_id_s,
+                            "stage": name,
+                            "stream": "stdout",
+                        },
                     )
                 )
                 artifacts.append(
@@ -189,7 +211,12 @@ class CompileSession:
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.stderr.txt",
                         text=stderr or "(no stderr)",
                         media_type="text/plain; charset=utf-8",
-                        metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stage": name, "stream": "stderr"},
+                        metadata={
+                            "plan_id": result.plan.id,
+                            "step_id": step_id_s,
+                            "stage": name,
+                            "stream": "stderr",
+                        },
                     )
                 )
                 artifacts.append(
@@ -217,7 +244,8 @@ class CompileSession:
                 )
 
             if result.best_candidate.execution is not None:
-                # Prefer step outputs when available (smoke+full); otherwise fall back to best_candidate.
+                # Prefer step outputs when available (smoke+full);
+                # otherwise fall back to best_candidate.
                 last_smoke = step_outputs.get("last_tests_smoke")
                 last_full = step_outputs.get("last_tests_full")
                 if isinstance(last_smoke, dict):
@@ -234,7 +262,11 @@ class CompileSession:
                             path=f".akc/tests/{result.plan.id}_{step_id_s}.stdout.txt",
                             text=stdout or "(no stdout)",
                             media_type="text/plain; charset=utf-8",
-                            metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stream": "stdout"},
+                            metadata={
+                                "plan_id": result.plan.id,
+                                "step_id": step_id_s,
+                                "stream": "stdout",
+                            },
                         )
                     )
                     artifacts.append(
@@ -242,7 +274,11 @@ class CompileSession:
                             path=f".akc/tests/{result.plan.id}_{step_id_s}.stderr.txt",
                             text=stderr or "(no stderr)",
                             media_type="text/plain; charset=utf-8",
-                            metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stream": "stderr"},
+                            metadata={
+                                "plan_id": result.plan.id,
+                                "step_id": step_id_s,
+                                "stream": "stderr",
+                            },
                         )
                     )
                     artifacts.append(
@@ -260,7 +296,14 @@ class CompileSession:
                                 "plan_id": result.plan.id,
                                 "step_id": step_id_s,
                                 "stage": getattr(result.best_candidate, "execution_stage", None),
-                                "command": list(getattr(result.best_candidate, "execution_command", None) or []),
+                                "command": list(
+                                    getattr(
+                                        result.best_candidate,
+                                        "execution_command",
+                                        None,
+                                    )
+                                    or []
+                                ),
                                 "exit_code": int(result.best_candidate.execution.exit_code),
                                 "duration_ms": result.best_candidate.execution.duration_ms,
                             },

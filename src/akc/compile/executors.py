@@ -94,7 +94,10 @@ def _ensure_under_root(*, root: Path, p: Path) -> None:
         raise ValueError("execution cwd must be within executor work_root") from e
 
 
-def _sanitize_env(base: Mapping[str, str] | None, extra: Mapping[str, str] | None) -> dict[str, str]:
+def _sanitize_env(
+    base: Mapping[str, str] | None,
+    extra: Mapping[str, str] | None,
+) -> dict[str, str]:
     env: dict[str, str] = {}
     if base:
         env.update({str(k): str(v) for k, v in base.items()})
@@ -119,7 +122,11 @@ class SubprocessExecutor(Executor):
         root = self._work_root_path()
         root.mkdir(parents=True, exist_ok=True)
 
-        effective_cwd = Path(request.cwd) if request.cwd is not None else _scope_dir(work_root=root, scope=scope)
+        effective_cwd = (
+            Path(request.cwd)
+            if request.cwd is not None
+            else _scope_dir(work_root=root, scope=scope)
+        )
         effective_cwd.mkdir(parents=True, exist_ok=True)
         _ensure_under_root(root=root, p=effective_cwd)
 
@@ -146,9 +153,22 @@ class SubprocessExecutor(Executor):
             )
         except subprocess.TimeoutExpired as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)
-            out = (e.stdout or "") if isinstance(e.stdout, str) or e.stdout is None else e.stdout.decode("utf-8", "replace")
-            err = (e.stderr or "") if isinstance(e.stderr, str) or e.stderr is None else e.stderr.decode("utf-8", "replace")
-            return ExecutionResult(exit_code=124, stdout=out, stderr=err or "timed out", duration_ms=dur_ms)
+            out = (
+                (e.stdout or "")
+                if isinstance(e.stdout, str) or e.stdout is None
+                else e.stdout.decode("utf-8", "replace")
+            )
+            err = (
+                (e.stderr or "")
+                if isinstance(e.stderr, str) or e.stderr is None
+                else e.stderr.decode("utf-8", "replace")
+            )
+            return ExecutionResult(
+                exit_code=124,
+                stdout=out,
+                stderr=err or "timed out",
+                duration_ms=dur_ms,
+            )
         except FileNotFoundError as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)
             return ExecutionResult(exit_code=127, stdout="", stderr=str(e), duration_ms=dur_ms)
@@ -176,7 +196,11 @@ class DockerExecutor(Executor):
         root = self._work_root_path()
         root.mkdir(parents=True, exist_ok=True)
 
-        effective_cwd = Path(request.cwd) if request.cwd is not None else _scope_dir(work_root=root, scope=scope)
+        effective_cwd = (
+            Path(request.cwd)
+            if request.cwd is not None
+            else _scope_dir(work_root=root, scope=scope)
+        )
         effective_cwd.mkdir(parents=True, exist_ok=True)
         _ensure_under_root(root=root, p=effective_cwd)
 
@@ -220,9 +244,22 @@ class DockerExecutor(Executor):
             )
         except subprocess.TimeoutExpired as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)
-            out = (e.stdout or "") if isinstance(e.stdout, str) or e.stdout is None else e.stdout.decode("utf-8", "replace")
-            err = (e.stderr or "") if isinstance(e.stderr, str) or e.stderr is None else e.stderr.decode("utf-8", "replace")
-            return ExecutionResult(exit_code=124, stdout=out, stderr=err or "timed out", duration_ms=dur_ms)
+            out = (
+                (e.stdout or "")
+                if isinstance(e.stdout, str) or e.stdout is None
+                else e.stdout.decode("utf-8", "replace")
+            )
+            err = (
+                (e.stderr or "")
+                if isinstance(e.stderr, str) or e.stderr is None
+                else e.stderr.decode("utf-8", "replace")
+            )
+            return ExecutionResult(
+                exit_code=124,
+                stdout=out,
+                stderr=err or "timed out",
+                duration_ms=dur_ms,
+            )
         except FileNotFoundError as e:
             dur_ms = int((time.monotonic() - started) * 1000.0)
             return ExecutionResult(exit_code=127, stdout="", stderr=str(e), duration_ms=dur_ms)

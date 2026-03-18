@@ -177,7 +177,9 @@ def test_success_criteria_documented_readme_contains_one_liner_and_offline() -> 
     readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
     assert "akc compile" in readme, "README must mention akc compile"
     assert "outputs-root" in readme or "outputs_root" in readme, "README must show outputs-root"
-    assert "offline" in readme.lower() or "no API keys" in readme, "README must state offline/no API keys"
+    assert (
+        "offline" in readme.lower() or "no API keys" in readme
+    ), "README must state offline/no API keys"
     assert "opt-in" in readme.lower(), "README must state cloud/opt-in"
 
 
@@ -236,7 +238,7 @@ def test_success_criteria_extensible_ingest_connector_pluggable() -> None:
 
 
 def test_success_criteria_extensible_compile_no_connector_required() -> None:
-    """Extensible: Compile does not require a specific connector; uses tenant/repo/outputs-root only."""
+    """Extensible: Compile doesn't require a connector; uses tenant/repo/outputs-root only."""
     from akc.cli import _build_parser
 
     parser = _build_parser()
