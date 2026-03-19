@@ -83,9 +83,9 @@ fn is_program_allowed(program: &str) -> bool {
 }
 
 fn deny_cross_tenant_workspace_path(
-    root: &PathBuf,
-    workdir: &PathBuf,
-    canon: &PathBuf,
+    root: &Path,
+    workdir: &Path,
+    canon: &Path,
 ) -> Result<(), ExecutorError> {
     // If an allowlisted host path happens to fall under the executor workspace root,
     // treat it as a tenant-scoped workspace path and forbid crossing tenants/runs.
