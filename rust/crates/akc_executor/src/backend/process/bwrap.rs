@@ -82,6 +82,22 @@ fn is_program_allowed(program: &str) -> bool {
     matches!(program, "echo")
 }
 
+fn deny_cross_tenant_workspace_path(
+    root: &Path,
+    workdir: &Path,
+    canon: &Path,
+) -> Result<(), ExecutorError> {
+    // If an allowlisted host path happens to fall under the executor workspace root,
+    // treat it as a tenant-scoped workspace path and forbid crossing tenants/runs.
+    //
+    // This prevents a malicious request from allowlisting another tenant's workspace
+    // content (which would otherwise be mountable as an explicit host path in bwrap).
+    if canon.starts_with(root) && !canon.starts_with(workdir) {
+        return Err(ExecutorError::PolicyDenied);
+    }
+    Ok(())
+}
+
 pub(crate) fn run_process_lane_bwrap(
     mut request: ExecRequest,
 ) -> Result<ExecResponse, ExecutorError> {
@@ -181,6 +197,7 @@ pub(crate) fn run_process_lane_bwrap(
     for p in request.fs_policy.allowed_read_paths.iter() {
         let host: &Path = ensure_safe_absolute_path_string(p)?;
         let canon = host.canonicalize()?;
+        deny_cross_tenant_workspace_path(&root, &workdir, &canon)?;
         let canon_s = canon.to_string_lossy().into_owned();
         args.push("--ro-bind".to_string());
         args.push(canon_s.clone());
@@ -190,6 +207,7 @@ pub(crate) fn run_process_lane_bwrap(
         let host: &Path = ensure_safe_absolute_path_string(p)?;
         if host.exists() {
             let canon = host.canonicalize()?;
+            deny_cross_tenant_workspace_path(&root, &workdir, &canon)?;
             let canon_s = canon.to_string_lossy().into_owned();
             args.push("--bind".to_string());
             args.push(canon_s.clone());
@@ -200,6 +218,7 @@ pub(crate) fn run_process_lane_bwrap(
                 return Err(ExecutorError::PolicyDenied);
             }
             let parent_canon = parent.canonicalize()?;
+            deny_cross_tenant_workspace_path(&root, &workdir, &parent_canon)?;
             let parent_s = parent_canon.to_string_lossy().into_owned();
             args.push("--bind".to_string());
             args.push(parent_s.clone());

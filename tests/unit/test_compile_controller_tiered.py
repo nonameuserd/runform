@@ -469,12 +469,74 @@ def test_verifier_gate_vetoes_promotion_and_triggers_repair() -> None:
 
     assert res.status == "succeeded"
     assert res.accounting["repair_iterations"] == 1
+    # Safety invariant: even when promotion is vetoed, the next repair iteration
+    # must still re-run the execution gate (tests) before it can promote.
+    assert ex.calls == 2
     loaded = mem.plan_state.load_plan(tenant_id="t1", repo_id="repo1", plan_id=res.plan.id)
     assert loaded is not None
     step = next(s for s in loaded.steps if s.id == plan.steps[0].id)
     out = dict(step.outputs or {})
     assert isinstance(out.get("last_verification"), dict)
     assert out["last_verification"]["passed"] is True
+
+
+def test_verifier_gate_can_be_disabled_and_is_well_specified_in_outputs() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    # This patch would be rejected by the deterministic verifier (suspicious path),
+    # but when verifier is disabled it must not veto promotion.
+    suspicious_patch = "\n".join(
+        [
+            "--- a/../evil.py",
+            "+++ b/../evil.py",
+            "@@",
+            "+print('nope')",
+            "",
+        ]
+    )
+    llm = _ScriptedLLM(texts=[suspicious_patch])
+    ex = _ScriptedExecutor(exit_codes=[0])
+    cfg = _mk_config(max_llm_calls=5, max_repairs=0, require_tests_for_non_test_changes=False)
+    cfg = ControllerConfig(
+        tiers=cfg.tiers,
+        stage_tiers=cfg.stage_tiers,
+        budget=cfg.budget,
+        test_mode=cfg.test_mode,
+        metadata=cfg.metadata,
+        verifier_enabled=False,
+        verifier_strict=True,
+        require_tests_for_non_test_changes=False,
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+
+    assert res.status == "succeeded"
+    loaded = mem.plan_state.load_plan(tenant_id="t1", repo_id="repo1", plan_id=res.plan.id)
+    assert loaded is not None
+    step = next(s for s in loaded.steps if s.id == plan.steps[0].id)
+    out = dict(step.outputs or {})
+    v = out.get("last_verification")
+    assert isinstance(v, dict)
+    assert v.get("policy", {}).get("enabled") is False
+    assert v.get("passed") is True
 
 
 def test_tests_generated_policy_vetoes_promotion_when_non_test_paths_change_without_tests() -> None:

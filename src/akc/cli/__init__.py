@@ -9,6 +9,7 @@ from .compile import cmd_compile
 from .drift import cmd_drift, cmd_watch
 from .ingest import cmd_ingest, cmd_slack_list_channels
 from .verify import cmd_verify
+from .view import cmd_view
 
 __all__ = [
     "cmd_compile",
@@ -16,6 +17,7 @@ __all__ = [
     "cmd_watch",
     "cmd_ingest",
     "cmd_slack_list_channels",
+    "cmd_view",
     "cmd_verify",
     "main",
 ]
@@ -291,7 +293,13 @@ def _build_parser() -> argparse.ArgumentParser:
     compile_cmd.add_argument(
         "--outputs-root",
         required=True,
+        dest="outputs_root",
         help="Outputs root (contains <tenant>/<repo>/manifest.json)",
+    )
+    compile_cmd.add_argument(
+        "--output-dir",
+        dest="outputs_root",
+        help="Alias for --outputs-root",
     )
     compile_cmd.add_argument(
         "--goal",
@@ -309,6 +317,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "Optional executor work root. "
             "Defaults to <outputs_root>/<tenant>/<repo> to preserve tenant isolation."
         ),
+    )
+    compile_cmd.add_argument(
+        "--schema-version",
+        type=int,
+        default=1,
+        help="Artifact schema version to emit (default: 1)",
     )
     compile_cmd.add_argument(
         "--use-rust-exec",
@@ -334,6 +348,54 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     compile_cmd.add_argument("--verbose", action="store_true", help="Enable debug logging")
     compile_cmd.set_defaults(func=cmd_compile)
+
+    view = sub.add_parser(
+        "view",
+        help="Read-only local viewer over plan state and emitted artifacts",
+    )
+    view.add_argument("--tenant-id", required=True, help="Tenant identifier (required)")
+    view.add_argument("--repo-id", required=True, help="Repo identifier (required)")
+    view.add_argument(
+        "--outputs-root",
+        required=True,
+        help="Outputs root (contains <tenant>/<repo>/manifest.json and .akc/* artifacts)",
+    )
+    view.add_argument(
+        "--plan-base-dir",
+        help="Base directory that contains `.akc/plan` (default: CWD); viewer is read-only",
+    )
+    view.add_argument(
+        "--schema-version",
+        type=int,
+        default=1,
+        help="Artifact schema version to validate against (default: 1)",
+    )
+
+    view_sub = view.add_subparsers(dest="view_command", required=True)
+
+    view_tui = view_sub.add_parser("tui", help="Interactive terminal UI (curses)")
+    view_tui.set_defaults(func=cmd_view)
+
+    view_web = view_sub.add_parser("web", help="Generate a static HTML viewer bundle")
+    view_web.add_argument("--out-dir", help="Output directory for the static viewer bundle")
+    view_web.set_defaults(func=cmd_view)
+
+    view_export = view_sub.add_parser(
+        "export", help="Export a portable evidence bundle (dir + zip)"
+    )
+    view_export.add_argument("--out-dir", help="Output directory for the export bundle")
+    view_export.add_argument(
+        "--include-all-evidence",
+        action="store_true",
+        help="Include all manifest-referenced artifacts (default: true)",
+    )
+    view_export.add_argument(
+        "--no-zip",
+        dest="zip",
+        action="store_false",
+        help="Do not create a .zip alongside the export directory",
+    )
+    view_export.set_defaults(func=cmd_view, zip=True, include_all_evidence=True)
 
     return parser
 

@@ -194,6 +194,34 @@ fn process_lane_denies_allowlisted_path_that_resolves_outside_via_symlink() {
 }
 
 #[test]
+fn process_lane_denies_cross_tenant_allowlisted_read_within_workspace_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".akc");
+    fs::create_dir_all(&root).unwrap();
+    let root_canon = root.canonicalize().unwrap();
+
+    // Create a file in a different tenant's workspace.
+    let other_tenant_file = root_canon
+        .join("tenants")
+        .join("tenant_b")
+        .join("runs")
+        .join("run_1")
+        .join("secret.txt");
+    fs::create_dir_all(other_tenant_file.parent().unwrap()).unwrap();
+    fs::write(&other_tenant_file, b"nope").unwrap();
+
+    // Tenant A tries to allowlist the other tenant's file path.
+    let fs_policy = FsPolicy {
+        allowed_read_paths: vec![other_tenant_file.to_string_lossy().into_owned()],
+        allowed_write_paths: vec![],
+        preopen_dirs: vec![],
+    };
+    let req = make_process_request(&root_canon, None, fs_policy);
+    let err = with_exec_env(&root_canon, "native", || run_exec(req)).unwrap_err();
+    assert!(matches!(err, akc_executor::ExecutorError::PolicyDenied));
+}
+
+#[test]
 fn process_lane_allows_allowlisted_paths_inside_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join(".akc");
@@ -653,14 +681,16 @@ fn subprocess_can_escape_by_creating_its_own_session_documented_limitation() {
 
     let mut req = make_process_request(&root_canon, None, FsPolicy::default());
     req.command = vec!["sh".to_string(), "-c".to_string(), script];
-    req.limits.wall_time_ms = Some(200);
+    // Keep the timeout long enough for the helper to reliably write the pid file
+    // on loaded CI runners; we still expect the overall exec to time out.
+    req.limits.wall_time_ms = Some(800);
 
     let res = run_exec(req).unwrap();
     assert!(!res.ok);
     assert_eq!(res.exit_code, 124);
 
     // Wait briefly for pid file.
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(3);
     let pid_raw = loop {
         if let Ok(s) = fs::read_to_string(&pid_file) {
             break s;
@@ -794,6 +824,42 @@ fn windows_job_object_kills_background_processes_on_close() {
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bwrap_backend_denies_cross_tenant_allowlisted_workspace_paths() {
+    if !Path::new("/usr/bin/bwrap").exists() && !Path::new("/bin/bwrap").exists() {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".akc");
+    fs::create_dir_all(&root).unwrap();
+    let root_canon = root.canonicalize().unwrap();
+
+    if !bwrap_smoke_can_start(&root_canon) {
+        return;
+    }
+
+    // Create an "other tenant" file under the same workspace root.
+    let other_tenant_file = root_canon
+        .join("tenants")
+        .join("tenant_b")
+        .join("runs")
+        .join("run_1")
+        .join("secret.txt");
+    fs::create_dir_all(other_tenant_file.parent().unwrap()).unwrap();
+    fs::write(&other_tenant_file, b"nope").unwrap();
+
+    let fs_policy = FsPolicy {
+        allowed_read_paths: vec![other_tenant_file.to_string_lossy().into_owned()],
+        allowed_write_paths: vec![],
+        preopen_dirs: vec![],
+    };
+    let req = make_process_request(&root_canon, None, fs_policy);
+    let err = with_exec_env(&root_canon, "bwrap", || run_exec(req)).unwrap_err();
+    assert!(matches!(err, akc_executor::ExecutorError::PolicyDenied));
 }
 
 #[cfg(target_os = "linux")]
