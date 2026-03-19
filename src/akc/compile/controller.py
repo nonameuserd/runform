@@ -637,7 +637,7 @@ def run_compile_loop(
                         repo_id=repo_id,
                         artifact_id=plan.id,
                         item_id=smoke_item_id,
-                        kind="test_smoke_result",
+                        kind="test_result",
                         content=smoke_res.result.stdout
                         + ("\n" + smoke_res.result.stderr if smoke_res.result.stderr else ""),
                         metadata={

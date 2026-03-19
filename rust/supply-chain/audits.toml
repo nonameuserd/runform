@@ -1,0 +1,338 @@
+
+# cargo-vet audits file
+
+[[audits.anstyle-query]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.1.5"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.anstyle-wincon]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "3.0.11"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.block-buffer]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.10.4"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cap-net-ext]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "3.4.5"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cap-rand]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "3.4.5"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cap-time-ext]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "3.4.5"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cfg-if]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.0.4"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.clap_lex]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.1.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.colorchoice]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cpufeatures]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.2.17"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.cranelift-bitset]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.113.1"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.crypto-common]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.1.7"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.directories-next]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "2.0.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.dirs]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "4.0.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.dirs-sys]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.3.7"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.dirs-sys-next]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.errno]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.3.14"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.fd-lock]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "4.0.4"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.fs-set-times]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.20.3"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.futures-core]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.32"
+notes = "Reviewed local diff: small atomic waker state transition tweak + doc comment; no new unsafe blocks introduced."
+
+[[audits.futures-io]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.32"
+notes = "Reviewed local diff: Cargo.toml metadata/feature section ordering + autolib=false only."
+
+[[audits.futures-sink]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.32"
+notes = "Reviewed local diff: Cargo.toml metadata/feature section ordering + autolib=false only."
+
+[[audits.futures-task]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.3.32"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.id-arena]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "2.3.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.is_terminal_polyfill]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.70.2"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.itoa]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.0.17"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.libredox]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.1.14"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.memoffset]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.9.1"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.once_cell_polyfill]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.70.2"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.pyo3-macros]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.22.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.serde_spanned]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.6.9"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.stable_deref_trait]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "1.2.1"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.toml_datetime]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.6.11"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.toml_write]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.unindent]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.2.4"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.wasm-bindgen-macro]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.2.114"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.wasm-bindgen-shared]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.2.114"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.wasmtime-versioned-export-macros]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "26.0.1"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.winapi-i686-pc-windows-gnu]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.winapi-util]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.1.11"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.winapi-x86_64-pc-windows-gnu]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows-implement]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.60.2"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows-interface]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.59.3"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows-link]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.0 -> 0.2.1"
+notes = "Reviewed local diff: metadata/readme casing only."
+
+[[audits.windows-result]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows-targets]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_aarch64_gnullvm]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_aarch64_msvc]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_i686_gnu]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_i686_gnullvm]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_i686_msvc]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_x86_64_gnu]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_x86_64_gnullvm]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.windows_x86_64_msvc]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.winx]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+version = "0.36.4"
+notes = "Cargo Vet certify after reviewing cargo-vet check."
+
+[[audits.yoke-derive]]
+who = "dami <nonameuserd007@outlook.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.0 -> 0.8.1"
+notes = "Reviewed local diff: added clippy allow for mem::forget in derive; no new capabilities."

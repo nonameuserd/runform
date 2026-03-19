@@ -1,0 +1,21 @@
+[package]
+name = "akc_executor"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+akc_protocol = { path = "../akc_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = "3"
+wat = "1"

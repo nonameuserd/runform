@@ -4,8 +4,17 @@ import argparse
 from pathlib import Path
 from typing import Literal
 
-from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
-from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.compile import (
+    Budget,
+    CompileSession,
+    ControllerConfig,
+    RustExecutor,
+    SubprocessExecutor,
+    TierConfig,
+)
+from akc.compile.controller_config import TestMode
+from akc.compile.interfaces import Executor, LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.compile.rust_bridge import BackendMode, ExecLane, RustExecConfig
 
 from .common import configure_logging
 
@@ -61,7 +70,7 @@ def _build_compile_config(*, mode: str) -> ControllerConfig:
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=12, max_repairs_per_step=4, max_iterations_total=8)
-        test_mode: Literal["smoke", "full"] = "full"
+        test_mode: TestMode = "full"
         full_every: int | None = None
     else:
         budget = Budget(max_llm_calls=4, max_repairs_per_step=2, max_iterations_total=4)
@@ -99,7 +108,20 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
 
     work_root = base if args.work_root is None else Path(args.work_root).expanduser()
-    executor = SubprocessExecutor(work_root=work_root)
+    executor: Executor
+    if bool(getattr(args, "use_rust_exec", False)):
+        rust_exec_mode_raw = getattr(args, "rust_exec_mode", "cli")
+        rust_exec_mode: BackendMode = "pyo3" if rust_exec_mode_raw == "pyo3" else "cli"
+        rust_exec_lane_raw = getattr(args, "rust_exec_lane", "process")
+        rust_exec_lane: ExecLane = "wasm" if rust_exec_lane_raw == "wasm" else "process"
+        rust_cfg = RustExecConfig(
+            mode=rust_exec_mode,
+            lane=rust_exec_lane,
+            allow_network=bool(getattr(args, "rust_allow_network", False)),
+        )
+        executor = RustExecutor(rust_cfg=rust_cfg, work_root=work_root)
+    else:
+        executor = SubprocessExecutor(work_root=work_root)
     config = _build_compile_config(mode=str(args.mode))
     llm = _OfflineLLM()
 

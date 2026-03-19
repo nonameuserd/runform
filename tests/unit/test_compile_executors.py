@@ -39,8 +39,7 @@ def test_subprocess_executor_rejects_cwd_escape(tmp_path: Path) -> None:
 
 
 def test_docker_executor_builds_expected_docker_command(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls: dict[str, Any] = {}
 

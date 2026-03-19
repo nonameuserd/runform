@@ -1,0 +1,18 @@
+[package]
+name = "akc_ingest"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+akc_protocol = { path = "../akc_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
