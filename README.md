@@ -124,11 +124,42 @@ CI runs these on every push and PR. Pre-commit hooks: `uv run pre-commit install
 
 ## Roadmap
 
-- **Phase 0** — Project bootstrap ✅ (repo, OSS docs, CI, README, architecture & research docs)
-- **Phase 1** — Ingestion ✅ (docs + API connectors, chunking, embedding, index, CLI + tests)
-- **Phase 2** — Memory and planning ✅ (code memory, plan state)
-- **Phase 3** — Compile loop ✅ (Plan → Retrieve → Generate → Execute → Repair)
-- **Phase 4** — Outputs and “living” (code, workflows, agents; re-ingest and drift checks)
-- **Phase 5** — Correctness (tests by default; optional formal verification)
+- **Phase 0 — Project bootstrap**
+  - Repo shape, OSS docs (LICENSE/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/GOVERNANCE), CI, README, `docs/architecture.md`, `docs/research.md`
+- **Phase 1 — Ingestion**
+  - Connectors for **docs** + **APIs** (optional messaging connectors behind a common abstraction)
+  - Chunk/normalize → embedding → structured index
+- **Phase 2 — Memory and planning**
+  - Code memory + plan state (optionally richer causal/semantic graph later)
+- **Phase 3 — Compile loop**
+  - Plan → **Retrieve** (index + code memory) → Generate → Execute (sandbox) → Repair (test-driven)
+  - Budgeting and optional tiered controller (ARCS-style)
+- **Phase 4 — Outputs and “living”**
+  - Emit code, workflows, agent specs as artifacts
+  - Re-ingest + drift checks; “living” alignment loops over time
+- **Phase 5 — Correctness**
+  - Tests-by-default gates; optional deterministic verifier gate
+  - Optional formal verification tracks (e.g. Dafny/Verus) for critical paths
 
-See the [plan](.cursor/plans/agentic_knowledge_compiler_oss_656c38f4.plan.md) and [CHANGELOG](CHANGELOG.md) for details.
+### Optional track: Rust sandboxed Execute + fast ingestion CLI
+
+Python remains the orchestrator; Rust provides **(a)** a defense-in-depth Execute sandbox and **(b)** a high-throughput ingestion CLI, exposed via **both** a JSON subprocess boundary and **PyO3** with consistent request/response types.
+
+- **Define a shared protocol** (`akc_protocol`) with `tenant_id`, `run_id`, capabilities, limits, and structured outputs
+- **Implement `akc_executor` + `akc-exec`**
+  - Lane A: WASM (Wasmtime/WASI p2) with strict limits
+  - Lane B: OS process sandbox with resource limits and scoped mounts
+- **Implement `akc_ingest` + `akc-ingest`** emitting tenant-scoped normalized chunk records (`.jsonl` or bundle)
+- **Wire Python ports** to call Rust behind feature flags (subprocess first; PyO3 for throughput)
+- **Security + supply chain**: document threat model/tenant guarantees; CI for `cargo fmt`, clippy, tests; optional cargo-vet and SBOM/provenance for releases
+
+### Optional track: Thin local viewer (TUI/Web)
+
+Web UI stays **local-first** and **artifact/state-driven**: a thin viewer over tenant-scoped run artifacts (manifest, test/verification outputs, plan state), not a hosted execution service boundary.
+
+See the plans:
+- `.cursor/plans/agentic_knowledge_compiler_oss_656c38f4.plan.md`
+- `.cursor/plans/akc_rust_sandbox+cli_00aecd50.plan.md`
+- `.cursor/plans/oss-direction_5afdb059.plan.md`
+
+Also see [CHANGELOG](CHANGELOG.md) for shipped changes.
