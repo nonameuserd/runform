@@ -10,9 +10,9 @@ license = "MIT OR Apache-2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-pyo3 = { version = "0.22", features = ["extension-module"] }
-wasmtime = "26"
-wasmtime-wasi = "26"
+pyo3 = { version = "0.24.1", features = ["extension-module"] }
+wasmtime = "36.0.6"
+wasmtime-wasi = "36.0.6"
 
 [workspace.metadata.vet]
 # Store Cargo Vet data under `rust/` so it ships with the Rust subsystem.

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
+from akc.artifacts.contracts import apply_schema_envelope
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import JSONValue, require_non_empty
 from akc.outputs.yaml import dump_yaml
@@ -107,13 +108,14 @@ class OutputBundle:
             seen.add(a.path)
 
     def to_manifest_obj(self) -> dict[str, Any]:
-        return {
+        obj = {
             "tenant_id": self.scope.tenant_id,
             "repo_id": self.scope.repo_id,
             "name": self.name,
             "artifacts": [a.to_json_obj() for a in self.artifacts],
             "metadata": dict(self.metadata) if self.metadata else None,
         }
+        return apply_schema_envelope(obj=obj, kind="manifest")
 
 
 AgentRoleName = Literal["planner", "retriever", "writer", "verifier"]

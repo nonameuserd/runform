@@ -1,0 +1,54 @@
+header:
+  schema-version: 2.2.0
+  last-updated: "2026-03-19"
+  last-reviewed: "2026-03-19"
+  url: https://raw.githubusercontent.com/nonameuserd/runform/main/security-insights.yml
+  comment: |
+    Security Insights file aligned with OpenSSF Security Insights / OSPS baseline reporting.
+
+project:
+  name: Agentic Knowledge Compiler
+  administrators:
+    - name: Runform Maintainers
+      affiliation: Runform
+      email: nonameuserd007@outlook.com
+      primary: true
+  repositories:
+    - name: runform
+      url: https://github.com/nonameuserd/runform
+      comment: >
+        Core repository for the Agentic Knowledge Compiler (AKC) project.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    contact:
+      name: Runform Security Contact
+      email: nonameuserd007@outlook.com
+      primary: true
+    policy: https://github.com/nonameuserd/runform/blob/main/SECURITY.md
+
+repository:
+  url: https://github.com/nonameuserd/runform
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  core-team:
+    - name: Runform Maintainers
+      affiliation: Runform
+      email: nonameuserd007@outlook.com
+      primary: true
+  license:
+    url: https://github.com/nonameuserd/runform/blob/main/LICENSE
+    expression: Apache-2.0
+  documentation:
+    security-policy: https://github.com/nonameuserd/runform/blob/main/SECURITY.md
+  release:
+    automated-pipeline: true
+    distribution-points:
+      - uri: https://github.com/nonameuserd/runform/releases
+        comment: GitHub Releases page.
+  security:
+    assessments:
+      self:
+        comment: |
+          Self-reported: AKC provides a SECURITY.md private disclosure channel and enforces CI least-privilege on pull requests.

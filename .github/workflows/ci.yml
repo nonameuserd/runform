@@ -23,6 +23,24 @@ on:
       - "release/*"
 
 jobs:
+  policy-test:
+    name: Policy test (OSPS untrusted PR guardrails)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Run CI policy checks
+        run: uv run python scripts/ci_policy_test.py
+
   ci:
     runs-on: ubuntu-latest
     steps:

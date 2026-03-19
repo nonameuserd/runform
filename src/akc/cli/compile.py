@@ -138,6 +138,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
         executor=executor,
         config=config,
         outputs_root=outputs_root,
+        schema_version=int(getattr(args, "schema_version", 1)),
     )
 
     manifest_path = base / "manifest.json"

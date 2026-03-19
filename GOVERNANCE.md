@@ -9,6 +9,7 @@ Maintainers are responsible for:
 - Reviewing and merging pull requests
 - Releasing versions and maintaining the changelog
 - Enforcing the [Code of Conduct](CODE_OF_CONDUCT.md) and [Security](SECURITY.md) process
+- Triage security reports and coordinate fixes/disclosure per [`SECURITY.md`](SECURITY.md)
 - Steering the project within the scope below
 
 The current maintainer set is listed in the repository (e.g. in [CODEOWNERS](.github/CODEOWNERS) or in the README). New maintainers are added by consensus of existing maintainers.

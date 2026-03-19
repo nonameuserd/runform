@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from akc.artifacts.contracts import ARTIFACT_SCHEMA_VERSION, apply_schema_envelope
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import ControllerConfig
 from akc.compile.executors import SubprocessExecutor
@@ -136,6 +137,7 @@ class CompileSession:
         executor: Executor | None = None,
         config: ControllerConfig,
         outputs_root: str | Path | None = None,
+        schema_version: int = ARTIFACT_SCHEMA_VERSION,
         emitter: Emitter | None = None,
     ) -> ControllerResult:
         """Run the Phase 3 compile loop for this tenant+repo scope."""
@@ -230,17 +232,23 @@ class CompileSession:
                 # Keep a structured record, too.
                 cmd_raw = payload.get("command")
                 cmd_list: list[str] = [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
+                stage_obj: dict[str, Any] = {
+                    "plan_id": result.plan.id,
+                    "step_id": step_id_s,
+                    "stage": payload.get("stage"),
+                    "command": cmd_list,
+                    "exit_code": payload.get("exit_code"),
+                    "duration_ms": payload.get("duration_ms"),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
+                apply_schema_envelope(
+                    obj=stage_obj, kind="execution_stage", version=int(schema_version)
+                )
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/tests/{result.plan.id}_{step_id_s}.{name}.json",
-                        obj={
-                            "plan_id": result.plan.id,
-                            "step_id": step_id_s,
-                            "stage": payload.get("stage"),
-                            "command": cmd_list,
-                            "exit_code": payload.get("exit_code"),
-                            "duration_ms": payload.get("duration_ms"),
-                        },
+                        obj=stage_obj,
                         metadata={"plan_id": result.plan.id, "step_id": step_id_s, "stage": name},
                     )
                 )
@@ -294,21 +302,29 @@ class CompileSession:
                     artifacts.append(
                         OutputArtifact.from_json(
                             path=f".akc/tests/{result.plan.id}_{step_id_s}.json",
-                            obj={
-                                "plan_id": result.plan.id,
-                                "step_id": step_id_s,
-                                "stage": getattr(result.best_candidate, "execution_stage", None),
-                                "command": list(
-                                    getattr(
-                                        result.best_candidate,
-                                        "execution_command",
-                                        None,
-                                    )
-                                    or []
-                                ),
-                                "exit_code": int(result.best_candidate.execution.exit_code),
-                                "duration_ms": result.best_candidate.execution.duration_ms,
-                            },
+                            obj=apply_schema_envelope(
+                                obj={
+                                    "plan_id": result.plan.id,
+                                    "step_id": step_id_s,
+                                    "stage": getattr(
+                                        result.best_candidate, "execution_stage", None
+                                    ),
+                                    "command": list(
+                                        getattr(
+                                            result.best_candidate,
+                                            "execution_command",
+                                            None,
+                                        )
+                                        or []
+                                    ),
+                                    "exit_code": int(result.best_candidate.execution.exit_code),
+                                    "duration_ms": result.best_candidate.execution.duration_ms,
+                                    "stdout": stdout,
+                                    "stderr": stderr,
+                                },
+                                kind="execution_stage",
+                                version=int(schema_version),
+                            ),
                             metadata={"plan_id": result.plan.id, "step_id": step_id_s},
                         )
                     )
@@ -318,7 +334,11 @@ class CompileSession:
                 artifacts.append(
                     OutputArtifact.from_json(
                         path=f".akc/verification/{result.plan.id}_{step_id_s}.json",
-                        obj=last_ver,  # already structured
+                        obj=apply_schema_envelope(
+                            obj=dict(last_ver),
+                            kind="verifier_result",
+                            version=int(schema_version),
+                        ),
                         metadata={"plan_id": result.plan.id, "step_id": step_id_s},
                     )
                 )
