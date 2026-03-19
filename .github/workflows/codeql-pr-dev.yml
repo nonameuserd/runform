@@ -1,26 +1,18 @@
-name: CodeQL
+name: CodeQL (PR to dev)
 
 on:
-  push:
+  pull_request:
     branches:
-      - main
-      - master
-      - "release/*"
-  schedule:
-    - cron: "19 4 * * 2"
+      - dev
 
 permissions:
   contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   analyze:
-    name: Analyze (CodeQL, upload)
+    name: Analyze (CodeQL, no upload)
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
       actions: read
       contents: read
     strategy:
@@ -40,4 +32,6 @@ jobs:
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@603b797f8b14b413fe025cd935a91c16c4782713 # v3
+        with:
+          upload: false
 
