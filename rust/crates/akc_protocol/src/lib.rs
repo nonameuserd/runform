@@ -399,6 +399,10 @@ impl<'de> Deserialize<'de> for ExecRequest {
 mod tests {
     use super::*;
 
+    fn test_abs_path_json() -> String {
+        std::env::temp_dir().to_string_lossy().into_owned()
+    }
+
     #[test]
     fn tenant_id_validation_allows_safe_chars() {
         let tid: TenantId = TenantId::parse("acme_co-1").unwrap();
@@ -433,18 +437,16 @@ mod tests {
 
     #[test]
     fn exec_request_deserialize_rejects_preopen_dirs_for_process_lane() {
-        let json = r#"
-        {
-          "tenant_id": "tenant_a",
-          "run_id": "run_1",
-          "lane": { "type": "process" },
-          "capabilities": { "network": false },
-          "limits": {},
-          "command": ["echo", "hi"],
-          "fs_policy": { "preopen_dirs": ["/tmp"] }
-        }
-        "#;
-        let err: serde_json::Error = serde_json::from_str::<ExecRequest>(json).unwrap_err();
-        assert!(err.to_string().contains("preopen_dirs"));
+        let json = serde_json::json!({
+            "tenant_id": "tenant_a",
+            "run_id": "run_1",
+            "lane": { "type": "process" },
+            "capabilities": { "network": false },
+            "limits": {},
+            "command": ["echo", "hi"],
+            "fs_policy": { "preopen_dirs": [test_abs_path_json()] }
+        });
+        let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
+        assert!(err.to_string().contains("wasm lane"));
     }
 }
