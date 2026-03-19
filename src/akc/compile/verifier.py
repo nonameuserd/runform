@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from akc.artifacts.contracts import apply_schema_envelope
 from akc.compile.interfaces import ExecutionResult, TenantRepoScope
 from akc.memory.models import JSONValue, now_ms, require_non_empty
 
@@ -50,7 +51,7 @@ class VerifierResult:
     policy: Mapping[str, JSONValue]
 
     def to_json_obj(self) -> dict[str, Any]:
-        return {
+        obj: dict[str, Any] = {
             "scope": {"tenant_id": self.scope.tenant_id, "repo_id": self.scope.repo_id},
             "plan_id": self.plan_id,
             "step_id": self.step_id,
@@ -59,6 +60,7 @@ class VerifierResult:
             "policy": dict(self.policy),
             "findings": [f.to_json_obj() for f in self.findings],
         }
+        return apply_schema_envelope(obj=obj, kind="verifier_result")
 
 
 @dataclass(frozen=True, slots=True)

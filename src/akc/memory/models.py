@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Literal, TypeAlias, cast
 
+from akc.artifacts.contracts import apply_schema_envelope
+
 JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
 CodeMemoryKind = Literal[
@@ -299,6 +301,7 @@ class PlanState:
             "budgets": _as_json_object(p.budgets or {}),
             "last_feedback": _as_json_object(p.last_feedback or {}),
         }
+        apply_schema_envelope(obj=cast(dict[str, Any], obj), kind="plan_state")
         json_dumps(obj)
         return obj
 

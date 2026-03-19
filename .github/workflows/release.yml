@@ -16,6 +16,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next_tag.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -33,10 +35,21 @@ jobs:
       - name: Install dependencies (dev, includes semantic-release)
         run: uv sync --extra dev
 
-      - name: Run python-semantic-release
+      - name: Compute next release tag
+        id: next_tag
+        run: |
+          set -euo pipefail
+          echo "tag=$(uv run semantic-release version --print-tag)" >> "$GITHUB_OUTPUT"
+
+      - name: Run python-semantic-release (version + tag + GitHub Release)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uv run semantic-release publish
+        run: uv run semantic-release version
+
+      - name: Upload release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run semantic-release publish --tag "${{ steps.next_tag.outputs.tag }}"
 
   rust-integrity:
     runs-on: ubuntu-latest
@@ -123,11 +136,11 @@ jobs:
           upload-release-assets: false
 
   slsa-provenance:
-    needs: rust-integrity
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@main
+    needs: [release, rust-integrity]
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.rust-integrity.outputs.base64_subjects }}
       provenance-name: akc-rust.intoto.jsonl
-      upload-assets: false
-      continue-on-error: true
+      upload-assets: true
+      upload-tag-name: ${{ needs.release.outputs.tag }}
 

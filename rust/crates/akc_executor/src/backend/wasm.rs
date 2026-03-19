@@ -3,7 +3,7 @@ use akc_protocol::{ExecRequest, ExecResponse, RunId, TenantId};
 use serde_json::json;
 use std::fs;
 use wasmtime::{Config, Engine, Linker, Module, Store, Trap};
-use wasmtime_wasi::pipe;
+use wasmtime_wasi::p2::pipe;
 use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
 

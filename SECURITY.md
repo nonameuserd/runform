@@ -8,7 +8,8 @@ We take security seriously. If you believe you have found a security vulnerabili
 
 ### How to report
 
-- **Email:** runctl@outlook.com
+- **Email:** nonameuserd007@outlook.com
+- **Primary security contact:** the project team will route this inbox to the maintainers responsible for security triage.
 - **Private disclosure:** Describe the issue and steps to reproduce. We will acknowledge receipt and work with you to understand and fix the issue.
 - **What we ask:** Give us reasonable time to address the report before any public disclosure. We will keep you updated and credit you in advisories if you wish.
 

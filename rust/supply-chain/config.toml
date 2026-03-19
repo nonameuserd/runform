@@ -5,7 +5,7 @@
 version = "0.10"
 
 [imports.bytecode-alliance]
-url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+url = ["google", "mozilla"]
 
 [imports.google]
 url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
@@ -17,8 +17,12 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 version = "0.24.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.ahash]]
-version = "0.8.12"
+[[exemptions.addr2line]]
+version = "0.25.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.allocator-api2]]
+version = "0.2.21"
 criteria = "safe-to-deploy"
 
 [[exemptions.anstream]]
@@ -37,10 +41,6 @@ criteria = "safe-to-deploy"
 version = "1.0.102"
 criteria = "safe-to-deploy"
 
-[[exemptions.ar_archive_writer]]
-version = "0.5.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.assert_cmd]]
 version = "2.2.0"
 criteria = "safe-to-run"
@@ -55,6 +55,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.base64]]
 version = "0.21.7"
+criteria = "safe-to-deploy"
+
+[[exemptions.base64]]
+version = "0.22.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
@@ -99,6 +103,58 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cpp_demangle]]
 version = "0.4.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-assembler-x64]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-assembler-x64-meta]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-bforest]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-bitset]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-codegen]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-codegen-meta]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-codegen-shared]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-control]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-entity]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-frontend]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-isle]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-native]]
+version = "0.123.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.cranelift-srcgen]]
+version = "0.123.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.crc32fast]]
@@ -161,6 +217,10 @@ criteria = "safe-to-deploy"
 version = "0.4.2"
 criteria = "safe-to-run"
 
+[[exemptions.gimli]]
+version = "0.32.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.hashbrown]]
 version = "0.14.5"
 criteria = "safe-to-deploy"
@@ -199,6 +259,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.itertools]]
 version = "0.12.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.itertools]]
+version = "0.14.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.jobserver]]
@@ -250,19 +314,11 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.object]]
-version = "0.36.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.object]]
 version = "0.37.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
 version = "1.21.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.paste]]
-version = "1.0.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.pin-project-lite]]
@@ -297,24 +353,48 @@ criteria = "safe-to-deploy"
 version = "1.0.106"
 criteria = "safe-to-deploy"
 
-[[exemptions.psm]]
-version = "0.1.30"
+[[exemptions.pulley-interpreter]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.pulley-macros]]
+version = "36.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.pyo3]]
 version = "0.22.6"
 criteria = "safe-to-deploy"
 
+[[exemptions.pyo3]]
+version = "0.24.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.pyo3-build-config]]
 version = "0.22.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.pyo3-build-config]]
+version = "0.24.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.pyo3-ffi]]
 version = "0.22.6"
 criteria = "safe-to-deploy"
 
+[[exemptions.pyo3-ffi]]
+version = "0.24.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.pyo3-macros]]
+version = "0.24.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.pyo3-macros-backend]]
 version = "0.22.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.pyo3-macros-backend]]
+version = "0.24.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.quote]]
@@ -339,6 +419,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.redox_users]]
 version = "0.4.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.regalloc2]]
+version = "0.12.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-automata]]
@@ -385,14 +469,6 @@ criteria = "safe-to-deploy"
 version = "0.10.9"
 criteria = "safe-to-deploy"
 
-[[exemptions.shellexpand]]
-version = "2.1.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.slice-group-by]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.socket2]]
 version = "0.6.3"
 criteria = "safe-to-deploy"
@@ -407,6 +483,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.target-lexicon]]
 version = "0.12.16"
+criteria = "safe-to-deploy"
+
+[[exemptions.target-lexicon]]
+version = "0.13.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]
@@ -501,8 +581,108 @@ criteria = "safe-to-deploy"
 version = "0.2.114"
 criteria = "safe-to-deploy"
 
+[[exemptions.wasm-encoder]]
+version = "0.236.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmparser]]
+version = "0.236.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmprinter]]
+version = "0.236.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-environ]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-asm-macros]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-cache]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-component-macro]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-component-util]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-cranelift]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-fiber]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-jit-debug]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-jit-icache-coherence]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-math]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-slab]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-unwinder]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-versioned-export-macros]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-winch]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-internal-wit-bindgen]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-wasi]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasmtime-wasi-io]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wiggle]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wiggle-generate]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.wiggle-macro]]
+version = "36.0.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.winapi]]
 version = "0.3.9"
+criteria = "safe-to-deploy"
+
+[[exemptions.winch-codegen]]
+version = "36.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-core]]
@@ -518,11 +698,55 @@ version = "0.59.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-sys]]
 version = "0.61.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-targets]]
+version = "0.53.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.53.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.winnow]]
 version = "0.7.15"
+criteria = "safe-to-deploy"
+
+[[exemptions.wit-parser]]
+version = "0.236.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.witx]]

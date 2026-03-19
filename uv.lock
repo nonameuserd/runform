@@ -14,12 +14,14 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "python-semantic-release" },
     { name = "ruff" },
+    { name = "types-jsonschema" },
     { name = "types-pyyaml" },
 ]
 ingest-all = [
@@ -57,6 +59,7 @@ requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'ingest-docs'", specifier = ">=4.12" },
     { name = "chromadb", marker = "extra == 'ingest-vectorstore'", specifier = ">=0.5" },
     { name = "httpx", marker = "extra == 'ingest-embed'", specifier = ">=0.27" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.22" },
     { name = "markdown-it-py", marker = "extra == 'ingest-docs'", specifier = ">=3.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "pgvector", marker = "extra == 'vectorstore-pg'", specifier = ">=0.4" },
@@ -68,6 +71,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'ingest-openapi'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "slack-sdk", marker = "extra == 'ingest-messaging'", specifier = ">=3.27" },
+    { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.22.0.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0.0" },
 ]
 provides-extras = ["dev", "ingest-docs", "ingest-openapi", "ingest-embed", "ingest-vectorstore", "ingest-messaging", "ingest-all", "vectorstore-pg"]
@@ -2481,6 +2485,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fd/07/b822e1b307d40e263e8253d2384cf98c51aa2368cc7ba9a07e523a1d964b/typer-0.23.1.tar.gz", hash = "sha256:2070374e4d31c83e7b61362fd859aa683576432fd5b026b060ad6b4cd3b86134", size = 120047, upload-time = "2026-02-13T10:04:30.984Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/91/9b286ab899c008c2cb05e8be99814807e7fbbd33f0c0c960470826e5ac82/typer-0.23.1-py3-none-any.whl", hash = "sha256:3291ad0d3c701cbf522012faccfbb29352ff16ad262db2139e6b01f15781f14e", size = 56813, upload-time = "2026-02-13T10:04:32.008Z" },
+]
+
+[[package]]
+name = "types-jsonschema"
+version = "4.26.0.20260202"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "referencing" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/07/68f63e715eb327ed2f5292e29e8be99785db0f72c7664d2c63bd4dbdc29d/types_jsonschema-4.26.0.20260202.tar.gz", hash = "sha256:29831baa4308865a9aec547a61797a06fc152b0dac8dddd531e002f32265cb07", size = 16168, upload-time = "2026-02-02T04:11:22.585Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/06/962d4f364f779d7389cd31a1bb581907b057f52f0ace2c119a8dd8409db6/types_jsonschema-4.26.0.20260202-py3-none-any.whl", hash = "sha256:41c95343abc4de9264e333a55e95dfb4d401e463856d0164eec9cb182e8746da", size = 15914, upload-time = "2026-02-02T04:11:21.61Z" },
 ]
 
 [[package]]
