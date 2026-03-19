@@ -2,6 +2,7 @@
 
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import Budget, ControllerConfig, TierConfig
+from akc.compile.execute.rust_executor import RustExecutor
 from akc.compile.executors import DockerExecutor, SubprocessExecutor
 from akc.compile.interfaces import (
     Executor,
@@ -38,6 +39,7 @@ __all__ = [
     "TenantRepoScope",
     "TierConfig",
     "SubprocessExecutor",
+    "RustExecutor",
     "DeterministicVerifier",
     "VerifierPolicy",
     "VerifierResult",

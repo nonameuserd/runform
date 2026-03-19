@@ -24,3 +24,11 @@ We take security seriously. If you believe you have found a security vulnerabili
 - Out of scope: issues in third-party services or connectors you run yourself (e.g. Slack, Discord) unless the vulnerability is in our connector code or configuration guidance.
 
 Thank you for helping keep the project and its users safe.
+
+## Execution sandbox incidents
+
+If you believe you have found a vulnerability that could let generated code escape the execution sandbox (e.g., file system, network, environment variables, or cross-tenant access), please report it as a security incident using the private disclosure process above. Include:
+
+- what capability/limits were expected to prevent the impact
+- the exact tenant/run identifiers involved (if applicable)
+- reproduction steps and logs (sanitize secrets)

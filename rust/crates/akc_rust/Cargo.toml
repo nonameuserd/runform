@@ -1,0 +1,17 @@
+[package]
+name = "akc_rust"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[lib]
+name = "akc_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+akc_protocol = { path = "../akc_protocol" }
+akc_executor = { path = "../akc_executor" }
+akc_ingest = { path = "../akc_ingest" }
+pyo3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal
 
 from akc.ingest.chunking import ChunkingConfig
 from akc.ingest.connectors.messaging.slack import SlackMessagingClient
@@ -108,6 +109,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     )
     state_store = IngestionStateStore(state_path) if not args.no_state else None
 
+    rust_ingest_mode: Literal["cli", "pyo3"] = (
+        "pyo3" if getattr(args, "rust_ingest_mode", "cli") == "pyo3" else "cli"
+    )
+
     result = run_ingest(
         connector_name=connector,  # type: ignore[arg-type]
         tenant_id=tenant_id,
@@ -128,6 +133,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         state_store=state_store,
         incremental=not args.no_incremental,
         on_source_error="skip" if args.skip_sources_with_errors else "raise",
+        use_rust_ingest_docs=bool(args.use_rust_ingest_docs),
+        rust_ingest_min_bytes=args.rust_ingest_min_bytes,
+        rust_ingest_mode=rust_ingest_mode,
     )
 
     print("Ingest complete.")
