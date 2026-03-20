@@ -13,6 +13,11 @@ fn with_exec_env<T>(root: &PathBuf, backend: &str, f: impl FnOnce() -> T) -> T {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", root);
     std::env::set_var("AKC_EXEC_BACKEND", backend);
+    if backend == "native" {
+        std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
+    } else {
+        std::env::remove_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW");
+    }
     // Ensure tests are not coupled via a previously-set allowlist.
     // Keep a small default allowlist that includes commands used by bwrap
     // filesystem tests. Most tests that need a different allowlist set it
@@ -29,6 +34,7 @@ fn make_process_request(root: &Path, cwd: Option<String>, fs_policy: FsPolicy) -
         capabilities: Capabilities { network: false },
         limits: Limits {
             wall_time_ms: Some(1_000),
+            cpu_fuel: None,
             memory_bytes: None,
             stdout_max_bytes: Some(1024),
             stderr_max_bytes: Some(1024),
@@ -86,6 +92,24 @@ fn process_lane_denies_parent_dir_traversal_cwd() {
     // Request a traversal cwd, which should be rejected.
     let req = make_process_request(&root, Some("../".to_string()), FsPolicy::default());
     let err = with_exec_env(&root, "native", || run_exec(req)).unwrap_err();
+    assert!(matches!(err, akc_executor::ExecutorError::PolicyDenied));
+}
+
+#[test]
+fn process_lane_native_requires_explicit_unsafe_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".akc");
+    fs::create_dir_all(&root).unwrap();
+
+    let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("AKC_EXEC_ROOT", &root);
+    std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::remove_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW");
+    std::env::set_var("AKC_EXEC_ALLOWLIST", "echo");
+
+    let req = make_process_request(&root, None, FsPolicy::default());
+    let err = run_exec(req).unwrap_err();
     assert!(matches!(err, akc_executor::ExecutorError::PolicyDenied));
 }
 
@@ -265,6 +289,7 @@ fn process_lane_kills_process_tree_on_timeout() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "sh");
 
     let workdir = root_canon
@@ -362,6 +387,7 @@ fn process_lane_enforces_memory_limit_best_effort() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", python);
 
     let mut req = make_process_request(&root_canon, None, FsPolicy::default());
@@ -402,6 +428,7 @@ fn allowlist_empty_denies_everything() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "");
 
     let req = make_process_request(&root, None, FsPolicy::default());
@@ -424,6 +451,7 @@ fn allowlist_is_string_exact_basename_vs_absolute_path() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "echo");
 
     let mut req = make_process_request(&root, None, FsPolicy::default());
@@ -447,6 +475,7 @@ fn env_denylist_strips_loader_and_interpreter_injection_vars() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "sh");
     std::env::remove_var("AKC_EXEC_ENV_ALLOW_PREFIXES");
 
@@ -488,6 +517,7 @@ fn env_allow_prefixes_only_passes_matching_keys() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "sh");
     std::env::set_var("AKC_EXEC_ENV_ALLOW_PREFIXES", "FOO_,AKC_");
 
@@ -522,6 +552,7 @@ fn timeout_returns_promptly_even_with_spammy_stdout_stderr_and_clamps() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "sh");
 
     let mut req = make_process_request(&root_canon, None, FsPolicy::default());
@@ -576,6 +607,7 @@ fn process_lane_kills_nested_subshell_spawn_on_timeout_double_forkish() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", "sh");
 
     let workdir = root_canon
@@ -652,6 +684,7 @@ fn subprocess_can_escape_by_creating_its_own_session_documented_limitation() {
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     std::env::set_var("AKC_EXEC_ALLOWLIST", format!("sh:{}", python3));
 
     let workdir = root_canon
@@ -764,6 +797,7 @@ fn backend_parity_native_vs_bwrap_timeout_exit_code() {
     req.limits.wall_time_ms = Some(200);
 
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     let native = run_exec(req.clone()).unwrap();
     std::env::set_var("AKC_EXEC_BACKEND", "bwrap");
     let bwrap = run_exec(req).unwrap();
@@ -790,6 +824,7 @@ fn windows_job_object_kills_background_processes_on_close() {
     let _guard = lock.lock().expect("env lock poisoned");
     std::env::set_var("AKC_EXEC_ROOT", &root_canon);
     std::env::set_var("AKC_EXEC_BACKEND", "native");
+    std::env::set_var("AKC_EXEC_NATIVE_UNSAFE_ALLOW", "1");
     // Allow `cmd` (spawner) and `tasklist` (verification helper).
     std::env::set_var("AKC_EXEC_ALLOWLIST", "cmd:tasklist");
 

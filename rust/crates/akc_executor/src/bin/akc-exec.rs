@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use akc_executor::run_exec;
 use akc_protocol::observability::{log_event, log_event_unscoped, LogLevel};
-use akc_protocol::ExecRequest;
+use akc_protocol::{ExecRequest, ExecResponse};
 use serde_json::json;
 
 fn executor_error_kind(err: &akc_executor::ExecutorError) -> &'static str {
@@ -75,6 +75,7 @@ fn main() {
             "program": program_id,
             "network_requested": request.capabilities.network,
             "wall_time_ms": request.limits.wall_time_ms,
+            "cpu_fuel": request.limits.cpu_fuel,
             "stdout_max_bytes": request.limits.stdout_max_bytes,
             "stderr_max_bytes": request.limits.stderr_max_bytes,
         }),
@@ -119,7 +120,19 @@ fn main() {
                 akc_executor::ExecutorError::Timeout => 40,
                 _ => 30,
             };
-            let _ = writeln!(io::stderr(), "{err}");
+            let response = ExecResponse {
+                tenant_id: tenant_id.clone(),
+                run_id: run_id.clone(),
+                ok: false,
+                exit_code: code,
+                stdout: String::new(),
+                stderr: err.to_string(),
+            };
+            if let Ok(json) = serde_json::to_string(&response) {
+                let _ = writeln!(io::stdout(), "{json}");
+            } else {
+                let _ = writeln!(io::stderr(), "{err}");
+            }
             log_event(
                 LogLevel::Error,
                 "exec_surface_error",

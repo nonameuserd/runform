@@ -28,7 +28,7 @@ cat <<'JSON' | cargo run -p akc_executor --bin akc-exec
   "run_id": "run_1",
   "lane": { "type": "wasm" },
   "capabilities": { "network": false },
-  "limits": { "wall_time_ms": 250, "memory_bytes": null, "stdout_max_bytes": 64, "stderr_max_bytes": 1024 },
+  "limits": { "wall_time_ms": 250, "cpu_fuel": null, "memory_bytes": null, "stdout_max_bytes": 64, "stderr_max_bytes": 1024 },
   "command": ["/tmp/hello_preview1.wasm"],
   "cwd": null,
   "env": {},
@@ -41,3 +41,5 @@ JSON
 Notes:
 - The WASM lane currently uses **WASI Preview 1** (`wasi_snapshot_preview1` imports).
 - By default, the lane runs with **no preopened directories** (no filesystem access).
+- Optional deterministic CPU budget:
+  - set `limits.cpu_fuel` (must be `> 0`) to enforce an explicit WASM fuel cap.

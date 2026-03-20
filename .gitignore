@@ -9,6 +9,9 @@ dist/
 *.egg-info/
 *.egg
 
+# CI / local scratch (pip-audit export, eval outputs)
+.tmp/
+
 # Tooling and cache
 __pycache__/
 *.pyc

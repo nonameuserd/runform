@@ -6,7 +6,6 @@ from pathlib import Path
 
 from akc.viewer import ViewerInputs, load_viewer_snapshot
 from akc.viewer.export import export_bundle
-from akc.viewer.tui import TuiError, run_tui
 from akc.viewer.web import build_static_viewer
 
 
@@ -30,6 +29,11 @@ def cmd_view(args: argparse.Namespace) -> int:
 
     sub = str(getattr(args, "view_command", "") or "")
     if sub == "tui":
+        try:
+            from akc.viewer.tui import TuiError, run_tui
+        except ModuleNotFoundError as e:
+            print(f"ERROR: TUI viewer is unavailable on this platform: {e}")
+            return 2
         try:
             return int(run_tui(snap))
         except TuiError as e:

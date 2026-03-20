@@ -78,6 +78,7 @@ class RustExecutor(Executor):
             env=env,
             timeout_s=request.timeout_s,
             stdin_text=request.stdin_text,
+            run_id=request.run_id,
         )
 
     def run(self, *, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
