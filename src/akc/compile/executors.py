@@ -193,6 +193,14 @@ def _validate_docker_security_identifier(
     return normalized
 
 
+def _is_default_docker_seccomp_profile(value: str | None) -> bool:
+    return str(value or "").strip().lower() == "runtime/default"
+
+
+def _is_default_docker_apparmor_profile(value: str | None) -> bool:
+    return str(value or "").strip().lower() == "docker-default"
+
+
 def _validate_docker_ulimit(value: str | None, *, field_name: str) -> str | None:
     if value is None:
         return None
@@ -649,6 +657,10 @@ class DockerExecutor(Executor):
         if request.run_id is not None:
             run_dir = _run_dir(work_root=root, scope=scope, run_id=request.run_id)
             run_dir.mkdir(parents=True, exist_ok=True)
+            # The run dir is bind-mounted into Docker for HOME/XDG/cache writes.
+            # Make it writable to the configured non-root container user.
+            with contextlib.suppress(OSError):
+                run_dir.chmod(0o777)
 
         env = _sanitize_env(self.base_env, request.env)
         env["AKC_TENANT_ID"] = str(scope.tenant_id)
@@ -665,7 +677,7 @@ class DockerExecutor(Executor):
         # non-root container users can run against read-mostly source trees.
         env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         env.setdefault("PYTHONPYCACHEPREFIX", str(home_dir) + "/.pycache")
-        env.setdefault("PYTEST_ADDOPTS", f"--cache-dir={home_dir}/.pytest_cache")
+        env.setdefault("PYTEST_ADDOPTS", f"--override-ini=cache_dir={home_dir}/.pytest_cache")
 
         docker_user = _validate_docker_user(self.user)
         tmpfs_mounts = _validate_docker_tmpfs_mounts(self.tmpfs_mounts)
@@ -715,9 +727,11 @@ class DockerExecutor(Executor):
             docker_cmd += ["--read-only"]
         if self.no_new_privileges:
             docker_cmd += ["--security-opt", "no-new-privileges"]
-        if seccomp_profile is not None:
+        if seccomp_profile is not None and not _is_default_docker_seccomp_profile(seccomp_profile):
             docker_cmd += ["--security-opt", f"seccomp={seccomp_profile}"]
-        if apparmor_profile is not None:
+        if apparmor_profile is not None and not _is_default_docker_apparmor_profile(
+            apparmor_profile
+        ):
             docker_cmd += ["--security-opt", f"apparmor={apparmor_profile}"]
         if self.cap_drop_all:
             docker_cmd += ["--cap-drop", "ALL"]

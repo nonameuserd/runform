@@ -157,7 +157,7 @@ def test_docker_executor_builds_expected_docker_command(
     assert "nproc=512" in cmd
     assert "PYTHONDONTWRITEBYTECODE=1" in cmd
     assert f"PYTHONPYCACHEPREFIX={ex.container_workdir}/.pycache" in cmd
-    assert f"PYTEST_ADDOPTS=--cache-dir={ex.container_workdir}/.pytest_cache" in cmd
+    assert f"PYTEST_ADDOPTS=--override-ini=cache_dir={ex.container_workdir}/.pytest_cache" in cmd
     assert ex.image in cmd
     # The container workdir should be present and command appended.
     assert "-w" in cmd and ex.container_workdir in cmd
@@ -222,6 +222,57 @@ def test_docker_executor_run_dir_is_bind_mounted_writable_for_non_root_user(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls: dict[str, Any] = {}
+    chmod_calls: list[tuple[Path, int]] = []
+
+    def _fake_helper(
+        *,
+        command: list[str],
+        cwd: str,
+        env: Any,
+        stdin_text: Any,
+        timeout_s: Any,
+        preexec_fn: Any,
+        stdout_max_bytes: Any,
+        stderr_max_bytes: Any,
+    ) -> tuple[int, str, str, int]:
+        calls["cmd"] = command
+        return 0, "ok", "", 1
+
+    import akc.compile.executors as executors_mod
+
+    monkeypatch.setattr(executors_mod, "_run_subprocess_capture_output_with_limits", _fake_helper)
+    original_chmod = Path.chmod
+
+    def _spy_chmod(self: Path, mode: int) -> None:
+        chmod_calls.append((self, mode))
+        original_chmod(self, mode)
+
+    monkeypatch.setattr(Path, "chmod", _spy_chmod)
+
+    ex = DockerExecutor(work_root=tmp_path)
+    scope = TenantRepoScope(tenant_id="t1", repo_id="repo1")
+    run_id = "run_123"
+    res = ex.run(
+        scope=scope,
+        request=ExecutionRequest(
+            command=["python", "-c", "print('ok')"],
+            run_id=run_id,
+        ),
+    )
+
+    assert res.exit_code == 0
+    cmd = calls["cmd"]
+    run_dir = tmp_path / "t1" / "repo1" / run_id
+    assert f"{str(run_dir.resolve())}:{ex.container_run_dir}:rw" in cmd
+    assert f"HOME={ex.container_run_dir}" in cmd
+    assert f"PYTEST_ADDOPTS=--override-ini=cache_dir={ex.container_run_dir}/.pytest_cache" in cmd
+    assert (run_dir, 0o777) in chmod_calls
+
+
+def test_docker_executor_omits_default_security_profile_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: dict[str, Any] = {}
 
     def _fake_helper(
         *,
@@ -241,23 +292,21 @@ def test_docker_executor_run_dir_is_bind_mounted_writable_for_non_root_user(
 
     monkeypatch.setattr(executors_mod, "_run_subprocess_capture_output_with_limits", _fake_helper)
 
-    ex = DockerExecutor(work_root=tmp_path)
+    ex = DockerExecutor(
+        work_root=tmp_path,
+        seccomp_profile="runtime/default",
+        apparmor_profile="docker-default",
+    )
     scope = TenantRepoScope(tenant_id="t1", repo_id="repo1")
-    run_id = "run_123"
     res = ex.run(
         scope=scope,
-        request=ExecutionRequest(
-            command=["python", "-c", "print('ok')"],
-            run_id=run_id,
-        ),
+        request=ExecutionRequest(command=["python", "-c", "print('ok')"]),
     )
 
     assert res.exit_code == 0
     cmd = calls["cmd"]
-    run_dir = tmp_path / "t1" / "repo1" / run_id
-    assert f"{str(run_dir.resolve())}:{ex.container_run_dir}:rw" in cmd
-    assert f"HOME={ex.container_run_dir}" in cmd
-    assert f"PYTEST_ADDOPTS=--cache-dir={ex.container_run_dir}/.pytest_cache" in cmd
+    assert "seccomp=runtime/default" not in cmd
+    assert "apparmor=docker-default" not in cmd
 
 
 def test_docker_executor_does_not_create_cwd_outside_root(tmp_path: Path) -> None:
