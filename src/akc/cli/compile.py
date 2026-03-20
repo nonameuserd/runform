@@ -181,13 +181,10 @@ def _preflight_docker_hardening(
     docker_available: bool,
 ) -> int | None:
     docker_hardening_requested = _docker_hardening_flags_supplied(args)
-    docker_config_relevant = (
-        docker_hardening_requested
-        or (
-            not bool(getattr(args, "use_rust_exec", False))
-            and sandbox_mode == "strong"
-            and strong_lane_preference != "wasm"
-        )
+    docker_config_relevant = docker_hardening_requested or (
+        not bool(getattr(args, "use_rust_exec", False))
+        and sandbox_mode == "strong"
+        and strong_lane_preference != "wasm"
     )
     if docker_hardening_requested:
         if bool(getattr(args, "use_rust_exec", False)):
@@ -450,14 +447,27 @@ def cmd_compile(args: argparse.Namespace) -> int:
                 "install the `opa` binary on PATH or omit --opa-policy-path",
             ),
         )
-    (
-        docker_user,
-        docker_tmpfs_mounts,
-        docker_seccomp_profile,
-        docker_apparmor_profile,
-        docker_ulimit_nofile,
-        docker_ulimit_nproc,
-    ) = _resolve_docker_hardening_args(args)
+    docker_config_relevant = _docker_hardening_flags_supplied(args) or (
+        not bool(getattr(args, "use_rust_exec", False))
+        and sandbox_mode == "strong"
+        and strong_lane_preference != "wasm"
+    )
+    if docker_config_relevant:
+        (
+            docker_user,
+            docker_tmpfs_mounts,
+            docker_seccomp_profile,
+            docker_apparmor_profile,
+            docker_ulimit_nofile,
+            docker_ulimit_nproc,
+        ) = _resolve_docker_hardening_args(args)
+    else:
+        docker_user = None
+        docker_tmpfs_mounts = ()
+        docker_seccomp_profile = None
+        docker_apparmor_profile = None
+        docker_ulimit_nofile = None
+        docker_ulimit_nproc = None
 
     executor: Executor
     selected_backend = "dev-subprocess"
@@ -573,7 +583,12 @@ def cmd_compile(args: argparse.Namespace) -> int:
         cost_tool_call_usd=float(getattr(args, "cost_tool_call_usd", 0.0)),
     )
     if selected_backend == "docker":
-        default_test_command: tuple[str, ...] | None = ("python", "-m", "pytest", "-q")
+        default_test_command: tuple[str, ...] | None = (
+            "python",
+            "-m",
+            "pytest",
+            "-q",
+        )
     elif selected_backend.startswith("rust-") and selected_backend.endswith("-wasm"):
         default_test_command = None
     else:

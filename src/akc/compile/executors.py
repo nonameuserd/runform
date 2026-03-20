@@ -657,6 +657,11 @@ class DockerExecutor(Executor):
         env["XDG_CACHE_HOME"] = str(home_dir) + "/.cache"
         env["XDG_CONFIG_HOME"] = str(home_dir) + "/.config"
         env["XDG_STATE_HOME"] = str(home_dir) + "/.state"
+        # Keep common Python/pytest write paths off the bind-mounted repo so
+        # non-root container users can run against read-mostly source trees.
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        env.setdefault("PYTHONPYCACHEPREFIX", str(home_dir) + "/.pycache")
+        env.setdefault("PYTEST_ADDOPTS", f"--cache-dir={home_dir}/.pytest_cache")
 
         docker_user = _validate_docker_user(self.user)
         tmpfs_mounts = _validate_docker_tmpfs_mounts(self.tmpfs_mounts)

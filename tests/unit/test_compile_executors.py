@@ -155,6 +155,9 @@ def test_docker_executor_builds_expected_docker_command(
     assert cmd.count("--ulimit") == 2
     assert "nofile=1024:2048" in cmd
     assert "nproc=512" in cmd
+    assert "PYTHONDONTWRITEBYTECODE=1" in cmd
+    assert f"PYTHONPYCACHEPREFIX={ex.container_workdir}/.pycache" in cmd
+    assert f"PYTEST_ADDOPTS=--cache-dir={ex.container_workdir}/.pytest_cache" in cmd
     assert ex.image in cmd
     # The container workdir should be present and command appended.
     assert "-w" in cmd and ex.container_workdir in cmd

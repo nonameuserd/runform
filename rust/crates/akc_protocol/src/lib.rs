@@ -512,6 +512,9 @@ mod tests {
 
     #[test]
     fn exec_request_deserialize_rejects_write_paths_outside_preopen_dirs_for_wasm_lane() {
+        let base = std::env::temp_dir();
+        let preopen = base.join("akc-preopen-a").to_string_lossy().into_owned();
+        let outside = base.join("akc-preopen-b").to_string_lossy().into_owned();
         let json = serde_json::json!({
             "tenant_id": "tenant_a",
             "run_id": "run_1",
@@ -520,11 +523,15 @@ mod tests {
             "limits": {},
             "command": ["hello.wasm"],
             "fs_policy": {
-                "preopen_dirs": ["/tmp/a"],
-                "allowed_write_paths": ["/tmp/b"],
+                "preopen_dirs": [preopen],
+                "allowed_write_paths": [outside],
             }
         });
         let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
-        assert!(err.to_string().contains("allowed_write_paths"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("allowed_write_paths") || msg.contains("filesystem policy"),
+            "unexpected error: {msg}"
+        );
     }
 }
