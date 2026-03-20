@@ -21,12 +21,15 @@ dependencies = []
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    # Supply-chain hardening: dependency vulnerability scanning gate in CI.
+    "pip-audit>=2.7",
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",
     "jsonschema>=4.22",
     "types-jsonschema>=4.22.0.0",
     "types-PyYAML>=6.0.0.0",
+    "PyYAML>=6.0",
     "python-semantic-release>=9.8",
 ]
 

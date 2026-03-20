@@ -138,12 +138,21 @@ class ExecutionRequest:
     env: Mapping[str, str] | None = None
     timeout_s: float | None = None
     stdin_text: str | None = None
+    # Optional, caller-provided execution run identifier used for tenant-scoped
+    # namespace selection (e.g. HOME/XDG dirs, run artifacts, secrets mounts).
+    #
+    # When omitted, executor behavior falls back to the historical tenant+repo
+    # scoped workdir layout.
+    run_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.command:
             raise ValueError("command must be non-empty")
         if self.timeout_s is not None and float(self.timeout_s) <= 0:
             raise ValueError("timeout_s must be > 0 when set")
+        if self.run_id is not None:
+            require_non_empty(self.run_id, name="run_id")
+            object.__setattr__(self, "run_id", str(self.run_id).strip())
 
 
 @dataclass(frozen=True, slots=True)

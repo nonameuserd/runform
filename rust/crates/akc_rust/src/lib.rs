@@ -31,6 +31,18 @@ fn executor_error_kind(err: &akc_executor::ExecutorError) -> &'static str {
     }
 }
 
+fn executor_error_exit_code(err: &akc_executor::ExecutorError) -> i32 {
+    match err {
+        akc_executor::ExecutorError::PolicyDenied => 20,
+        akc_executor::ExecutorError::EmptyCommand => 10,
+        akc_executor::ExecutorError::CommandNotAllowed => 20,
+        akc_executor::ExecutorError::Timeout => 40,
+        akc_executor::ExecutorError::UnsupportedLane => 30,
+        akc_executor::ExecutorError::Wasm(_) => 30,
+        akc_executor::ExecutorError::Io(_) => 30,
+    }
+}
+
 fn ingest_error_kind(err: &akc_ingest::IngestError) -> &'static str {
     match err {
         akc_ingest::IngestError::Protocol(_) => "protocol_error",
@@ -84,6 +96,7 @@ fn run_exec_json(request_json: &str) -> Result<String, AkcPyError> {
             "program": program_id,
             "network_requested": request.capabilities.network,
             "wall_time_ms": request.limits.wall_time_ms,
+            "cpu_fuel": request.limits.cpu_fuel,
             "stdout_max_bytes": request.limits.stdout_max_bytes,
             "stderr_max_bytes": request.limits.stderr_max_bytes,
         }),
@@ -110,6 +123,7 @@ fn run_exec_json(request_json: &str) -> Result<String, AkcPyError> {
             v
         }
         Err(err) => {
+            let exit_code = executor_error_exit_code(&err);
             log_event(
                 LogLevel::Error,
                 "exec_surface_error",
@@ -118,9 +132,17 @@ fn run_exec_json(request_json: &str) -> Result<String, AkcPyError> {
                 json!({
                     "surface": "pyo3",
                     "error_kind": executor_error_kind(&err),
+                    "exit_code": exit_code,
                 }),
             );
-            return Err(AkcPyError(format!("executor error: {}", err)));
+            ExecResponse {
+                tenant_id,
+                run_id,
+                ok: false,
+                exit_code,
+                stdout: String::new(),
+                stderr: err.to_string(),
+            }
         }
     };
 

@@ -176,6 +176,29 @@ def drift_report(
             baseline = _read_json_object(bpath, what="baseline")
         except FileNotFoundError:
             baseline = {}
+
+        # Baseline "contract" anchoring: compare the manifest.json itself.
+        # This catches cases where sources may be unchanged but the stored
+        # output bundle is stale/corrupt relative to the last accepted baseline.
+        current_manifest_sha = stable_json_fingerprint(manifest)
+        prior_manifest_sha = baseline.get("manifest_sha256")
+        if (
+            isinstance(prior_manifest_sha, str)
+            and prior_manifest_sha
+            and prior_manifest_sha != current_manifest_sha
+        ):
+            findings.append(
+                DriftFinding(
+                    kind="changed_outputs",
+                    severity="high",
+                    details={
+                        "baseline_path": str(bpath),
+                        "previous_manifest_sha256": prior_manifest_sha,
+                        "current_manifest_sha256": current_manifest_sha,
+                    },
+                )
+            )
+
         prior = baseline.get("sources_sha256")
         if isinstance(prior, str) and prior and prior != ingest_fingerprint.sha256:
             findings.append(
@@ -214,6 +237,20 @@ def write_baseline(
     if ingest_fingerprint is not None:
         payload["sources_sha256"] = ingest_fingerprint.sha256
         payload["sources"] = ingest_fingerprint.to_json_obj()
+        # Store best-effort per-source fingerprints so we can compute changed
+        # source sets (used by "living systems" safe recompile).
+        try:
+            state_raw = Path(ingest_fingerprint.state_path).expanduser().read_text(encoding="utf-8")
+            loaded = json.loads(state_raw)
+            if isinstance(loaded, dict):
+                prefix = f"{scope.tenant_id}::"
+                filtered: dict[str, Any] = {
+                    k: v for k, v in loaded.items() if isinstance(k, str) and k.startswith(prefix)
+                }
+                payload["sources_by_key"] = filtered
+        except Exception:
+            # Baseline can still be written and drift detection still works via sources_sha256.
+            pass
 
     # Also record a manifest fingerprint as a cheap “contract” anchor.
     root = Path(outputs_root).expanduser().resolve()

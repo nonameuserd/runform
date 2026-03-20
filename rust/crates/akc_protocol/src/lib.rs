@@ -29,6 +29,10 @@ pub enum ProtocolError {
     InvalidCwd,
     #[error("preopen_dirs is only allowed for wasm lane")]
     PreopenDirsRequiresWasmLane,
+    #[error("allowed_read_paths is unsupported for wasm lane; use preopen_dirs (+ allowed_write_paths for writable mounts)")]
+    WasmLaneUnsupportedReadPaths,
+    #[error("allowed_write_paths for wasm lane must be an explicit subset of preopen_dirs")]
+    WasmLaneWritePathsMustBePreopened,
 }
 
 /// Tenant identifier.
@@ -112,6 +116,7 @@ impl From<RunId> for String {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     pub wall_time_ms: Option<u64>,
+    pub cpu_fuel: Option<u64>,
     pub memory_bytes: Option<u64>,
     pub stdout_max_bytes: Option<u64>,
     pub stderr_max_bytes: Option<u64>,
@@ -379,6 +384,27 @@ impl<'de> Deserialize<'de> for ExecRequest {
                 ProtocolError::PreopenDirsRequiresWasmLane,
             ));
         }
+        if raw.lane == ExecLane::Wasm && !raw.fs_policy.allowed_read_paths.is_empty() {
+            return Err(serde::de::Error::custom(
+                ProtocolError::WasmLaneUnsupportedReadPaths,
+            ));
+        }
+        if raw.lane == ExecLane::Wasm && !raw.fs_policy.allowed_write_paths.is_empty() {
+            let preopens: std::collections::BTreeSet<&String> =
+                raw.fs_policy.preopen_dirs.iter().collect();
+            if preopens.is_empty() {
+                return Err(serde::de::Error::custom(
+                    ProtocolError::WasmLaneWritePathsMustBePreopened,
+                ));
+            }
+            for p in raw.fs_policy.allowed_write_paths.iter() {
+                if !preopens.contains(p) {
+                    return Err(serde::de::Error::custom(
+                        ProtocolError::WasmLaneWritePathsMustBePreopened,
+                    ));
+                }
+            }
+        }
 
         Ok(Self {
             tenant_id: raw.tenant_id,
@@ -448,5 +474,57 @@ mod tests {
         });
         let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
         assert!(err.to_string().contains("wasm lane"));
+    }
+
+    #[test]
+    fn exec_request_deserialize_rejects_read_paths_for_wasm_lane() {
+        let json = serde_json::json!({
+            "tenant_id": "tenant_a",
+            "run_id": "run_1",
+            "lane": { "type": "wasm" },
+            "capabilities": { "network": false },
+            "limits": {},
+            "command": ["hello.wasm"],
+            "fs_policy": {
+                "allowed_read_paths": [test_abs_path_json()],
+            }
+        });
+        let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
+        assert!(err.to_string().contains("allowed_read_paths"));
+    }
+
+    #[test]
+    fn exec_request_deserialize_rejects_write_paths_without_preopen_dirs_for_wasm_lane() {
+        let json = serde_json::json!({
+            "tenant_id": "tenant_a",
+            "run_id": "run_1",
+            "lane": { "type": "wasm" },
+            "capabilities": { "network": false },
+            "limits": {},
+            "command": ["hello.wasm"],
+            "fs_policy": {
+                "allowed_write_paths": [test_abs_path_json()],
+            }
+        });
+        let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
+        assert!(err.to_string().contains("allowed_write_paths"));
+    }
+
+    #[test]
+    fn exec_request_deserialize_rejects_write_paths_outside_preopen_dirs_for_wasm_lane() {
+        let json = serde_json::json!({
+            "tenant_id": "tenant_a",
+            "run_id": "run_1",
+            "lane": { "type": "wasm" },
+            "capabilities": { "network": false },
+            "limits": {},
+            "command": ["hello.wasm"],
+            "fs_policy": {
+                "preopen_dirs": ["/tmp/a"],
+                "allowed_write_paths": ["/tmp/b"],
+            }
+        });
+        let err: serde_json::Error = serde_json::from_value::<ExecRequest>(json).unwrap_err();
+        assert!(err.to_string().contains("allowed_write_paths"));
     }
 }

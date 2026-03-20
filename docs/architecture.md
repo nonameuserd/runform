@@ -6,6 +6,10 @@ This document describes the high-level architecture of the Agentic Knowledge Com
 
 AKC turns messy inputs (docs, messaging, APIs) into executable artifacts (code, workflows, agent specs) through a pipeline: **Ingestion → Memory → Compilation → Outputs**. The compile phase is a loop: Plan → Retrieve → Generate → Execute → Repair, with retrieval from both the structured index and code memory to keep outputs grounded and correct.
 
+Phase A hardening introduces two compiler contracts:
+- **Versioned IR (`src/akc/ir/`)**: a typed, stable intermediate representation (nodes, dependencies, effect annotations, provenance pointers) that becomes the pass boundary between ingestion and compilation.
+- **Run manifest (`src/akc/run/`)**: a replay/audit artifact with IR fingerprint, retrieval snapshots, per-pass records, and replay mode.
+
 ## Flow diagram
 
 ```mermaid
@@ -92,8 +96,55 @@ flowchart LR
 
 - **Unified diff outputs:** LLM backends are expected to return unified diff patches (no prose or Markdown fences) so the controller can deterministically extract touched paths and test files.
 - **Conventional test layout:** Test discovery assumes Python-style layouts (`tests/`, `test_*.py`, `*_test.py`) when enforcing test policies.
-- **Executor sandboxing:** The executor layer is responsible for process isolation, filesystem sandboxing, resource limits, and enforcing tenant boundaries at runtime.
+- **Executor sandboxing:** The executor layer is responsible for process isolation, filesystem sandboxing, resource limits, and enforcing tenant boundaries at runtime. Phase C introduces a Python-side secure sandbox abstraction (`src/akc/execute/`) and passes an optional `run_id` to the sandbox (`ExecutionRequest.run_id`) so sandboxes can namespace per-run state (e.g. HOME/XDG dirs) without cross-run contamination.
 - **Budget configuration:** Callers must provide a `ControllerConfig` with appropriate budgets (LLM calls, repairs, wall-clock limits); the controller treats these as hard constraints.
+
+#### 4.3 Compiler spine contracts (IR + run manifest)
+
+- **IR schema + versioning:** `IRDocument` and `IRNode` define a deterministic JSON shape (`schema_kind`, `schema_version`, `format_version`) with stable node IDs, sorted serialization, and tenant-scoped provenance pointers.
+- **IR diffing:** `diff_ir` produces audit-friendly `added`/`removed`/`changed` node IDs for safe review and targeted recompilation.
+- **Run manifest format:** `RunManifest` captures run scope (`tenant_id`, `repo_id`), `ir_sha256`, retrieval snapshots, pass records, and model parameters; `stable_hash()` gives deterministic fingerprints for CI/eval anchoring.
+- **Replay modes:** `live`, `llm_vcr`, `full_replay`, and `partial_replay` are represented explicitly and resolved to model/tool call policy in `decide_replay_for_pass`.
+- **Tenant isolation:** IR nodes and provenance are validated against a single `tenant_id`; manifests are always tenant+repo scoped, preventing cross-tenant replay artifacts.
+
+#### 4.4 Observability and provenance artifacts (control-plane contract)
+
+Compile emits control-plane-friendly artifacts under:
+`<outputs-root>/<tenant-id>/<repo-id>/`
+
+Run-level artifacts:
+- `.akc/run/<run_id>.manifest.json`
+- `.akc/run/<run_id>.spans.json`
+- `.akc/run/<run_id>.costs.json`
+- `.akc/run/<run_id>.log.txt`
+
+IR and policy artifacts:
+- `.akc/ir/<run_id>.json`
+- `.akc/ir/<run_id>.diff.json` (when a prior IR exists)
+- `.akc/policy/<run_id>_<step_id>.decisions.json` (when policy decisions exist)
+
+Execution/test artifacts:
+- `.akc/tests/<run_id>_<step_id>.smoke.json`
+- `.akc/tests/<run_id>_<step_id>.full.json`
+- `.akc/tests/<run_id>_<step_id>.stdout.txt`
+- `.akc/tests/<run_id>_<step_id>.stderr.txt`
+
+Trace span contract (OpenTelemetry-compatible shape):
+- **Hierarchy:** `compile.run` -> `compile.step` -> `compile.retrieve` / `compile.llm.complete` / `compile.executor.*` / `compile.verify`
+- **Fields:** `trace_id`, `span_id`, `parent_span_id`, `name`, `kind`,
+  `start_time_unix_nano`, `end_time_unix_nano`, `attributes`, `status`
+- **Compatibility note:** Span JSON is stored as plain objects so control planes can ingest directly into OTel pipelines or transform to OTLP.
+
+Cost attribution contract:
+- **Scope fields:** `tenant_id`, `repo_id`, `run_id`
+- **Usage fields:** `llm_calls`, `tool_calls`, `input_tokens`, `output_tokens`, `total_tokens`
+- **Loop fields:** `repair_iterations`, `wall_time_ms`
+- **Budget echo:** `budget` from `ControllerConfig` for per-run budget auditability
+
+Tenant-isolation impact:
+- All artifact paths are scoped by tenant+repo.
+- Trace and cost records include tenant+repo identifiers.
+- Policy decisions and run manifests are never shared across scopes, so control-plane attribution remains tenant-safe by construction.
 
 ### 5. Outputs (`src/akc/outputs/`)
 
@@ -119,6 +170,12 @@ Security model alignment:
 - Execution is defense-in-depth with two sandbox lanes:
   - WASM (Wasmtime + WASI Preview 1) with capability-based host interfaces.
   - OS process sandbox with per-run working directories, env scrubbing, and resource limits.
+- Compile adds a WASM preflight before execution:
+  - verifies the Rust/Wasmtime execution surface is available when WASM is requested
+  - rejects unsupported strict/enforced platform combinations before the controller starts running tests
+- Platform capability note:
+  - Linux and macOS currently support strict compile-time WASM guarantees
+  - Windows currently does not support WASM wall-time enforcement, so strict/enforced compile runs fail closed instead of degrading
 - Logs and outputs include tenant/run correlation ids and avoid cross-tenant leakage.
 
 See [docs/security.md](security.md) for the threat model and tenant isolation guarantees.

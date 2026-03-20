@@ -12,6 +12,10 @@ mod util;
 mod windows_job;
 
 pub use error::ExecutorError;
+pub const WASM_EXIT_TIMEOUT: i32 = 124;
+pub const WASM_EXIT_CPU_FUEL_EXHAUSTED: i32 = 137;
+pub const WASM_EXIT_MEMORY_LIMIT_EXCEEDED: i32 = 138;
+pub const WASM_EXIT_UNSUPPORTED_PLATFORM_CAPABILITY: i32 = 78;
 
 use akc_protocol::observability::{log_event, LogLevel};
 use akc_protocol::{ExecLane, ExecRequest, ExecResponse, RunId, TenantId};
@@ -44,7 +48,11 @@ pub fn run_exec(request: ExecRequest) -> Result<ExecResponse, ExecutorError> {
             "lane": lane,
             "program": program_id,
             "network_requested": request.capabilities.network,
+            "allowed_read_paths": request.fs_policy.allowed_read_paths,
+            "allowed_write_paths": request.fs_policy.allowed_write_paths,
+            "preopen_dirs": request.fs_policy.preopen_dirs,
             "wall_time_ms": request.limits.wall_time_ms,
+            "cpu_fuel": request.limits.cpu_fuel,
             "memory_bytes": request.limits.memory_bytes,
             "stdout_max_bytes": request.limits.stdout_max_bytes,
             "stderr_max_bytes": request.limits.stderr_max_bytes,

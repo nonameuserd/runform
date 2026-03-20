@@ -7,6 +7,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from akc.compile.interfaces import ExecutionRequest, ExecutionResult, TenantRepoScope
@@ -19,6 +20,66 @@ ExecLane = Literal["process", "wasm"]
 _TENANT_ID_ALLOWED_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 )
+_WASM_ERROR_PREFIX = "AKC_WASM_ERROR "
+_WASM_ERROR_CODE_BY_EXIT_CODE: dict[int, str] = {
+    78: "WASM_UNSUPPORTED_PLATFORM_CAPABILITY",
+    124: "WASM_TIMEOUT",
+    137: "WASM_CPU_FUEL_EXHAUSTED",
+    138: "WASM_MEMORY_LIMIT_EXCEEDED",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class WasmExecError:
+    """Structured WASM runtime error parsed from Rust stderr marker."""
+
+    code: str
+    exit_code: int
+    message: str
+
+
+def _parse_wasm_error(stderr_text: str, *, exit_code: int) -> WasmExecError | None:
+    if not stderr_text:
+        return None
+    first_line = stderr_text.splitlines()[0].strip()
+    if not first_line.startswith(_WASM_ERROR_PREFIX):
+        return None
+    payload = first_line[len(_WASM_ERROR_PREFIX) :].strip()
+    message_idx = payload.find("message=")
+    head = payload if message_idx < 0 else payload[:message_idx].strip()
+    message = "" if message_idx < 0 else payload[message_idx + len("message=") :].strip()
+    fields: dict[str, str] = {}
+    for token in head.split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        fields[key.strip()] = value.strip()
+    code = fields.get("code")
+    marker_exit_code = fields.get("exit_code")
+    if not code or not marker_exit_code or message is None:
+        return None
+    try:
+        marker_exit_code_i = int(marker_exit_code)
+    except ValueError:
+        return None
+    # Guard against accidental ambiguity: marker and envelope must agree.
+    if marker_exit_code_i != int(exit_code):
+        return None
+    return WasmExecError(code=code, exit_code=marker_exit_code_i, message=message)
+
+
+def _ensure_wasm_error_marker(stderr_text: str, *, exit_code: int) -> str:
+    """Ensure stable first-line WASM marker for machine parsing and policy checks."""
+    if _parse_wasm_error(stderr_text, exit_code=exit_code) is not None:
+        return stderr_text
+    wasm_code = _WASM_ERROR_CODE_BY_EXIT_CODE.get(int(exit_code))
+    if wasm_code is None:
+        return stderr_text
+    message = stderr_text.splitlines()[0].strip() if stderr_text else "wasm execution failed"
+    marker = f"{_WASM_ERROR_PREFIX}code={wasm_code} exit_code={int(exit_code)} message={message}"
+    if not stderr_text:
+        return marker
+    return f"{marker}\n{stderr_text}"
 
 
 def _validate_tenant_id(tenant_id: str) -> None:
@@ -44,6 +105,60 @@ def _validate_fs_policy_paths(paths: tuple[str, ...], *, field_name: str) -> Non
         parts = [p for p in raw.replace("\\", "/").split("/") if p]
         if any(p in {".", ".."} for p in parts):
             raise ValueError(f"{field_name} entries must not contain '.' or '..': {raw!r}")
+
+
+def _validate_wasm_fs_policy_contract(cfg: RustExecConfig) -> None:
+    if cfg.lane != "wasm":
+        return
+    if cfg.allowed_read_paths:
+        raise ValueError(
+            "allowed_read_paths are unsupported for wasm lane; use preopen_dirs "
+            "and optionally allowed_write_paths for writable mounts"
+        )
+    if cfg.allowed_write_paths:
+        preopens = set(cfg.preopen_dirs)
+        if not preopens:
+            raise ValueError(
+                "allowed_write_paths for wasm lane require explicit preopen_dirs mapping"
+            )
+        for path in cfg.allowed_write_paths:
+            if path not in preopens:
+                raise ValueError(
+                    "allowed_write_paths for wasm lane must be a subset of preopen_dirs"
+                )
+
+
+def _normalize_wasm_fs_policy_paths(
+    cfg: RustExecConfig,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if cfg.lane != "wasm" or not cfg.wasm_normalize_existing_paths:
+        return cfg.preopen_dirs, cfg.allowed_write_paths
+
+    strict = bool(cfg.wasm_normalization_strict)
+
+    def _normalize(raw: str, *, field_name: str) -> str:
+        path_obj = Path(raw)
+        try:
+            return str(path_obj.resolve(strict=True))
+        except FileNotFoundError as exc:
+            if strict:
+                raise ValueError(
+                    f"{field_name} entry does not exist for strict wasm normalization: {raw!r}"
+                ) from exc
+            return raw
+        except OSError as exc:
+            if strict:
+                raise ValueError(
+                    f"{field_name} entry could not be canonicalized for strict wasm "
+                    f"normalization: {raw!r}"
+                ) from exc
+            return raw
+
+    normalized_preopens = tuple(_normalize(p, field_name="preopen_dirs") for p in cfg.preopen_dirs)
+    normalized_writes = tuple(
+        _normalize(p, field_name="allowed_write_paths") for p in cfg.allowed_write_paths
+    )
+    return normalized_preopens, normalized_writes
 
 
 def _emit(level: str, event: str, **fields: object) -> None:
@@ -110,6 +225,7 @@ class RustExecConfig:
     # Optional output/memory limits. For v1 we plumb these through to the Rust
     # executor, even though the controller may not yet provide all knobs.
     memory_bytes: int | None = None
+    cpu_fuel: int | None = None
     stdout_max_bytes: int | None = None
     stderr_max_bytes: int | None = None
     # Filesystem capabilities/policy.
@@ -121,6 +237,14 @@ class RustExecConfig:
     # Only meaningful for the WASM lane (WASI preopened directories). For process lane,
     # Rust will reject non-empty values at deserialize time.
     preopen_dirs: tuple[str, ...] = ()
+    # Optional WASM fs policy ergonomics:
+    # when enabled, existing paths are canonicalized in the bridge before subset checks
+    # and before payload emission.
+    wasm_normalize_existing_paths: bool = False
+    # Strict profile behavior for normalization:
+    # - True: missing/unresolvable paths are rejected in Python (fail-closed)
+    # - False: unresolved paths are kept as-is and enforced later by Rust
+    wasm_normalization_strict: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,14 +310,37 @@ def _request_from_scope_and_execution(
     """Translate the existing ExecutionRequest into the akc_protocol ExecRequest schema."""
 
     _validate_tenant_id(scope.tenant_id)
+    if cfg.cpu_fuel is not None and int(cfg.cpu_fuel) <= 0:
+        raise ValueError("cpu_fuel must be > 0 when set")
     _validate_fs_policy_paths(cfg.allowed_read_paths, field_name="allowed_read_paths")
     _validate_fs_policy_paths(cfg.allowed_write_paths, field_name="allowed_write_paths")
     _validate_fs_policy_paths(cfg.preopen_dirs, field_name="preopen_dirs")
+    normalized_preopens, normalized_writes = _normalize_wasm_fs_policy_paths(cfg)
+    wasm_cfg = RustExecConfig(
+        mode=cfg.mode,
+        lane=cfg.lane,
+        exec_bin=cfg.exec_bin,
+        ingest_bin=cfg.ingest_bin,
+        allow_network=cfg.allow_network,
+        memory_bytes=cfg.memory_bytes,
+        cpu_fuel=cfg.cpu_fuel,
+        stdout_max_bytes=cfg.stdout_max_bytes,
+        stderr_max_bytes=cfg.stderr_max_bytes,
+        allowed_read_paths=cfg.allowed_read_paths,
+        allowed_write_paths=normalized_writes,
+        preopen_dirs=normalized_preopens,
+        wasm_normalize_existing_paths=cfg.wasm_normalize_existing_paths,
+        wasm_normalization_strict=cfg.wasm_normalization_strict,
+    )
+    _validate_wasm_fs_policy_contract(wasm_cfg)
 
-    # For v1, we use the existing tenant_id as-is and generate a fresh, UUID-like
-    # run_id for each execution. The shape here must stay in lockstep with
-    # `akc_protocol::ExecRequest`.
-    run_id = uuid.uuid4().hex
+    # For v1, we use the existing tenant_id as-is.
+    #
+    # Prefer caller-provided run_id so the execution namespace can be correlated
+    # across surfaces (Python executor, Rust executor, evidence artifacts).
+    # When omitted, fall back to a fresh UUID-like value.
+    requested_run_id = getattr(request, "run_id", None)
+    run_id = str(requested_run_id).strip() if requested_run_id else uuid.uuid4().hex
 
     return {
         "tenant_id": scope.tenant_id,
@@ -207,6 +354,7 @@ def _request_from_scope_and_execution(
             if request.timeout_s is not None
             else None,
             "memory_bytes": cfg.memory_bytes,
+            "cpu_fuel": cfg.cpu_fuel,
             "stdout_max_bytes": cfg.stdout_max_bytes,
             "stderr_max_bytes": cfg.stderr_max_bytes,
         },
@@ -219,8 +367,8 @@ def _request_from_scope_and_execution(
         # Keep CLI vs PyO3 parity: always emit the same JSON payload shape.
         "fs_policy": {
             "allowed_read_paths": list(cfg.allowed_read_paths),
-            "allowed_write_paths": list(cfg.allowed_write_paths),
-            "preopen_dirs": list(cfg.preopen_dirs),
+            "allowed_write_paths": list(normalized_writes),
+            "preopen_dirs": list(normalized_preopens),
         },
     }
 
@@ -298,6 +446,7 @@ def run_exec_via_cli(
         program=program,
         network_requested=network_requested,
         wall_time_ms=limits.get("wall_time_ms"),
+        cpu_fuel=limits.get("cpu_fuel"),
         stdout_max_bytes=limits.get("stdout_max_bytes"),
         stderr_max_bytes=limits.get("stderr_max_bytes"),
     )
@@ -329,10 +478,9 @@ def run_exec_via_cli(
             duration_ms=None,
         )
 
-    # When the Rust executor succeeds (exit code 0), it should emit an `ExecResponse`
-    # JSON object on stdout. We prefer that structured result over the raw CLI status,
-    # while still retaining meaningful non-zero exit codes for validation/policy errors.
-    if proc.returncode == 0 and proc.stdout:
+    # Prefer a structured `ExecResponse` whenever the CLI emitted one, even on
+    # non-zero exits for policy/validation/internal executor failures.
+    if proc.stdout:
         try:
             response = json.loads(proc.stdout)
         except json.JSONDecodeError:
@@ -355,7 +503,7 @@ def run_exec_via_cli(
             )
 
         ok = bool(response.get("ok", False))
-        exit_code = int(response.get("exit_code", 0))
+        exit_code = int(response.get("exit_code", proc.returncode))
         stdout_val = str(response.get("stdout", ""))
         stderr_val = str(response.get("stderr", ""))
         _emit(
@@ -369,6 +517,20 @@ def run_exec_via_cli(
             stdout_bytes=len(stdout_val),
             stderr_bytes=len(stderr_val),
         )
+        if cfg.lane == "wasm":
+            stderr_val = _ensure_wasm_error_marker(stderr_val, exit_code=exit_code)
+        wasm_error = _parse_wasm_error(stderr_val, exit_code=exit_code)
+        if wasm_error is not None:
+            _emit(
+                "warn",
+                "exec_wasm_error",
+                surface="cli",
+                tenant_id=scope.tenant_id,
+                run_id=run_id,
+                wasm_error_code=wasm_error.code,
+                wasm_error_exit_code=wasm_error.exit_code,
+                wasm_error_message=wasm_error.message,
+            )
 
         return ExecutionResult(
             exit_code=exit_code,
@@ -425,6 +587,7 @@ def run_exec_via_pyo3(
         program=program,
         network_requested=network_requested,
         wall_time_ms=limits.get("wall_time_ms"),
+        cpu_fuel=limits.get("cpu_fuel"),
         stdout_max_bytes=limits.get("stdout_max_bytes"),
         stderr_max_bytes=limits.get("stderr_max_bytes"),
     )
@@ -446,6 +609,20 @@ def run_exec_via_pyo3(
         stdout_bytes=len(stdout_val),
         stderr_bytes=len(stderr_val),
     )
+    if cfg.lane == "wasm":
+        stderr_val = _ensure_wasm_error_marker(stderr_val, exit_code=exit_code)
+    wasm_error = _parse_wasm_error(stderr_val, exit_code=exit_code)
+    if wasm_error is not None:
+        _emit(
+            "warn",
+            "exec_wasm_error",
+            surface="pyo3",
+            tenant_id=scope.tenant_id,
+            run_id=run_id,
+            wasm_error_code=wasm_error.code,
+            wasm_error_exit_code=wasm_error.exit_code,
+            wasm_error_message=wasm_error.message,
+        )
 
     return ExecutionResult(
         exit_code=exit_code,

@@ -34,7 +34,92 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies (dev, includes semantic-release)
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
+
+      - name: Security gate (dependency vulns + SBOM)
+        run: |
+          set -euo pipefail
+          mkdir -p ./.tmp
+          uv export \
+            --format requirements.txt \
+            --extra dev \
+            --frozen \
+            --no-emit-project \
+            --no-hashes \
+            -o ./.tmp/requirements.txt
+          # Vulnerability scanning gate before any release publishing.
+          uv run pip-audit \
+            -r ./.tmp/requirements.txt \
+            -f cyclonedx-json \
+            -o ./.tmp/python-deps-vuln.sbom.cdx.json \
+            --progress-spinner off
+
+      - name: Verify Docker capability
+        run: |
+          set -euo pipefail
+          docker version
+          docker info
+
+      - name: Build Docker compile test image
+        run: |
+          set -euo pipefail
+          dockerfile="${RUNNER_TEMP}/Dockerfile.akc-release-pytest"
+          cat > "${dockerfile}" <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN python -m pip install --no-cache-dir pytest
+          DOCKERFILE
+          docker build -t akc-release-pytest:latest -f "${dockerfile}" "${RUNNER_TEMP}"
+
+      - name: Seed approved repo for enforced Docker compile
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/docker-release-compile-out"
+          repo_root="${root}/tenant-release/repo-prod/tenant-release/repo-prod"
+          mkdir -p "${repo_root}/src" "${repo_root}/tests"
+          : > "${repo_root}/src/__init__.py"
+          printf 'VALUE = 1\n' > "${repo_root}/src/module.py"
+          printf 'from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n' > "${repo_root}/tests/test_module.py"
+          export AKC_DOCKER_COMPILE_ROOT="${root}"
+          uv run python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from akc.memory.facade import build_memory
+
+          outputs_root = Path(os.environ["AKC_DOCKER_COMPILE_ROOT"])
+          base = outputs_root / "tenant-release" / "repo-prod"
+          memory_db = base / ".akc" / "memory.sqlite"
+          memory_db.parent.mkdir(parents=True, exist_ok=True)
+          mem = build_memory(backend="sqlite", sqlite_path=str(memory_db))
+          plan = mem.plan_state.create_plan(
+              tenant_id="tenant-release",
+              repo_id="repo-prod",
+              goal="Compile repository",
+              initial_steps=["Run tests"],
+          )
+          mem.plan_state.set_active_plan(
+              tenant_id="tenant-release",
+              repo_id="repo-prod",
+              plan_id=plan.id,
+          )
+          PY
+
+      - name: Enforce Docker strong compile policy
+        run: |
+          set -euo pipefail
+          uv run akc compile \
+            --tenant-id tenant-release \
+            --repo-id repo-prod \
+            --outputs-root "${RUNNER_TEMP}/docker-release-compile-out" \
+            --sandbox strong \
+            --strong-lane-preference docker \
+            --policy-mode enforce \
+            --opa-policy-path ./configs/policy/compile_tools_prod.rego \
+            --docker-image akc-release-pytest:latest \
+            --docker-ulimit-nofile 1024:2048 \
+            --docker-ulimit-nproc 256 \
+            --docker-seccomp-profile runtime/default \
+            --docker-apparmor-profile docker-default
 
       - name: Compute next release tag
         id: next_tag
@@ -89,7 +174,7 @@ jobs:
           format: spdx-json
           output-file: python-dist.sbom.spdx.json
           artifact-name: python-dist.sbom
-          upload-release-assets: false
+          upload-release-assets: true
 
       - name: Prepare SLSA subjects (base64)
         id: subjects
@@ -125,7 +210,7 @@ jobs:
           format: spdx-json
           output-file: akc-exec.sbom.spdx.json
           artifact-name: akc-exec.sbom
-          upload-release-assets: false
+          upload-release-assets: true
 
       - name: SBOM (akc-ingest)
         uses: anchore/sbom-action@v0
@@ -134,7 +219,7 @@ jobs:
           format: spdx-json
           output-file: akc-ingest.sbom.spdx.json
           artifact-name: akc-ingest.sbom
-          upload-release-assets: false
+          upload-release-assets: true
 
   slsa-provenance:
     needs: [release, rust-integrity]
@@ -144,4 +229,3 @@ jobs:
       provenance-name: akc-rust.intoto.jsonl
       upload-assets: true
       upload-tag-name: ${{ needs.release.outputs.tag }}
-

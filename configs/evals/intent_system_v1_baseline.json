@@ -1,0 +1,12 @@
+{
+  "suite_version": "intent-system-v1",
+  "passed": true,
+  "summary": {
+    "success_rate": 1.0,
+    "avg_repair_iterations": 0.5,
+    "avg_wall_time_ms": 110.0
+  },
+  "tasks": [],
+  "gate_violations": []
+}
+

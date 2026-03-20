@@ -1,7 +1,7 @@
 """Compilation (Phase 2/3): plan → retrieve → generate → execute → repair."""
 
 from akc.compile.controller import ControllerResult, run_compile_loop
-from akc.compile.controller_config import Budget, ControllerConfig, TierConfig
+from akc.compile.controller_config import Budget, ControllerConfig, CostRates, TierConfig
 from akc.compile.execute.rust_executor import RustExecutor
 from akc.compile.executors import DockerExecutor, SubprocessExecutor
 from akc.compile.interfaces import (
@@ -27,6 +27,7 @@ __all__ = [
     "CompileSession",
     "ControllerConfig",
     "ControllerResult",
+    "CostRates",
     "DockerExecutor",
     "Executor",
     "Index",

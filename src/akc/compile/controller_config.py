@@ -20,6 +20,30 @@ TestMode: TypeAlias = Literal["smoke", "full"]
 
 
 @dataclass(frozen=True, slots=True)
+class CostRates:
+    """Provider/tool billing rates used for deterministic cost accounting."""
+
+    input_per_1k_tokens_usd: float = 0.0
+    output_per_1k_tokens_usd: float = 0.0
+    tool_call_usd: float = 0.0
+
+    def __post_init__(self) -> None:
+        if float(self.input_per_1k_tokens_usd) < 0:
+            raise ValueError("cost_rates.input_per_1k_tokens_usd must be >= 0")
+        if float(self.output_per_1k_tokens_usd) < 0:
+            raise ValueError("cost_rates.output_per_1k_tokens_usd must be >= 0")
+        if float(self.tool_call_usd) < 0:
+            raise ValueError("cost_rates.tool_call_usd must be >= 0")
+
+    def to_json_obj(self) -> dict[str, JSONValue]:
+        return {
+            "input_per_1k_tokens_usd": float(self.input_per_1k_tokens_usd),
+            "output_per_1k_tokens_usd": float(self.output_per_1k_tokens_usd),
+            "tool_call_usd": float(self.tool_call_usd),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Budget:
     """A bounded budget for controller operations.
 
@@ -35,6 +59,9 @@ class Budget:
     max_repairs_per_step: int = 3
     # Total (generate+repair) iterations allowed for a single plan step.
     max_iterations_total: int = 5
+    max_tool_calls: int | None = None
+    max_input_tokens: int | None = None
+    max_total_tokens: int | None = None
     max_output_tokens: int | None = None
     max_wall_time_s: float | None = None
     max_cost_usd: float | None = None
@@ -54,6 +81,12 @@ class Budget:
             raise ValueError("max_repairs_per_step must be >= 0")
         if int(self.max_iterations_total) <= 0:
             raise ValueError("max_iterations_total must be > 0")
+        if self.max_tool_calls is not None and int(self.max_tool_calls) < 0:
+            raise ValueError("max_tool_calls must be >= 0 when set")
+        if self.max_input_tokens is not None and int(self.max_input_tokens) <= 0:
+            raise ValueError("max_input_tokens must be > 0 when set")
+        if self.max_total_tokens is not None and int(self.max_total_tokens) <= 0:
+            raise ValueError("max_total_tokens must be > 0 when set")
         if self.max_output_tokens is not None and int(self.max_output_tokens) <= 0:
             raise ValueError("max_output_tokens must be > 0 when set")
         if self.max_wall_time_s is not None and float(self.max_wall_time_s) <= 0:
@@ -76,6 +109,13 @@ class Budget:
             else None,
             "max_repairs_per_step": int(self.max_repairs_per_step),
             "max_iterations_total": int(self.max_iterations_total),
+            "max_tool_calls": int(self.max_tool_calls) if self.max_tool_calls is not None else None,
+            "max_input_tokens": int(self.max_input_tokens)
+            if self.max_input_tokens is not None
+            else None,
+            "max_total_tokens": int(self.max_total_tokens)
+            if self.max_total_tokens is not None
+            else None,
             "max_output_tokens": int(self.max_output_tokens)
             if self.max_output_tokens is not None
             else None,
@@ -137,6 +177,14 @@ class ControllerConfig:
     verifier_enabled: bool = True
     # If strict, any verifier finding vetoes. If relaxed, only errors veto.
     verifier_strict: bool = True
+    # Phase hardening: default-deny tool authorization + explicit allowlist.
+    policy_mode: Literal["audit_only", "enforce"] = "enforce"
+    tool_allowlist: tuple[str, ...] = ()
+    # First-class rates for deterministic cost accounting.
+    cost_rates: CostRates = CostRates()
+    # Optional OPA/Rego policy integration.
+    opa_policy_path: str | None = None
+    opa_decision_path: str = "data.akc.allow"
     metadata: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -167,6 +215,14 @@ class ControllerConfig:
             raise ValueError("verifier_enabled must be a bool")
         if not isinstance(self.verifier_strict, bool):
             raise ValueError("verifier_strict must be a bool")
+        if self.policy_mode not in {"audit_only", "enforce"}:
+            raise ValueError("policy_mode must be one of: audit_only, enforce")
+        if any(not isinstance(a, str) or not a.strip() for a in self.tool_allowlist):
+            raise ValueError("tool_allowlist must contain non-empty action names")
+        if self.opa_policy_path is not None and not str(self.opa_policy_path).strip():
+            raise ValueError("opa_policy_path must be non-empty when set")
+        if not isinstance(self.opa_decision_path, str) or not self.opa_decision_path.strip():
+            raise ValueError("opa_decision_path must be non-empty")
 
     def tier_for_stage(self, *, stage: Stage) -> TierConfig:
         """Resolve the tier config for a stage, defaulting conservatively."""

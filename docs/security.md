@@ -67,9 +67,82 @@ Capabilities must be:
 - logged by correlation id (tenant/run) without logging sensitive payloads
 - validated before any process starts or any untrusted code runs
 
+## Secrets scoping (per-tenant)
+
+AKC supports tenant-scoped secrets injection into the execution sandbox via
+an optional “secrets scope” configuration.
+
+The sandbox injector follows a simple host-env convention:
+- Host environment variables expected:
+  - `AKC_SECRET_{tenant_id}_{secret_name}`
+- Secrets injected into the sandbox environment as:
+  - `AKC_SECRET_{secret_name}`
+
+Only secrets whose `tenant_id` matches the active request `tenant_id` are
+injected; other tenants' secret keys are ignored. Secrets are injected at
+sandbox launch time and are treated as sensitive data (AKC should avoid
+logging raw secret values).
+
 ## Execution sandbox: two lanes (defense-in-depth)
 
 AKC's executor supports two isolation strategies and chooses per task:
+- In CLI `--sandbox strong`, backend selection is configurable with
+  `--strong-lane-preference docker|wasm|auto`; default is `docker`.
+
+### Strong Docker lane (default for CLI `--sandbox strong`)
+
+The default strong lane in the CLI is Docker, not the native process backend.
+When Docker is selected, AKC assembles `docker run` with the following defaults:
+
+- `--network none`
+- `--memory 1073741824` (`--sandbox-memory-mb 1024`)
+- `--pids-limit 256` (`--docker-pids-limit 256`)
+- `--user 65532:65532` unless `--docker-user` is supplied
+- `--tmpfs /tmp` unless one or more `--docker-tmpfs` flags are supplied
+- `--read-only`
+- `--security-opt no-new-privileges`
+- `--cap-drop ALL`
+- stdout/stderr capture capped at `2048 KiB` each (`--sandbox-stdout-max-kb`, `--sandbox-stderr-max-kb`)
+
+Optional Docker hardening flags exposed by the CLI:
+
+- `--docker-user`
+- `--docker-tmpfs` (repeatable)
+- `--docker-seccomp-profile`
+- `--docker-apparmor-profile`
+- `--docker-ulimit-nofile`
+- `--docker-ulimit-nproc`
+- `--docker-cpus`
+
+Docker hardening preflight is fail-closed when Docker-specific controls are
+requested. AKC rejects the run before launch when:
+
+- Docker-only flags are used outside `--sandbox strong`
+- `--strong-lane-preference wasm` is selected with Docker-only flags
+- `--strong-lane-preference auto` would fall back away from Docker while Docker-only hardening is configured
+- tmpfs, user, seccomp/AppArmor identifiers, or ulimits are malformed
+- an absolute `--docker-seccomp-profile` path does not exist or is not a file
+- `--docker-apparmor-profile` is requested on a host without AppArmor support
+
+Docker strong guarantees by host/runtime:
+
+| Scope | Enforced by AKC | Enforced by runtime | Best-effort / platform notes |
+| --- | --- | --- | --- |
+| Lane selection | Docker-specific hardening is rejected unless Docker strong can actually apply it | N/A | `auto` is only acceptable when no Docker-specific control would be dropped |
+| Command shape | AKC validates and assembles `--user`, `--tmpfs`, `--security-opt`, `--ulimit`, `--read-only`, `--cap-drop ALL` deterministically | Docker receives the exact flags AKC emits | None once launch begins |
+| Network | `--sandbox-allow-network` defaults to deny | `--network none` blocks container egress | Any allowed-network exception must come from policy/config, not fallback behavior |
+| Rootfs and temp writes | `--read-only` and tmpfs mounts are requested by default | Docker enforces read-only rootfs and writable tmpfs paths | Runtime semantics depend on the container runtime's Linux kernel boundary |
+| Privilege reduction | Non-root user default, `no-new-privileges`, `cap-drop ALL` | Docker/kernel enforce the configured user and privilege flags | Images that assume root may fail to start; this is expected, not a silent downgrade |
+| Seccomp | AKC validates identifier syntax and absolute-path existence | Docker applies the default profile or the configured `seccomp=...` profile | Effective syscall filtering is runtime-defined; verify on the target Docker Engine/kernel |
+| AppArmor | AKC fails closed if profile is requested on an unsupported host | Docker applies `apparmor=...` only on Linux hosts with AppArmor enabled | Not portable to Docker Desktop/macOS/Windows hosts |
+| Resource limits | AKC validates requested values | Docker applies memory, PID, CPU, and ulimit controls | Exact enforcement quality depends on the host runtime/cgroup environment |
+| Output caps | AKC captures stdout/stderr with configured byte caps | N/A | Large output can still consume runtime resources before capture is truncated |
+
+Operational guidance:
+
+- Prefer `--strong-lane-preference docker` for production hardening. It fails closed when Docker is unavailable.
+- Use `--strong-lane-preference auto` only during migration when WASM fallback is acceptable and no Docker-specific hardening flag is required.
+- Prefer Linux Docker Engine for production attestations. Docker Desktop on macOS/Windows still receives the same flags, but enforcement happens inside the Linux VM and AppArmor is generally unavailable.
 
 ### Lane A: WASM execution (portable, capability-based)
 
@@ -86,11 +159,93 @@ Default restrictions:
 - filesystem is denied (no preopened directories)
 - network is denied (no host networking exposed)
 
+WASM filesystem contract:
+- explicit preopens are required for any guest filesystem access
+- no implicit host filesystem exposure is allowed
+- `allowed_read_paths` is rejected for WASM lane (use `preopen_dirs`)
+- `allowed_write_paths` must be an explicit subset of `preopen_dirs`
+- top-level `akc compile` exposes WASM filesystem flags:
+  - `--wasm-preopen-dir <ABS_DIR>` (repeatable)
+  - `--wasm-allow-write-dir <ABS_DIR>` (repeatable, subset of preopens)
+  - these flags require explicit WASM lane selection and are not applied to docker/process lanes
+
+WASM path-normalization controls (CLI):
+- `--wasm-fs-normalize-existing-paths` canonicalizes existing `preopen_dirs` and
+  `allowed_write_paths` before subset validation and request emission.
+- `--wasm-fs-normalization-profile strict|relaxed` controls unresolved paths:
+  - `strict` (default): fail closed on missing/unresolvable paths.
+  - `relaxed`: keep unresolved paths as-is and defer final enforcement to Rust runtime.
+
+Recommended profile guidance:
+- **production / policy-enforced runs**: use normalization with strict profile.
+  - Example:
+    `akc compile --sandbox strong --strong-lane-preference wasm --wasm-fs-normalize-existing-paths --wasm-fs-normalization-profile strict ...`
+- **developer convenience / migration**: use normalization with relaxed profile when
+  path aliases or symlink spellings are common and strict canonicalization would
+  cause friction.
+  - Example:
+    `akc compile --sandbox strong --strong-lane-preference wasm --wasm-fs-normalize-existing-paths --wasm-fs-normalization-profile relaxed ...`
+
 Limits enforced by the host:
-- **wall-clock timeout** (epoch interruption)
-- **CPU budgets** (fuel)
-- **maximum stdout/stderr bytes** (in-memory capped pipes)
-- **memory limits**: best-effort today (WASM uses Wasmtime limits for CPU/time/output; explicit linear-memory caps are not currently the primary control boundary)
+- **wall-clock timeout**: elapsed-time deadline via Wasmtime epoch interruption on supported platforms
+- **CPU budgets**: deterministic fuel cap from `cpu_fuel` when provided
+- **maximum stdout/stderr bytes**: in-memory capped pipes
+- **memory limits**: explicit Wasmtime linear memory cap when `memory_bytes` is provided
+
+Deterministic WASM limits contract:
+- `wall_time_ms`:
+  - when set, AKC arms a real elapsed-time deadline using Wasmtime epoch interruption.
+  - on timeout, execution traps with `WASM_TIMEOUT` instead of being inferred from fuel exhaustion.
+  - Windows remains fail-closed for strict/prod compile runs because this guarantee is not supported there.
+- `cpu_fuel`:
+  - when set, applied as an explicit fuel budget with deterministic clamp:
+    - `cpu_fuel_budget = clamp(cpu_fuel, 1, 2_000_000_000)`
+  - `cpu_fuel` is independent of `wall_time_ms`; when both are set, the first boundary reached wins:
+    - elapsed-time deadline -> `WASM_TIMEOUT`
+    - CPU/fuel budget -> `WASM_CPU_FUEL_EXHAUSTED`
+  - this keeps timeout and CPU exhaustion policy-friendly and unambiguous.
+- `memory_bytes`:
+  - when set, applied as a Wasmtime store linear-memory limit (fail-closed on limit exceed).
+  - when unset, no explicit linear-memory cap is requested by AKC.
+- `stdout_max_bytes` / `stderr_max_bytes`:
+  - each stream is captured with a deterministic in-memory cap.
+  - default per-stream cap is `1 MiB` when not specified.
+
+Deterministic WASM error semantics (stable for policy/tests):
+- WASM lane emits a machine-readable first stderr line:
+  - `AKC_WASM_ERROR code=<CODE> exit_code=<N> message=<TEXT>`
+- Stable error codes and exit codes:
+  - timeout: `WASM_TIMEOUT` -> exit code `124`
+  - cpu/fuel exhaustion: `WASM_CPU_FUEL_EXHAUSTED` -> exit code `137`
+  - memory limit exceeded: `WASM_MEMORY_LIMIT_EXCEEDED` -> exit code `138`
+  - unsupported platform capability: `WASM_UNSUPPORTED_PLATFORM_CAPABILITY` -> exit code `78`
+- Windows note:
+  - wall-time limit requests in WASM lane are currently unsupported and return
+    `WASM_UNSUPPORTED_PLATFORM_CAPABILITY` with exit code `78` instead of degrading.
+
+WASM platform capability matrix:
+
+| Platform | Supported guarantees | Unsupported controls | Remediation guidance |
+| --- | --- | --- | --- |
+| Linux | Engine availability probe, capability-based preopens, deterministic wall-time and CPU fuel budgeting, linear memory cap, stdout/stderr caps | None beyond the lane-wide contract (`allowed_read_paths` is unsupported for WASM) | Preferred target for strict/prod WASM runs |
+| macOS | Engine availability probe, capability-based preopens, deterministic wall-time and CPU fuel budgeting, linear memory cap, stdout/stderr caps | None beyond the lane-wide contract (`allowed_read_paths` is unsupported for WASM) | Supported for strict/prod WASM runs when the Rust surface is installed |
+| Windows | Engine availability probe, capability-based preopens, CPU fuel budgeting, linear memory cap, stdout/stderr caps | Wall-time enforcement for WASM compile/test stages | Use Linux/macOS for strict/prod WASM runs, or switch to the process/Docker lane |
+
+WASM preflight behavior:
+- Compile performs a preflight before execution when WASM is explicitly requested or selected.
+- Engine availability is checked first:
+  - missing `akc-exec` / `akc_rust` fails fast with remediation instead of falling through to a later runtime failure.
+- In enforced/strict profiles, unsupported platform guarantees fail closed:
+  - Windows + WASM compile runs are rejected up front because compile stages require bounded wall-time execution.
+- Outside enforced/strict profiles, AKC still returns `WASM_UNSUPPORTED_PLATFORM_CAPABILITY` with the stable first-line marker rather than silently broadening access.
+
+WASM compile CLI controls:
+- `--sandbox-cpu-fuel <N>` sets an explicit CPU fuel budget for Rust/WASM execution.
+  - must be `> 0`
+  - pairs cleanly with `--sandbox strong --strong-lane-preference wasm`
+  - deterministic behavior:
+    - binding CPU limit -> `WASM_CPU_FUEL_EXHAUSTED`
+    - binding wall-time deadline -> `WASM_TIMEOUT`
 
 ### Lane B: OS process sandbox (real OS semantics)
 
@@ -203,4 +358,3 @@ This model is defense-in-depth. It does not claim absolute safety against all po
 - minimizes the attack surface
 - enforces strict capabilities and resource budgets
 - creates audit trails for incident investigation
-

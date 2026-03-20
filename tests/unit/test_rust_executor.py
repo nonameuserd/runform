@@ -65,6 +65,7 @@ def test_rust_executor_plumbs_fs_policy_and_limits_and_keeps_surface_parity(
         assert cfg.allow_network is False
         # Limits are passed via config to rust_bridge payload.
         assert cfg.memory_bytes == 123
+        assert cfg.cpu_fuel == 222
         assert cfg.stdout_max_bytes == 456
         assert cfg.stderr_max_bytes == 789
         # FS policy capability fields must be preserved exactly.
@@ -90,6 +91,7 @@ def test_rust_executor_plumbs_fs_policy_and_limits_and_keeps_surface_parity(
             mode=mode,  # parity across surfaces: only this should differ
             allow_network=False,
             memory_bytes=123,
+            cpu_fuel=222,
             stdout_max_bytes=456,
             stderr_max_bytes=789,
             allowed_read_paths=("/etc/hosts",),
