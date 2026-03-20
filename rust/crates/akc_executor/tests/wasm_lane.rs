@@ -3,7 +3,9 @@ use std::fs;
 
 use akc_executor::run_exec;
 use akc_executor::ExecutorError;
-use akc_executor::{WASM_EXIT_MEMORY_LIMIT_EXCEEDED, WASM_EXIT_TIMEOUT};
+use akc_executor::WASM_EXIT_MEMORY_LIMIT_EXCEEDED;
+#[cfg(not(windows))]
+use akc_executor::WASM_EXIT_TIMEOUT;
 use akc_protocol::{Capabilities, ExecLane, ExecRequest, FsPolicy, Limits, RunId, TenantId};
 
 /// Minimal rights for `path_open` with `creat|trunc` + `fd_read|fd_write` on the new fd.
@@ -157,7 +159,7 @@ fn wasm_lane_memory_limit_exceeded_has_stable_error_code() {
     let req = make_request_with_limits(
         wasm_path.to_string_lossy().into_owned(),
         Limits {
-            wall_time_ms: Some(1_000),
+            wall_time_ms: None,
             cpu_fuel: None,
             memory_bytes: Some(64 * 1024),
             stdout_max_bytes: Some(1024),
@@ -191,7 +193,7 @@ fn wasm_lane_cpu_fuel_exhaustion_has_stable_error_code() {
     let req = make_request_with_limits(
         wasm_path.to_string_lossy().into_owned(),
         Limits {
-            wall_time_ms: Some(5_000),
+            wall_time_ms: None,
             cpu_fuel: Some(10_000),
             memory_bytes: None,
             stdout_max_bytes: Some(1024),

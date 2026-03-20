@@ -73,12 +73,6 @@ pub(crate) fn run_process_lane_native(
     let tenant_id: TenantId = request.tenant_id.clone();
     let run_id: RunId = request.run_id.clone();
 
-    #[cfg(target_os = "linux")]
-    if !native_unsafe_override_enabled() {
-        return bwrap::run_process_lane_bwrap(request);
-    }
-
-    #[cfg(not(target_os = "linux"))]
     if !native_unsafe_override_enabled() {
         log_event(
             LogLevel::Warn,
