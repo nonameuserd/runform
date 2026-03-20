@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -180,6 +181,14 @@ def _preflight_docker_hardening(
     docker_available: bool,
 ) -> int | None:
     docker_hardening_requested = _docker_hardening_flags_supplied(args)
+    docker_config_relevant = (
+        docker_hardening_requested
+        or (
+            not bool(getattr(args, "use_rust_exec", False))
+            and sandbox_mode == "strong"
+            and strong_lane_preference != "wasm"
+        )
+    )
     if docker_hardening_requested:
         if bool(getattr(args, "use_rust_exec", False)):
             return _emit_docker_preflight_failure(
@@ -218,6 +227,9 @@ def _preflight_docker_hardening(
                     "do not rely on `auto` fallback when Docker-specific hardening is required",
                 ),
             )
+
+    if not docker_config_relevant:
+        return None
 
     try:
         (
@@ -560,6 +572,14 @@ def cmd_compile(args: argparse.Namespace) -> int:
         cost_output_per_1k_tokens_usd=float(getattr(args, "cost_output_per_1k_usd", 0.0)),
         cost_tool_call_usd=float(getattr(args, "cost_tool_call_usd", 0.0)),
     )
+    if selected_backend == "docker":
+        default_test_command: tuple[str, ...] | None = ("python", "-m", "pytest", "-q")
+    elif selected_backend.startswith("rust-") and selected_backend.endswith("-wasm"):
+        default_test_command = None
+    else:
+        default_test_command = (sys.executable, "-m", "pytest", "-q")
+    if default_test_command is not None:
+        config = replace(config, test_command=default_test_command)
     llm = _OfflineLLM()
 
     goal = args.goal or "Compile repository"
