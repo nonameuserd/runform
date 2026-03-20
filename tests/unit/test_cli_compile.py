@@ -1383,6 +1383,45 @@ def test_cli_compile_auto_lane_with_docker_hardening_fails_when_docker_unavailab
     assert "Docker hardening would be dropped" in out
 
 
+def test_cli_compile_opa_policy_requires_opa_cli(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import akc.cli.compile as compile_mod
+
+    def _which(cmd: str) -> str | None:
+        if cmd == "docker":
+            return "/usr/bin/docker"
+        return None
+
+    monkeypatch.setattr(compile_mod.shutil, "which", _which)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                "t1",
+                "--repo-id",
+                "repo-prod",
+                "--outputs-root",
+                str(tmp_path),
+                "--sandbox",
+                "strong",
+                "--strong-lane-preference",
+                "docker",
+                "--policy-mode",
+                "enforce",
+                "--opa-policy-path",
+                "./configs/policy/compile_tools_prod.rego",
+            ]
+        )
+
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "Policy preflight failed" in out
+    assert "configured OPA policy requires the `opa` CLI" in out
+
+
 def test_cli_compile_rust_exec_wasm_fails_closed_when_surface_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

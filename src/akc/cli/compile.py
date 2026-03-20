@@ -88,6 +88,13 @@ def _emit_docker_preflight_failure(*, summary: str, details: tuple[str, ...]) ->
     return 2
 
 
+def _emit_policy_preflight_failure(*, summary: str, details: tuple[str, ...]) -> int:
+    print(f"Policy preflight failed: {summary}")
+    for detail in details:
+        print(f"  - {detail}")
+    return 2
+
+
 def _parse_multi_flag_paths(values: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
     if not values:
         return ()
@@ -126,6 +133,13 @@ def _docker_apparmor_available() -> bool:
 def _docker_cli_available() -> bool:
     try:
         return shutil.which("docker") is not None
+    except (AttributeError, OSError):
+        return False
+
+
+def _opa_cli_available() -> bool:
+    try:
+        return shutil.which("opa") is not None
     except (AttributeError, OSError):
         return False
 
@@ -415,6 +429,15 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
     if docker_preflight_error is not None:
         return docker_preflight_error
+    opa_policy_path = getattr(args, "opa_policy_path", None)
+    if opa_policy_path is not None and str(opa_policy_path).strip() and not _opa_cli_available():
+        return _emit_policy_preflight_failure(
+            summary="configured OPA policy requires the `opa` CLI, but it is unavailable",
+            details=(
+                f"policy path: {opa_policy_path}",
+                "install the `opa` binary on PATH or omit --opa-policy-path",
+            ),
+        )
     (
         docker_user,
         docker_tmpfs_mounts,

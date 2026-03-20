@@ -9,8 +9,6 @@ use akc_protocol::observability::{log_event, LogLevel};
 use akc_protocol::{ExecRequest, ExecResponse, RunId, TenantId};
 use serde_json::json;
 
-#[cfg(target_os = "linux")]
-use crate::backend::process::bwrap;
 #[cfg(unix)]
 use crate::backend::process::limits;
 use crate::env_policy::filter_request_env;
