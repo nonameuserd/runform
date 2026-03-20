@@ -123,9 +123,9 @@ def test_docker_runtime_network_isolation_blocks_outbound_connections(tmp_path: 
                 "python",
                 "-c",
                 (
-                    "import socket, sys; "
-                    "sock = socket.socket(); "
-                    "sock.settimeout(1.0); "
+                    "import socket, sys\n"
+                    "sock = socket.socket()\n"
+                    "sock.settimeout(1.0)\n"
                     "try:\n"
                     "    sock.connect(('1.1.1.1', 53))\n"
                     "except OSError as exc:\n"
