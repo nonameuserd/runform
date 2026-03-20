@@ -358,7 +358,7 @@ deny_reasons contains "policy.prod.docker.tmpfs_tmp_required" if {
   input.action == "executor.run"
   input.context.backend == "docker"
   mounts := object.get(input.context.docker, "tmpfs_mounts", [])
-  not mounts[_] == "/tmp"
+  not "/tmp" in mounts
 }
 
 deny_reasons contains "policy.prod.docker.memory_limit_required" if {

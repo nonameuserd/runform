@@ -156,7 +156,8 @@ class SubprocessOpaEvaluator:
             check=False,
         )
         if int(cp.returncode) != 0:
-            raise RuntimeError("opa_eval_failed")
+            detail = str(cp.stderr or cp.stdout or "opa_eval_failed").strip()
+            raise RuntimeError(detail)
         parsed = json.loads(cp.stdout or "{}")
         result = parsed.get("result", [{}])[0].get("expressions", [{}])[0].get("value")
         return True, result
@@ -189,8 +190,9 @@ class SubprocessOpaEvaluator:
             _, result = self._evaluate_path(payload=payload, decision_path=self.decision_path)
         except FileNotFoundError:
             return False, "policy.opa.unavailable"
-        except RuntimeError:
-            return False, "policy.opa.error"
+        except RuntimeError as exc:
+            detail = str(exc).strip()
+            return False, f"policy.opa.error: {detail}" if detail else "policy.opa.error"
         try:
             if isinstance(result, dict):
                 allowed = result.get("allow")
