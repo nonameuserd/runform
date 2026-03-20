@@ -143,7 +143,9 @@ def test_cli_compile_empty_plan_exits_success_and_emits_run_contracts(tmp_path: 
     assert any((base / ".akc" / "ir").rglob("*.json"))
 
 
-def test_cli_compile_failing_tests_exit_code_2(tmp_path: Path) -> None:
+def test_cli_compile_failing_tests_exit_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """When tests always fail, compile exits with code 2."""
     tenant_id = "t1"
     repo_id = "repo1"
@@ -166,6 +168,9 @@ def test_cli_compile_failing_tests_exit_code_2(tmp_path: Path) -> None:
             ]
         )
     assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "last_execution_stage:" in out
+    assert "last_execution_exit_code:" in out
 
 
 def test_cli_compile_missing_required_args_exits_non_zero() -> None:

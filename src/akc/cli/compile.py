@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import shutil
 import sys
 from dataclasses import replace
@@ -94,6 +95,60 @@ def _emit_policy_preflight_failure(*, summary: str, details: tuple[str, ...]) ->
     for detail in details:
         print(f"  - {detail}")
     return 2
+
+
+def _emit_compile_failure_details(*, base: Path) -> None:
+    tests_dir = base / ".akc" / "tests"
+    if tests_dir.is_dir():
+        candidates = sorted(
+            tests_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for fp in candidates:
+            try:
+                raw = json.loads(fp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            stage = str(raw.get("stage") or "unknown")
+            exit_code = raw.get("exit_code")
+            command = raw.get("command")
+            stdout = str(raw.get("stdout") or "").strip()
+            stderr = str(raw.get("stderr") or "").strip()
+            print(f"  last_execution_stage: {stage}")
+            if isinstance(command, list) and command:
+                print(f"  last_execution_command: {' '.join(str(x) for x in command)}")
+            if exit_code is not None:
+                print(f"  last_execution_exit_code: {int(exit_code)}")
+            text = stderr or stdout
+            label = "stderr" if stderr else "stdout"
+            if text:
+                print(f"  last_execution_{label}:")
+                for line in text.splitlines()[:20]:
+                    print(f"    {line}")
+            return
+
+    run_dir = base / ".akc" / "run"
+    if not run_dir.is_dir():
+        return
+    log_files = sorted(
+        run_dir.glob("*.log.txt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for fp in log_files:
+        try:
+            lines = fp.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        if not lines:
+            continue
+        print("  run_log_tail:")
+        for line in lines[-10:]:
+            print(f"    {line}")
+        return
 
 
 def _parse_multi_flag_paths(values: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
@@ -666,4 +721,5 @@ def cmd_compile(args: argparse.Namespace) -> int:
         return 0
 
     print("Compile did not succeed within budget; see emitted artifacts for details.")
+    _emit_compile_failure_details(base=base)
     return 2
