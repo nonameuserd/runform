@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from akc.compile import ControllerConfig, TierConfig, run_compile_loop
+import pytest
+
+from akc.compile import ControllerConfig, CostRates, TierConfig, run_compile_loop
 from akc.compile.controller_config import Budget
 from akc.compile.interfaces import (
     ExecutionRequest,
@@ -13,7 +15,9 @@ from akc.compile.interfaces import (
     LLMResponse,
     TenantRepoScope,
 )
+from akc.compile.rust_bridge import RustExecConfig
 from akc.memory.facade import build_memory
+from akc.run import PassRecord, RunManifest
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,73 @@ class _ScriptedExecutor(Executor):
         )
 
 
+@dataclass
+class _ScriptedWasmExecutor(_ScriptedExecutor):
+    rust_cfg: RustExecConfig = RustExecConfig(
+        mode="pyo3",
+        lane="wasm",
+        allow_network=True,
+        memory_bytes=123,
+        cpu_fuel=456,
+        stdout_max_bytes=789,
+        stderr_max_bytes=321,
+        preopen_dirs=("/safe/workspace",),
+        allowed_write_paths=("/safe/workspace",),
+        wasm_normalization_strict=True,
+    )
+
+
+@dataclass
+class _ScriptedDockerExecutor(_ScriptedExecutor):
+    disable_network: bool = True
+    memory_bytes: int | None = 2048
+    pids_limit: int | None = 64
+    cpus: float | None = 1.5
+    read_only_rootfs: bool = True
+    no_new_privileges: bool = True
+    cap_drop_all: bool = True
+    user: str | None = "65532:65532"
+    tmpfs_mounts: tuple[str, ...] = ("/tmp", "/run")
+    seccomp_profile: str | None = "runtime/default"
+    apparmor_profile: str | None = "akc-default"
+    ulimit_nofile: str | None = "1024:2048"
+    ulimit_nproc: str | None = "256"
+
+
+@dataclass
+class _NoCallLLM(LLMBackend):
+    calls: int = 0
+
+    def complete(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        stage: str,
+        request: LLMRequest,
+    ) -> LLMResponse:
+        _ = scope
+        _ = stage
+        _ = request
+        self.calls += 1
+        raise AssertionError("LLM must not be called in full_replay mode")
+
+
+@dataclass
+class _NoCallExecutor(Executor):
+    calls: int = 0
+
+    def run(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        request: ExecutionRequest,
+    ) -> ExecutionResult:
+        _ = scope
+        _ = request
+        self.calls += 1
+        raise AssertionError("Executor must not be called in full_replay mode")
+
+
 def _mk_config(
     *,
     max_llm_calls: int = 10,
@@ -116,6 +187,7 @@ def _mk_config(
             max_iterations_total=max_repairs + 1,
         ),
         "test_mode": "full",
+        "tool_allowlist": ("llm.complete", "executor.run"),
         "metadata": {"execute_command": ["pytest", "-q"], "execute_timeout_s": 1.0},
     }
     if require_tests_for_non_test_changes is not None:
@@ -342,6 +414,8 @@ def test_controller_smoke_then_full_gate_promotes_only_if_full_passes() -> None:
         stage_tiers=cfg.stage_tiers,
         budget=cfg.budget,
         test_mode="smoke",
+        policy_mode=cfg.policy_mode,
+        tool_allowlist=cfg.tool_allowlist,
         metadata={
             "execute_command": ["python", "-c", "print('smoke')"],
             "full_test_command": ["python", "-c", "print('full')"],
@@ -395,6 +469,8 @@ def test_controller_smoke_full_runs_every_n_iterations_and_on_budget_boundary() 
         budget=base.budget,
         test_mode="smoke",
         full_test_every_n_iterations=2,
+        policy_mode=base.policy_mode,
+        tool_allowlist=base.tool_allowlist,
         metadata={
             "execute_command": ["python", "-c", "print('smoke')"],
             "full_test_command": ["python", "-c", "print('full')"],
@@ -420,7 +496,7 @@ def test_controller_smoke_full_runs_every_n_iterations_and_on_budget_boundary() 
     assert ex.calls == 3  # smoke, then smoke+full
 
 
-def test_verifier_gate_vetoes_promotion_and_triggers_repair() -> None:
+def test_verifier_gate_vetoes_promotion_and_triggers_repair_under_strict_monotonicity() -> None:
     mem = build_memory(backend="memory")
     plan = mem.plan_state.create_plan(
         tenant_id="t1",
@@ -469,8 +545,6 @@ def test_verifier_gate_vetoes_promotion_and_triggers_repair() -> None:
 
     assert res.status == "succeeded"
     assert res.accounting["repair_iterations"] == 1
-    # Safety invariant: even when promotion is vetoed, the next repair iteration
-    # must still re-run the execution gate (tests) before it can promote.
     assert ex.calls == 2
     loaded = mem.plan_state.load_plan(tenant_id="t1", repo_id="repo1", plan_id=res.plan.id)
     assert loaded is not None
@@ -478,6 +552,7 @@ def test_verifier_gate_vetoes_promotion_and_triggers_repair() -> None:
     out = dict(step.outputs or {})
     assert isinstance(out.get("last_verification"), dict)
     assert out["last_verification"]["passed"] is True
+    assert out.get("last_monotonic_failure") is None
 
 
 def test_verifier_gate_can_be_disabled_and_is_well_specified_in_outputs() -> None:
@@ -509,6 +584,8 @@ def test_verifier_gate_can_be_disabled_and_is_well_specified_in_outputs() -> Non
         stage_tiers=cfg.stage_tiers,
         budget=cfg.budget,
         test_mode=cfg.test_mode,
+        policy_mode=cfg.policy_mode,
+        tool_allowlist=cfg.tool_allowlist,
         metadata=cfg.metadata,
         verifier_enabled=False,
         verifier_strict=True,
@@ -601,3 +678,864 @@ def test_tests_generated_policy_vetoes_promotion_when_non_test_paths_change_with
     # Policy failure should be recorded.
     assert isinstance(out.get("last_policy_failure"), dict)
     assert out["last_policy_failure"]["code"] == "policy.missing_tests"
+    assert out.get("last_monotonic_failure") is None
+    assert out.get("last_verification", {}).get("passed") is True
+
+
+def test_repair_requires_strict_monotonic_improvement() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    # First candidate is verifier-vetoed but has a passing execution score (1000).
+    bad_patch = "\n".join(
+        [
+            "--- a/../evil.py",
+            "+++ b/../evil.py",
+            "@@",
+            "+print('nope')",
+            "",
+        ]
+    )
+    # Second candidate is a clean repair with the same passing execution score.
+    # Strict monotonicity should reject equal-score repair attempts.
+    equal_score_patch = "\n".join(
+        [
+            "--- a/src/equal_score.py",
+            "+++ b/src/equal_score.py",
+            "@@",
+            "+print('ok')",
+            "",
+            "--- a/tests/test_equal_score.py",
+            "+++ b/tests/test_equal_score.py",
+            "@@",
+            "+def test_equal_score():",
+            "+    assert True",
+            "",
+        ]
+    )
+    llm = _ScriptedLLM(texts=[bad_patch, equal_score_patch])
+    ex = _ScriptedExecutor(exit_codes=[0, 0])
+    cfg = _mk_config(max_llm_calls=10, max_repairs=1, require_tests_for_non_test_changes=False)
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+
+    assert res.status == "succeeded"
+    assert res.accounting["repair_iterations"] == 1
+    loaded = mem.plan_state.load_plan(tenant_id="t1", repo_id="repo1", plan_id=res.plan.id)
+    assert loaded is not None
+    step = next(s for s in loaded.steps if s.id == plan.steps[0].id)
+    out = dict(step.outputs or {})
+    assert out.get("last_monotonic_failure") is None
+    assert out.get("last_verification", {}).get("passed") is True
+
+
+def test_full_replay_mode_uses_cached_candidate_and_cached_execution() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    cached_patch = "\n".join(
+        [
+            "--- a/src/replayed.py",
+            "+++ b/src/replayed.py",
+            "@@",
+            "+VALUE = 1",
+            "",
+            "--- a/tests/test_replayed.py",
+            "+++ b/tests/test_replayed.py",
+            "@@",
+            "+def test_replayed():",
+            "+    assert VALUE == 1",
+            "",
+        ]
+    )
+    cached_outputs = {
+        "best_candidate": {
+            "llm_text": cached_patch,
+            "touched_paths": ["src/replayed.py", "tests/test_replayed.py"],
+        },
+        "last_tests_full": {
+            "stage": "tests_full",
+            "command": ["pytest", "-q"],
+            "exit_code": 0,
+            "stdout": "cached pass",
+            "stderr": "",
+            "duration_ms": 1,
+        },
+    }
+    s = plan.steps[0]
+    seeded_step = replace(s, outputs=cached_outputs)
+    seeded_plan = replace(plan, steps=(seeded_step,))
+    mem.plan_state.save_plan(tenant_id="t1", repo_id="repo1", plan=seeded_plan)
+
+    llm = _NoCallLLM()
+    ex = _NoCallExecutor()
+    cfg = _mk_config(max_llm_calls=5, max_repairs=0)
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        replay_mode="full_replay",
+    )
+
+    assert res.status == "succeeded"
+    assert llm.calls == 0
+    assert ex.calls == 0
+
+
+def test_full_replay_mode_can_use_manifest_payloads_without_step_cache() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    replay_patch = "\n".join(
+        [
+            "--- a/src/from_manifest.py",
+            "+++ b/src/from_manifest.py",
+            "@@",
+            "+VALUE = 2",
+            "",
+            "--- a/tests/test_from_manifest.py",
+            "+++ b/tests/test_from_manifest.py",
+            "@@",
+            "+def test_from_manifest():",
+            "+    assert True",
+            "",
+        ]
+    )
+    replay_manifest = RunManifest(
+        run_id="previous-run",
+        tenant_id="t1",
+        repo_id="repo1",
+        ir_sha256="a" * 64,
+        replay_mode="full_replay",
+        passes=(
+            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
+            PassRecord(
+                name="execute",
+                status="succeeded",
+                metadata={
+                    "stage": "tests_full",
+                    "command": ["pytest", "-q"],
+                    "exit_code": 0,
+                    "stdout": "manifest replay pass",
+                    "stderr": "",
+                    "duration_ms": 1,
+                },
+            ),
+        ),
+    )
+
+    llm = _NoCallLLM()
+    ex = _NoCallExecutor()
+    cfg = _mk_config(max_llm_calls=5, max_repairs=0)
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        replay_mode="full_replay",
+        replay_manifest=replay_manifest,
+    )
+
+    assert res.status == "succeeded"
+    assert llm.calls == 0
+    assert ex.calls == 0
+
+
+def test_llm_vcr_mode_uses_prompt_keyed_cache_without_llm_calls() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    replay_patch = "\n".join(
+        [
+            "--- a/src/from_vcr.py",
+            "+++ b/src/from_vcr.py",
+            "@@",
+            "+VALUE = 7",
+            "",
+            "--- a/tests/test_from_vcr.py",
+            "+++ b/tests/test_from_vcr.py",
+            "@@",
+            "+def test_from_vcr():",
+            "+    assert True",
+            "",
+        ]
+    )
+
+    # Use a baseline pass payload fallback so replay stays deterministic
+    # without requiring reconstruction of exact prompt keys in test setup.
+    replay_manifest = RunManifest(
+        run_id="vcr-run",
+        tenant_id="t1",
+        repo_id="repo1",
+        ir_sha256="e" * 64,
+        replay_mode="llm_vcr",
+        passes=(
+            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
+        ),
+    )
+    llm = _NoCallLLM()
+    ex = _ScriptedExecutor(exit_codes=[0])
+    cfg = _mk_config(max_llm_calls=5, max_repairs=0)
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        replay_mode="llm_vcr",
+        replay_manifest=replay_manifest,
+    )
+
+    assert res.status == "succeeded"
+    assert llm.calls == 0
+    assert ex.calls == 1
+
+
+def test_controller_halts_when_tool_call_budget_exhausted() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedExecutor(exit_codes=[1, 1, 1])
+    cfg = _mk_config(max_llm_calls=10, max_repairs=3)
+    cfg = ControllerConfig(
+        tiers=cfg.tiers,
+        stage_tiers=cfg.stage_tiers,
+        budget=Budget(
+            max_llm_calls=10,
+            max_repairs_per_step=3,
+            max_iterations_total=4,
+            max_tool_calls=1,
+        ),
+        test_mode=cfg.test_mode,
+        policy_mode=cfg.policy_mode,
+        tool_allowlist=cfg.tool_allowlist,
+        metadata=cfg.metadata,
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+
+    assert res.status in {"failed", "budget_exhausted"}
+    assert int(res.accounting.get("tool_calls", 0)) == 1
+
+
+def test_controller_halts_when_cost_budget_exhausted() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedExecutor(exit_codes=[1, 1, 1])
+    cfg = _mk_config(max_llm_calls=10, max_repairs=3)
+    cfg = ControllerConfig(
+        tiers=cfg.tiers,
+        stage_tiers=cfg.stage_tiers,
+        budget=Budget(
+            max_llm_calls=10,
+            max_repairs_per_step=3,
+            max_iterations_total=4,
+            max_cost_usd=0.0001,
+        ),
+        test_mode=cfg.test_mode,
+        policy_mode=cfg.policy_mode,
+        tool_allowlist=cfg.tool_allowlist,
+        cost_rates=CostRates(
+            input_per_1k_tokens_usd=0.01,
+            output_per_1k_tokens_usd=0.01,
+            tool_call_usd=0.001,
+        ),
+        metadata=dict(cfg.metadata or {}),
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+
+    assert res.status in {"failed", "budget_exhausted"}
+    assert float(res.accounting.get("estimated_cost_usd", 0.0)) > 0.0001
+
+
+def test_policy_enforce_blocks_default_deny_without_allowlist() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedExecutor(exit_codes=[0])
+    cfg = _mk_config(max_llm_calls=3, max_repairs=0)
+    cfg = ControllerConfig(
+        tiers=cfg.tiers,
+        stage_tiers=cfg.stage_tiers,
+        budget=cfg.budget,
+        test_mode=cfg.test_mode,
+        policy_mode="enforce",
+        tool_allowlist=(),
+        metadata=cfg.metadata,
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+    assert res.status in {"failed", "budget_exhausted"}
+    assert int(res.accounting.get("llm_calls", 0)) == 0
+    assert int(res.accounting.get("tool_calls", 0)) == 0
+    decisions = list(res.accounting.get("policy_decisions", []))
+    assert decisions
+    assert decisions[0]["allowed"] is False
+    assert decisions[0]["block"] is True
+
+
+def test_policy_audit_only_records_default_deny_but_allows_progress() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedExecutor(exit_codes=[0])
+    cfg = _mk_config(max_llm_calls=3, max_repairs=0)
+    cfg = ControllerConfig(
+        tiers=cfg.tiers,
+        stage_tiers=cfg.stage_tiers,
+        budget=cfg.budget,
+        test_mode=cfg.test_mode,
+        policy_mode="audit_only",
+        tool_allowlist=(),
+        metadata=cfg.metadata,
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+    )
+    assert res.status == "succeeded"
+    decisions = list(res.accounting.get("policy_decisions", []))
+    assert decisions
+    assert any(d["allowed"] is False and d["block"] is False for d in decisions)
+
+
+def test_policy_executor_attentuates_capabilities_with_stage_constraints() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedExecutor(exit_codes=[0])
+    cfg = _mk_config(max_llm_calls=2, max_repairs=0)
+
+    # Custom policy engine to validate capability token constraints passed from the
+    # controller via capability attenuation + policy-wrapped executor.
+    from dataclasses import dataclass
+
+    from akc.control.policy import CapabilityIssuer, PolicyDecision, ToolAuthorizationRequest
+
+    @dataclass
+    class _RecordingPolicyEngine:
+        issuer: CapabilityIssuer
+        executor_constraints: list[dict[str, object]]
+
+        def authorize(self, *, req: ToolAuthorizationRequest) -> PolicyDecision:
+            if req.action == "executor.run":
+                constraints = dict(req.capability.constraints or {})
+                self.executor_constraints.append(constraints)
+            return PolicyDecision(
+                allowed=True,
+                reason="ok",
+                mode="enforce",
+                source="test",
+                block=False,
+            )
+
+    engine = _RecordingPolicyEngine(
+        issuer=CapabilityIssuer(),
+        executor_constraints=[],
+    )
+
+    expected_step_id = plan.steps[0].id
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        policy_engine=engine,
+    )
+
+    assert res.status == "succeeded"
+    assert engine.executor_constraints, "expected executor.run policy calls"
+
+    # Controller issues a base executor capability, then attenuates it with stage
+    # constraints for each execute gate.
+    for constraints in engine.executor_constraints:
+        assert constraints.get("plan_id") == plan.id
+        assert constraints.get("step_id") == expected_step_id
+        assert constraints.get("stage") == "tests_full"
+
+
+def test_policy_executor_includes_wasm_controls_in_policy_context_and_constraints() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedWasmExecutor(exit_codes=[0])
+    cfg = replace(
+        _mk_config(max_llm_calls=2, max_repairs=0),
+        metadata={
+            "execute_command": ["pytest", "-q"],
+            "execute_timeout_s": 1.0,
+            "wasm_network_exception": "ticket-123",
+        },
+    )
+
+    from dataclasses import dataclass
+
+    from akc.control.policy import CapabilityIssuer, PolicyDecision, ToolAuthorizationRequest
+
+    @dataclass
+    class _RecordingPolicyEngine:
+        issuer: CapabilityIssuer
+        executor_contexts: list[dict[str, object]]
+        executor_constraints: list[dict[str, object]]
+
+        def authorize(self, *, req: ToolAuthorizationRequest) -> PolicyDecision:
+            if req.action == "executor.run":
+                self.executor_contexts.append(dict(req.context or {}))
+                self.executor_constraints.append(dict(req.capability.constraints or {}))
+            return PolicyDecision(
+                allowed=True,
+                reason="ok",
+                mode="enforce",
+                source="test",
+                block=False,
+            )
+
+    engine = _RecordingPolicyEngine(
+        issuer=CapabilityIssuer(),
+        executor_contexts=[],
+        executor_constraints=[],
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        policy_engine=engine,
+    )
+
+    assert res.status == "succeeded"
+    assert engine.executor_contexts
+    ctx = engine.executor_contexts[0]
+    wasm = dict(ctx["wasm"])  # type: ignore[arg-type]
+    profile = dict(wasm["platform_capability_profile"])  # type: ignore[arg-type]
+    assert ctx["backend"] == "wasm"
+    assert wasm["network_enabled"] is True
+    assert wasm["network_exception"] == "ticket-123"
+    assert wasm["preopen_dirs"] == ["/safe/workspace"]
+    assert wasm["writable_preopen_dirs"] == ["/safe/workspace"]
+    assert wasm["read_only_preopen_dirs"] == []
+    assert wasm["limits_tuple"] == [1000, 123, 456, 789, 321]
+    assert profile["profile"] == "strict"
+    assert "wall_time_ms" in profile["required_controls"]  # type: ignore[operator]
+
+    constraints = engine.executor_constraints[0]
+    assert constraints["backend"] == "wasm"
+    assert constraints["stage"] == "tests_full"
+    assert constraints["wasm"] == ctx["wasm"]
+
+
+def test_policy_executor_marks_enforce_wasm_profile_strict_even_with_relaxed_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedWasmExecutor(
+        exit_codes=[0],
+        rust_cfg=RustExecConfig(
+            mode="pyo3",
+            lane="wasm",
+            allow_network=False,
+            memory_bytes=123,
+            cpu_fuel=None,
+            stdout_max_bytes=789,
+            stderr_max_bytes=321,
+            preopen_dirs=("/safe/workspace", "/safe/cache"),
+            allowed_write_paths=("/safe/workspace",),
+            wasm_normalization_strict=False,
+        ),
+    )
+    cfg = replace(
+        _mk_config(max_llm_calls=2, max_repairs=0),
+        policy_mode="enforce",
+        metadata={
+            "execute_command": ["pytest", "-q"],
+            "execute_timeout_s": 1.0,
+        },
+    )
+
+    from dataclasses import dataclass
+
+    from akc.control.policy import CapabilityIssuer, PolicyDecision, ToolAuthorizationRequest
+
+    @dataclass
+    class _RecordingPolicyEngine:
+        issuer: CapabilityIssuer
+        executor_contexts: list[dict[str, object]]
+
+        def authorize(self, *, req: ToolAuthorizationRequest) -> PolicyDecision:
+            if req.action == "executor.run":
+                self.executor_contexts.append(dict(req.context or {}))
+            return PolicyDecision(
+                allowed=True,
+                reason="ok",
+                mode="enforce",
+                source="test",
+                block=False,
+            )
+
+    engine = _RecordingPolicyEngine(
+        issuer=CapabilityIssuer(),
+        executor_contexts=[],
+    )
+    monkeypatch.setattr("akc.compile.controller.sys.platform", "win32")
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        policy_engine=engine,
+    )
+
+    assert res.status == "succeeded"
+    wasm = dict(engine.executor_contexts[0]["wasm"])  # type: ignore[arg-type]
+    profile = dict(wasm["platform_capability_profile"])  # type: ignore[arg-type]
+    assert profile["profile"] == "strict"
+    assert profile["unsupported_controls"] == ["wall_time_ms"]
+    assert wasm["writable_preopen_dirs"] == ["/safe/workspace"]
+    assert wasm["read_only_preopen_dirs"] == ["/safe/cache"]
+
+
+def test_policy_executor_includes_docker_controls_in_policy_context_and_constraints() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _ScriptedDockerExecutor(exit_codes=[0])
+    cfg = replace(
+        _mk_config(max_llm_calls=2, max_repairs=0),
+        metadata={
+            "execute_command": ["pytest", "-q"],
+            "execute_timeout_s": 1.0,
+            "docker_network_exception": "tenant-approved-ticket",
+        },
+    )
+
+    from dataclasses import dataclass
+
+    from akc.control.policy import CapabilityIssuer, PolicyDecision, ToolAuthorizationRequest
+
+    @dataclass
+    class _RecordingPolicyEngine:
+        issuer: CapabilityIssuer
+        executor_contexts: list[dict[str, object]]
+        executor_constraints: list[dict[str, object]]
+
+        def authorize(self, *, req: ToolAuthorizationRequest) -> PolicyDecision:
+            if req.action == "executor.run":
+                self.executor_contexts.append(dict(req.context or {}))
+                self.executor_constraints.append(dict(req.capability.constraints or {}))
+            return PolicyDecision(
+                allowed=True,
+                reason="ok",
+                mode="enforce",
+                source="test",
+                block=False,
+            )
+
+    engine = _RecordingPolicyEngine(
+        issuer=CapabilityIssuer(),
+        executor_contexts=[],
+        executor_constraints=[],
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        policy_engine=engine,
+    )
+
+    assert res.status == "succeeded"
+    assert engine.executor_contexts
+    ctx = engine.executor_contexts[0]
+    docker = dict(ctx["docker"])  # type: ignore[arg-type]
+    limits = dict(docker["limits"])  # type: ignore[arg-type]
+    profiles = dict(docker["security_profiles"])  # type: ignore[arg-type]
+    assert ctx["backend"] == "docker"
+    assert docker["network_enabled"] is False
+    assert docker["network_mode"] == "none"
+    assert docker["network_exception"] == "tenant-approved-ticket"
+    assert docker["read_only_rootfs"] is True
+    assert docker["no_new_privileges"] is True
+    assert docker["cap_drop_all"] is True
+    assert docker["user_present"] is True
+    assert docker["user_is_non_root"] is True
+    assert profiles["seccomp"] == "runtime/default"
+    assert profiles["apparmor"] == "akc-default"
+    platform = dict(docker["platform"])  # type: ignore[arg-type]
+    assert platform["os"] in {"linux", "darwin", "windows"}
+    assert isinstance(platform["apparmor_available"], bool)
+    assert limits["memory_bytes"] == 2048
+    assert limits["pids_limit"] == 64
+    assert limits["cpus"] == 1.5
+    assert limits["ulimit_nofile"] == "1024:2048"
+    assert limits["ulimit_nproc"] == "256"
+    assert docker["tmpfs_mounts"] == ["/tmp", "/run"]
+
+    constraints = engine.executor_constraints[0]
+    assert constraints["backend"] == "docker"
+    assert constraints["stage"] == "tests_full"
+    assert constraints["docker"] == ctx["docker"]
+
+
+def test_policy_denied_executor_run_is_persisted_with_scope_and_context() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="tenant-a",
+        repo_id="repo-prod",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(
+        tenant_id="tenant-a",
+        repo_id="repo-prod",
+        plan_id=plan.id,
+    )
+
+    llm = _FakeLLM()
+    ex = _ScriptedDockerExecutor(exit_codes=[0], disable_network=False, user="0:0")
+    cfg = _mk_config(max_llm_calls=2, max_repairs=0)
+
+    from dataclasses import dataclass
+
+    from akc.control.policy import CapabilityIssuer, PolicyDecision, ToolAuthorizationRequest
+
+    @dataclass
+    class _DenyingPolicyEngine:
+        issuer: CapabilityIssuer
+
+        def authorize(self, *, req: ToolAuthorizationRequest) -> PolicyDecision:
+            if req.action == "executor.run":
+                return PolicyDecision(
+                    allowed=False,
+                    reason="policy.prod.docker.non_root_user_required",
+                    mode="enforce",
+                    source="opa",
+                    block=True,
+                )
+            return PolicyDecision(
+                allowed=True,
+                reason="ok",
+                mode="enforce",
+                source="opa",
+                block=False,
+            )
+
+    res = run_compile_loop(
+        tenant_id="tenant-a",
+        repo_id="repo-prod",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        policy_engine=_DenyingPolicyEngine(issuer=CapabilityIssuer()),
+    )
+
+    assert res.status == "failed"
+    decisions = list(res.accounting.get("policy_decisions", []))
+    assert decisions
+    deny = decisions[-1]
+    assert deny["allowed"] is False
+    assert deny["scope"] == {"tenant_id": "tenant-a", "repo_id": "repo-prod"}
+    assert deny["reason"] == "policy.prod.docker.non_root_user_required"
+    assert deny["context"]["backend"] == "docker"
+    assert deny["context"]["docker"]["user_is_non_root"] is False
+    assert deny["context"]["docker"]["network_mode"] == "enabled"
+
+    loaded = mem.plan_state.load_plan(
+        tenant_id="tenant-a",
+        repo_id="repo-prod",
+        plan_id=res.plan.id,
+    )
+    assert loaded is not None
+    step = next(s for s in loaded.steps if s.id == plan.steps[0].id)
+    out = dict(step.outputs or {})
+    failure = dict(out["last_policy_failure"])
+    assert failure["reason"] == "policy.prod.docker.non_root_user_required"
+    assert failure["scope"] == {"tenant_id": "tenant-a", "repo_id": "repo-prod"}
+    assert failure["context"]["docker"]["user"] == "0:0"

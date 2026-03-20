@@ -126,9 +126,13 @@ CI/release requirements:
 
 - Any release workflow modifications must preserve provenance generation.
 - Provenance generation must not be skipped without an explicit documented exception.
+- Python dependency vulnerability scanning must be enforced in CI and the release publishing path.
+  - The gate uses `pip-audit` to generate a CycloneDX SBOM annotated with known Python dependency vulnerabilities.
+- All Python installs in CI/release must be lockfile-only (`uv sync --frozen`) to prevent dependency drift.
 
 Evidence:
 - Rust supply chain checks: `.github/workflows/ci.yml` (`cargo vet`)
+- Python vulnerability scanning gate + SBOM output: `.github/workflows/ci.yml` and `.github/workflows/release.yml` (`pip-audit` + `uv export`)
 - Release provenance: `.github/workflows/release.yml` (`slsa-github-generator`)
 
 ## 9) Viewer contract alignment (security boundary)
@@ -171,3 +175,129 @@ Branch protection for default and release branches should require the CI checks 
 - `CI / Windows sandbox`
 - `CI / Policy test (OSPS untrusted PR guardrails)`
 
+## 11) WASM policy quick reference (deterministic limits + stable failures)
+
+When `lane=wasm`, policy and regression checks should treat the following as stable contract points:
+
+- Resource limit semantics:
+  - `wall_time_ms` is a real elapsed-time deadline on supported platforms via Wasmtime epoch interruption.
+  - `cpu_fuel` is a first-class deterministic CPU budget:
+    - `cpu_fuel_budget = clamp(cpu_fuel, 1, 2_000_000_000)`
+    - when both are set, timeout and CPU exhaustion remain distinct failure classes.
+  - `memory_bytes` applies an explicit Wasmtime linear-memory cap when set.
+  - `stdout_max_bytes` / `stderr_max_bytes` are deterministic in-memory capture caps (default `1 MiB` each).
+
+- Machine-readable error envelope:
+  - first stderr line is:
+    - `AKC_WASM_ERROR code=<CODE> exit_code=<N> message=<TEXT>`
+
+- Stable WASM failure classes (recommended policy keys):
+  - timeout: `code=WASM_TIMEOUT`, `exit_code=124`
+  - cpu/fuel exhaustion: `code=WASM_CPU_FUEL_EXHAUSTED`, `exit_code=137`
+  - memory limit exceeded: `code=WASM_MEMORY_LIMIT_EXCEEDED`, `exit_code=138`
+  - unsupported platform capability: `code=WASM_UNSUPPORTED_PLATFORM_CAPABILITY`, `exit_code=78`
+
+- Platform fail-closed behavior:
+  - Windows + requested WASM wall-time limit is currently unsupported and must fail with:
+    - `WASM_UNSUPPORTED_PLATFORM_CAPABILITY` / `78`
+  - do not silently downgrade unsupported strict guarantees in policy-enforced runs.
+
+CI/release requirements:
+
+- WASM regression tests must validate deterministic classification for timeout/fuel/memory/capability failures.
+- WASM regression tests must validate filesystem contract enforcement, including:
+  - no implicit filesystem access without `preopen_dirs`
+  - write denial on read-only preopens
+  - write allowance only when `allowed_write_paths` is a subset of `preopen_dirs`
+- Policy tests should assert code/exit pairs above remain stable across executor changes.
+- Policy tests should assert WASM execution context includes backend, network flag, preopen list, limits tuple, and platform capability profile for `executor.run`.
+- Policy tests should assert WASM execution context separately exposes writable preopens and read-only preopens.
+- Prod policy tests should assert deny behavior for:
+  - unsupported strict platform controls
+  - disallowed preopen path patterns
+  - disallowed writable preopen path patterns
+  - network-enabled WASM runs without an explicit exception
+- CLI and bridge regression tests should validate that `--sandbox-cpu-fuel` and
+  protocol `limits.cpu_fuel` map to stable failure classification.
+
+Evidence:
+- WASM lane implementation: `rust/crates/akc_executor/src/backend/wasm.rs`
+- Exit code constants: `rust/crates/akc_executor/src/lib.rs`
+- Bridge parsing/logging surface: `src/akc/compile/rust_bridge.py`
+- WASM regression tests: `rust/crates/akc_executor/tests/wasm_lane.rs`
+
+## 12) Docker strong hardening requirements and rollout
+
+When the CLI uses `--sandbox strong`, Docker is the default strong lane. OSS security requirements must treat the Docker hardening contract as an explicit, test-backed surface rather than implicit runtime behavior.
+
+Required documented defaults:
+
+- network denied by default
+- read-only root filesystem enabled by default
+- `no-new-privileges` enabled by default
+- `cap-drop ALL` enabled by default
+- non-root user `65532:65532` by default
+- `/tmp` mounted as tmpfs by default
+- memory cap `1024 MiB` by default
+- PID cap `256` by default
+- stdout/stderr capture cap `2048 KiB` per stream by default
+
+Required optional controls:
+
+- `--docker-user`
+- `--docker-tmpfs`
+- `--docker-seccomp-profile`
+- `--docker-apparmor-profile`
+- `--docker-ulimit-nofile`
+- `--docker-ulimit-nproc`
+- `--docker-cpus`
+
+Required fail-closed behavior:
+
+- Docker-only hardening flags must be rejected outside `--sandbox strong`.
+- Docker-only hardening flags must be rejected when the strong lane is fixed to WASM.
+- Docker-only hardening flags must be rejected when `auto` fallback would drop them because Docker is unavailable.
+- Invalid tmpfs/user/seccomp/AppArmor/ulimit values must fail before container launch.
+- Absolute seccomp profile paths must exist and be files.
+- AppArmor profiles must fail closed on unsupported hosts.
+
+Required policy surface:
+
+- OPA input for `executor.run` in Docker mode must include:
+  - network mode / exception
+  - read-only rootfs flag
+  - no-new-privileges flag
+  - cap-drop-all flag
+  - user presence and non-root classification
+  - seccomp/AppArmor profile identifiers
+  - memory / PID / CPU / ulimit settings
+  - tmpfs mounts
+- Production policy profiles should deny Docker execution when required hardening controls are absent or weakened, including seccomp/AppArmor posture, `/tmp` tmpfs availability, memory/PID/ulimit ceilings, or network enablement without an explicit exception.
+
+Required rollout stages:
+
+1. Audit policy only.
+   Use `--policy-mode audit_only` to verify emitted Docker policy context and collect expected denials without blocking merges or releases.
+2. Enforce policy in CI and release branches.
+   Protected branches and release workflows must run an actual Docker strong compile in `--policy-mode enforce` so hardening regressions are release-blocking.
+3. Enforce as default in the production profile.
+   Production-facing guidance and automation should default to `--sandbox strong --strong-lane-preference docker` with the prod Rego policy profile in enforce mode.
+
+CI/release requirements:
+
+- Unit tests must validate Docker command assembly and invalid hardening rejection.
+- Integration tests must validate runtime behavior for:
+  - non-root execution
+  - read-only rootfs denial outside tmpfs
+  - writable tmpfs path
+  - network isolation
+- CI must run a Docker strong compile against the prod Rego profile so executor/policy drift is caught outside of unit tests.
+- CI/release branch protection should treat Docker hardening regressions as blocking once the rollout reaches stage 2.
+- Documentation in `docs/security.md` and `docs/getting-started.md` must stay aligned with the implemented defaults and tests.
+
+Evidence:
+- Docker executor implementation: `src/akc/compile/executors.py`
+- CLI Docker preflight/validation: `src/akc/cli/compile.py`
+- Docker policy context emission: `src/akc/compile/controller.py`
+- Docker unit tests: `tests/unit/test_compile_executors.py`, `tests/unit/test_cli_compile.py`
+- Docker integration tests: `tests/integration/test_docker_runtime_hardening.py`

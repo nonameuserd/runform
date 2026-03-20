@@ -52,6 +52,15 @@ fn is_program_allowed(program: &str) -> bool {
     matches!(program, "echo")
 }
 
+fn native_unsafe_override_enabled() -> bool {
+    matches!(
+        std::env::var("AKC_EXEC_NATIVE_UNSAFE_ALLOW")
+            .ok()
+            .as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
+
 pub(crate) fn run_process_lane_native(
     mut request: ExecRequest,
 ) -> Result<ExecResponse, ExecutorError> {
@@ -61,6 +70,19 @@ pub(crate) fn run_process_lane_native(
 
     let tenant_id: TenantId = request.tenant_id.clone();
     let run_id: RunId = request.run_id.clone();
+
+    if !native_unsafe_override_enabled() {
+        log_event(
+            LogLevel::Warn,
+            "exec_policy_denied",
+            &tenant_id,
+            &run_id,
+            json!({
+                "reason": "native_backend_requires_explicit_unsafe_override",
+            }),
+        );
+        return Err(ExecutorError::PolicyDenied);
+    }
 
     let root = workspace_root()?;
     let workdir_raw = root
@@ -94,6 +116,16 @@ pub(crate) fn run_process_lane_native(
         );
         return Err(ExecutorError::CommandNotAllowed);
     }
+
+    log_event(
+        LogLevel::Warn,
+        "exec_native_unsafe_override",
+        &tenant_id,
+        &run_id,
+        json!({
+            "reason": "native_backend_has_no_runtime_filesystem_sandbox",
+        }),
+    );
 
     let mut child = Command::new(&program);
     child.args(cmd_iter);

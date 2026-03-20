@@ -157,9 +157,4 @@ Python remains the orchestrator; Rust provides **(a)** a defense-in-depth Execut
 
 Web UI stays **local-first** and **artifact/state-driven**: a thin viewer over tenant-scoped run artifacts (manifest, test/verification outputs, plan state), not a hosted execution service boundary.
 
-See the plans:
-- `.cursor/plans/agentic_knowledge_compiler_oss_656c38f4.plan.md`
-- `.cursor/plans/akc_rust_sandbox+cli_00aecd50.plan.md`
-- `.cursor/plans/oss-direction_5afdb059.plan.md`
-
 Also see [CHANGELOG](CHANGELOG.md) for shipped changes.

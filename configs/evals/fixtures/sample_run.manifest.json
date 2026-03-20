@@ -1,0 +1,69 @@
+{
+  "schema_kind": "run_manifest",
+  "manifest_version": 1,
+  "run_id": "sample-run-1",
+  "tenant_id": "eval-tenant",
+  "repo_id": "eval-repo",
+  "ir_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "replay_mode": "live",
+  "retrieval_snapshots": [
+    {
+      "source": "compile_retriever",
+      "query": "Implement sample eval task",
+      "top_k": 20,
+      "item_ids": [
+        "doc-1"
+      ]
+    }
+  ],
+  "passes": [
+    {
+      "name": "plan",
+      "status": "succeeded"
+    },
+    {
+      "name": "retrieve",
+      "status": "succeeded"
+    },
+    {
+      "name": "generate",
+      "status": "succeeded",
+      "metadata": {
+        "llm_text": "--- a/src/sample.py\n+++ b/src/sample.py\n@@\n+VALUE = 1\n--- a/tests/test_sample.py\n+++ b/tests/test_sample.py\n@@\n+def test_sample() -> None:\n+    assert VALUE == 1\n"
+      }
+    },
+    {
+      "name": "execute",
+      "status": "succeeded",
+      "metadata": {
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "repair",
+      "status": "skipped"
+    },
+    {
+      "name": "verify",
+      "status": "succeeded"
+    }
+  ],
+  "trace_spans": [
+    {
+      "trace_id": "0123456789abcdef0123456789abcdef",
+      "span_id": "0123456789abcdef",
+      "parent_span_id": null,
+      "name": "compile.run",
+      "kind": "internal",
+      "start_time_unix_nano": 1,
+      "end_time_unix_nano": 2,
+      "attributes": {},
+      "status": "ok"
+    }
+  ],
+  "cost_attribution": {
+    "repair_iterations": 0,
+    "total_tokens": 180,
+    "wall_time_ms": 120
+  }
+}
