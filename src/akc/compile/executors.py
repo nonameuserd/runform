@@ -551,6 +551,10 @@ class SubprocessExecutor(Executor):
         if request.run_id is not None:
             run_dir = _run_dir(work_root=root, scope=scope, run_id=request.run_id)
             run_dir.mkdir(parents=True, exist_ok=True)
+            # The run dir is bind-mounted into Docker for HOME/XDG/cache writes.
+            # Make it writable to the configured non-root container user.
+            with contextlib.suppress(OSError):
+                run_dir.chmod(0o777)
 
         env = _sanitize_env(self.base_env, request.env)
         env = _apply_network_policy(env, disable_network=bool(self.disable_network))

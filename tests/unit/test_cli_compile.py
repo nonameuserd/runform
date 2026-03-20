@@ -815,6 +815,7 @@ def test_cli_compile_strong_sandbox_allows_explicit_wasm_preference(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     import akc.execute.strong as strong_mod
 
     monkeypatch.setattr(strong_mod, "RustExecutor", _FakeRustExecutor)
@@ -866,6 +867,7 @@ def test_cli_compile_use_rust_exec_allows_explicit_wasm_lane(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     monkeypatch.setattr(compile_mod, "RustExecutor", _FakeRustExecutor)
 
     with pytest.raises(SystemExit) as excinfo:
@@ -911,6 +913,7 @@ def test_cli_compile_strong_wasm_normalization_flags_propagate_to_rust_cfg(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     import akc.execute.strong as strong_mod
 
     monkeypatch.setattr(strong_mod, "RustExecutor", _FakeRustExecutor)
@@ -966,6 +969,7 @@ def test_cli_compile_strong_wasm_fs_flags_propagate_to_rust_cfg(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     import akc.execute.strong as strong_mod
 
     monkeypatch.setattr(strong_mod, "RustExecutor", _FakeRustExecutor)
@@ -1035,6 +1039,7 @@ def test_cli_compile_strong_wasm_cpu_fuel_propagates_to_rust_cfg(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     import akc.execute.strong as strong_mod
 
     monkeypatch.setattr(strong_mod, "RustExecutor", _FakeRustExecutor)
@@ -1087,6 +1092,7 @@ def test_cli_compile_rust_exec_wasm_fs_flags_propagate_to_rust_cfg(
 
     monkeypatch.setattr(compile_mod, "CompileSession", _FakeCompileSession)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
+    monkeypatch.setattr(compile_mod.sys, "platform", "linux")
     monkeypatch.setattr(compile_mod, "RustExecutor", _FakeRustExecutor)
 
     with pytest.raises(SystemExit) as excinfo:
