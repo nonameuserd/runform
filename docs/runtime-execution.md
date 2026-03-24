@@ -1,10 +1,10 @@
 # Runtime execution: routing, adapters, checkpoints
 
-This document covers Phase 2 “local/native execution depth”: how actions map to execution lanes, how to extend the runtime via adapters, and what `RuntimeCheckpoint.replay_token` means relative to adapter checkpoint APIs. It also documents **multi-agent coordination** handoff from the compile-time runtime bundle (schema v4) through deterministic scheduling and audit trails.
+This document covers local/native execution depth: how actions map to execution lanes, how to extend the runtime via adapters, and what `RuntimeCheckpoint.replay_token` means relative to adapter checkpoint APIs. It also documents **multi-agent coordination** handoff from the compile-time runtime bundle (schema v4) through deterministic scheduling and audit trails.
 
 ## Multi-agent coordination (runtime bundle)
 
-When a runtime bundle includes coordination (via **`coordination_ref`** and/or optional inline **`coordination_spec`**), the kernel loads the coordination JSON, validates fingerprints against **`spec_hashes.coordination_spec_sha256`**, and may enqueue **`coordination.step`** actions before normal workflow scheduling. Implementation: `akc.runtime.coordination.load`, `akc.coordination.models`, `akc.runtime.kernel`.
+When a runtime bundle includes coordination (via **`coordination_ref`** and/or optional inline **`coordination_spec`**), the kernel loads the coordination JSON, validates fingerprints against **`spec_hashes.coordination_spec_sha256`**, and may enqueue **`coordination.step`** actions before normal workflow scheduling. Implementation: `akc.runtime.coordination.load`, `akc.coordination.models` (graph/schedule types; `akc.runtime.coordination.models` re-exports the same symbols for kernel imports), `akc.runtime.coordination.worker` (agent turns for `coordination.step`), `akc.runtime.kernel`.
 
 ### Fingerprints and fail-closed loading
 
@@ -52,7 +52,7 @@ Each `RuntimeAction` resolves to one of:
 
 | Route | Behavior |
 |-------|----------|
-| `delegate_adapter` | Default. Executes the configured adapter’s `execute_action` (typically `NativeRuntimeAdapter`, which succeeds immediately with stub outputs). |
+| `delegate_adapter` | Default. Executes the configured adapter’s `execute_action` / `execute_action_with_graph_node` (kernel prefers the graph-node path when present). With **`NativeRuntimeAdapter`**, ordinary actions succeed immediately with stub outputs; **`coordination.step`** is **not** a stub—it runs the agent-worker pipeline (`coordination_step_runtime_result`, see `akc.runtime.adapters.native`). |
 | `noop` | Succeeds without calling the delegate; outputs include `route: noop`. |
 | `subprocess` | Opt-in. Runs `argv` under a tenant-scoped working directory (see below), with timeout and scrubbed env. Only honored when using `LocalDepthRuntimeAdapter`. |
 | `http` | When using **`LocalDepthRuntimeAdapter`**, performs **policy-bounded** HTTP via `akc.runtime.http_execute` (allowlists, method/body/response caps). Otherwise not implemented on the active adapter. |
@@ -95,7 +95,7 @@ For mutating deployment providers in this mode, live apply requires deterministi
 1. `runtime_execution.allow_subprocess: true` in bundle metadata **or** `runtime_allow_subprocess: true` in `runtime_policy_envelope`.
 2. Non-empty `runtime_execution.subprocess_allowlist`: basenames of permitted `argv[0]` (fail closed if missing).
 3. Runtime policy must allow `runtime.action.execute.subprocess` (included in the default allow set; intent/IR projections may narrow it).
-4. Working directory is `outputs_root / <tenant> / <repo> / .akc/runtime / <run_id> / <runtime_run_id> /`, matching `FileSystemRuntimeStateStore` layout.
+4. Working directory defaults to `outputs_root / <tenant> / <repo> / .akc/runtime / <run_id> / <runtime_run_id> /` (same scope as `FileSystemRuntimeStateStore`); when the action carries coordination **`policy_context`**, `LocalDepthRuntimeAdapter` may use `subprocess_cwd_for_runtime_action` to place work under `.../roles/<role_id>/` (and optional scratch subdirs per `coordination_filesystem_scope`).
 5. Subprocess environment is minimal (`PATH` only by default).
 
 `IOContract.output_keys` for nodes that use subprocess should include the fields the adapter emits: `action_id`, `action_type`, `adapter_id`, `exit_code`, `stdout`, `stderr` (strings; `exit_code` is a JSON number).
@@ -103,14 +103,14 @@ For mutating deployment providers in this mode, live apply requires deterministi
 ## Extension points: registry and `create_hybrid_runtime`
 
 - **`RuntimeAdapterRegistry`** (`src/akc/runtime/adapters/registry.py`): register `adapter_id` → factory. **`register_default_runtime_adapters`** registers only `native`. Adapters that need constructor arguments (for example `LocalDepthRuntimeAdapter(outputs_root=...)`) should be registered with a closure factory at integration sites.
-- **`create_hybrid_runtime`** (`src/akc/runtime/init.py`): supported way to plug a custom primary adapter. The kernel uses `HybridRuntimeAdapter`, which forwards `execute_action` / `execute_action_with_graph_node` to the primary and falls back to `NativeRuntimeAdapter` for `wait_signal`, `checkpoint`, `restore`, and `cancel` when the primary does not advertise the capability. **`HybridRuntimeAdapter.capabilities()` reports the primary only**; the fallback is for execution, not for upgrading advertised durability.
+- **`create_hybrid_runtime`** (`src/akc/runtime/init.py`): supported way to plug a custom primary adapter. The kernel uses `HybridRuntimeAdapter`, which forwards **`execute_action`** to the primary only (no native fallback for execution). For **`execute_action_with_graph_node`**, it calls the primary’s method when implemented; otherwise it uses **`execute_action`**. It falls back to `NativeRuntimeAdapter` for `wait_signal`, `checkpoint`, `restore`, and `cancel` when the primary does not advertise the corresponding capability. **`HybridRuntimeAdapter.capabilities()` reports the primary only**; the fallback does not upgrade advertised durability.
 - **`create_local_depth_runtime`**: kernel wired with `LocalDepthRuntimeAdapter` for routing + opt-in subprocess (still uses in-memory scheduler/state unless you replace those).
 
 ### Adapter capabilities: honored vs advertised
 
 | Capability | `NativeRuntimeAdapter` (default) | `NativeRuntimeAdapter(honest_capabilities=False)` | `LocalDepthRuntimeAdapter` | Notes |
 |------------|----------------------------------|---------------------------------------------------|----------------------------|-------|
-| `execute_action` | Stub success | Same | Routing + optional subprocess | Primary user-visible behavior. |
+| `execute_action` | Stub success for generic actions; **`coordination.step`** via agent worker (`agent_worker_from_env` / injected worker) | Same | Routing + optional subprocess + same native delegate for coordination | User-visible behavior depends on action type and routing. |
 | `durable_waits` / `external_signals` / `compensation_hooks` / `external_checkpointing` | Advertised **`False`** | All **`True`** (legacy stub) | All **`False`** (delegate may differ) | Default native is **honest**: no durable external wait, real signal I/O, compensation, or process checkpoint restore. Use `honest_capabilities=False` only for tests that relied on the old broad advertisement. |
 | `checkpoint` / `restore` | Symbolic token `{runtime_run_id}:native`, no-op restore | Same | Delegates to inner adapter (default native) | Not workload-durable (see below). |
 
@@ -125,7 +125,8 @@ For mutating deployment providers in this mode, live apply requires deterministi
   1. Load **`queue_snapshot.json`** if present and **`restore_snapshot`** into the scheduler.
   2. Load **`checkpoint.json`** if present.
   3. If a checkpoint exists and **no** queue snapshot file existed in step 1, re-enqueue every action in `checkpoint.pending_queue`, then persist a fresh queue snapshot.
-  4. If no checkpoint exists, build/initialize checkpoint (including coordination enqueue), **`save_checkpoint`**, then **`_persist_queue_snapshot`**.
+  4. **If a checkpoint exists:** run **`_sync_coordination_layer_enqueue`**: when coordination metadata in `checkpoint.node_states["__coordination__"]` indicates a plan that is only **partially** enqueued (`plan_enqueued` and a non-null `coordination_next_layer_to_enqueue`), enqueue the next coordination layer(s) whose dependencies are satisfied (advances `coordination_next_layer_to_enqueue`, updates `pending_queue` from the scheduler). Then **`save_checkpoint`** and **`_persist_queue_snapshot`**, and **return** (no cold init).
+  5. **If no checkpoint exists:** build the runtime graph if needed, build/initialize checkpoint (including initial coordination plan enqueue via **`_enqueue_coordination_plan_if_needed`**), **`save_checkpoint`**, then **`_persist_queue_snapshot`**.
 - **Implications**
   - If **`queue_snapshot.json` is present**, its queued / in-flight / dead-letter state is **authoritative** for the scheduler; `checkpoint.pending_queue` is **not** merged in on that path (avoid assuming both files always agree).
   - **Crash between `save_checkpoint` and `save_queue_snapshot` on first init:** on restart, the queue snapshot is absent, so step 3 rehydrates the scheduler from `checkpoint.pending_queue` and writes a new snapshot—work is not silently dropped.
@@ -298,11 +299,14 @@ Schema for one metric line: `src/akc/control/schemas/akc_metric_export.v1.schema
 
 ## Related code
 
-- `src/akc/runtime/kernel.py` — graph, dispatch, coordination plan enqueue, `replay_token` handling, optional `runtime.action.execute.subprocess` authorization, `runtime.kernel.loop_finished` after each terminal loop outcome.
-- `src/akc/runtime/coordination/` — load and fingerprint checks, scheduler types (re-exported from `akc.coordination.models`), isolation projection, audit record shaping.
-- `src/akc/coordination/` — shared coordination graph parsing and `CoordinationScheduler` (compile + runtime + generated protocol stubs).
+- `src/akc/runtime/kernel.py` — graph, dispatch, coordination plan enqueue, `_sync_coordination_layer_enqueue`, `replay_token` handling, optional `runtime.action.execute.subprocess` / `runtime.action.execute.http` authorization, `runtime.kernel.loop_finished` after each terminal loop outcome.
+- `src/akc/runtime/coordination/` — load and fingerprint checks, isolation projection, audit record shaping, agent worker helpers (`worker.py`).
+- `src/akc/runtime/coordination/models.py` — re-exports `akc.coordination.models` (shared `CoordinationScheduler` and graph types).
+- `src/akc/coordination/` — shared coordination graph parsing and scheduling (compile + runtime + generated protocol stubs).
+- `src/akc/runtime/adapters/base.py` — `HybridRuntimeAdapter` (primary-only execution, capability-gated fallbacks).
 - `src/akc/runtime/adapters/local_depth.py` — routed execution.
-- `src/akc/runtime/policy.py` — `RUNTIME_POLICY_ACTIONS` includes `runtime.action.execute.subprocess`.
+- `src/akc/runtime/adapters/native.py` — stub workflow actions + `coordination.step` agent-worker execution.
+- `src/akc/runtime/policy.py` — `RUNTIME_POLICY_ACTIONS` includes `runtime.action.execute.subprocess` and `runtime.action.execute.http`.
 - `src/akc/cli/runtime.py` — evidence projection, aggregate terminal health, synthetic replay manifest linkage (see `docs/artifact-contracts.md`).
 
 ## Fleet-plane trust contract (cross-shard automation)
