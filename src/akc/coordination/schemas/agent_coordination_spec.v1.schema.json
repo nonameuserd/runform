@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/agent_coordination_spec.v1.json",
+  "title": "AKC agent coordination spec (v1 schema id; spec_version 1–2)",
+  "description": "JSON Schema for agent coordination artifacts. The file id remains v1 for backward compatibility. Use spec_version: 2 or coordination_spec_version: 2 for reserved edge kinds (parallel, barrier, delegate, handoff). When both spec_version and coordination_spec_version are present, they must be equal. Normative lowering and determinism: docs/coordination-semantics.md.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "spec_version",
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "coordination_graph",
+    "orchestration_bindings",
+    "agent_roles"
+  ],
+  "properties": {
+    "spec_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "Coordination semantics version. v1: depends_on scheduling only. v2: reserved edge kinds are lowered to precedence (same schedule as equivalent depends_on graph). coordination_spec_version overrides when present only in parsers that read it; both fields must match if both set."
+    },
+    "coordination_spec_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "Optional alias for spec_version (AKC parsers prefer this when present). Must match spec_version when both are set."
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "repo_id": { "type": "string", "minLength": 1 },
+    "coordination_graph": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["node_id", "kind"],
+            "properties": {
+              "node_id": { "type": "string" },
+              "kind": { "type": "string" },
+              "label": { "type": "string" },
+              "tools": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["edge_id", "kind", "src_step_id", "dst_step_id"],
+            "properties": {
+              "edge_id": { "type": "string" },
+              "kind": {
+                "type": "string",
+                "description": "v1: depends_on. v2: depends_on | parallel | barrier | delegate | handoff (all v2 kinds lower to precedence for layer scheduling; see docs/coordination-semantics.md)."
+              },
+              "src_step_id": { "type": "string" },
+              "dst_step_id": { "type": "string" },
+              "metadata": { "type": "object" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "orchestration_bindings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role_name", "agent_name", "orchestration_step_ids"],
+        "properties": {
+          "role_name": { "type": "string", "minLength": 1 },
+          "agent_name": { "type": "string", "minLength": 1 },
+          "orchestration_step_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "agent_roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "agent_spec": { "type": "object" },
+    "governance": { "type": "object" },
+    "tenant_isolation_contract": { "type": "object" }
+  }
+}

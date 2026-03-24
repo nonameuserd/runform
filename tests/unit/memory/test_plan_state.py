@@ -17,12 +17,12 @@ def test_json_plan_state_round_trip_and_active_pointer(tmp_path) -> None:  # typ
     assert loaded.goal == "do x"
     assert [s.title for s in loaded.steps] == ["a", "b"]
     assert loaded.next_step_id == loaded.steps[0].id
-    assert all(isinstance((s.inputs or {}).get("constraint_ids"), list) for s in loaded.steps)
+    assert all(isinstance((s.inputs or {}).get("linked_constraints"), list) for s in loaded.steps)
+    assert all(isinstance((s.inputs or {}).get("active_success_criteria"), list) for s in loaded.steps)
+    assert all(isinstance((s.inputs or {}).get("active_objectives"), list) for s in loaded.steps)
     assert all(isinstance((s.inputs or {}).get("goal_fingerprint"), str) for s in loaded.steps)
 
-    updated = store.mark_step(
-        tenant_id="t", repo_id="repo", plan_id=plan.id, step_id=loaded.steps[0].id, status="done"
-    )
+    updated = store.mark_step(tenant_id="t", repo_id="repo", plan_id=plan.id, step_id=loaded.steps[0].id, status="done")
     assert [s.status for s in updated.steps][:1] == ["done"]
 
 

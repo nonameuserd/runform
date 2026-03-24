@@ -166,9 +166,7 @@ class SQLiteWhyGraphStore(WhyGraphStore):
                 payload=payload,
             )
 
-    def list_nodes_by_type(
-        self, *, tenant_id: str, repo_id: str, node_type: WhyNodeType
-    ) -> list[WhyNode]:
+    def list_nodes_by_type(self, *, tenant_id: str, repo_id: str, node_type: WhyNodeType) -> list[WhyNode]:
         repo = require_scope(tenant_id=tenant_id, repo_id=repo_id)
         require_non_empty(node_type, name="node_type")
         with self._connect() as conn:

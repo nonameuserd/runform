@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/akc_operator_playbook_report.v1.schema.json",
+  "title": "AKC operator playbook report (governance workflow contract)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_kind", "version", "generated_at_ms", "inputs", "steps"],
+  "properties": {
+    "schema_kind": { "type": "string", "const": "akc_operator_playbook_report" },
+    "version": { "type": "integer", "const": 1 },
+    "generated_at_ms": { "type": "integer", "minimum": 0 },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["tenant_id", "repo_id", "outputs_root", "run_ids"],
+      "properties": {
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "repo_id": { "type": "string", "minLength": 1 },
+        "outputs_root": { "type": "string", "minLength": 1 },
+        "shard_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "run_ids": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "properties": {
+            "a": { "type": "string", "minLength": 1 },
+            "b": { "type": "string", "minLength": 1 }
+          },
+          "required": ["a", "b"]
+        },
+        "focus_run_label": { "type": "string", "enum": ["a", "b"] },
+        "evaluation_modes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "intent_fingerprint_refs": { "type": "object", "additionalProperties": true },
+    "policy_decision_refs": { "type": "object", "additionalProperties": true },
+    "manifest_diff": { "type": "object", "additionalProperties": true },
+    "replay_plan_artifact": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "effective_partial_replay_passes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "replay_forensics_summary": { "type": ["object", "null"], "additionalProperties": true },
+    "incident_bundle": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "out_dir": { "type": "string", "minLength": 1 },
+        "zip_path": { "type": ["string", "null"] },
+        "summary_relpath": { "type": ["string", "null"] },
+        "summary_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "operational_coupling_summary": { "type": ["object", "null"], "additionalProperties": true },
+    "policy_explain_summary": { "type": ["object", "null"], "additionalProperties": true },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "status"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "manifest_diff",
+              "replay_plan",
+              "replay_forensics",
+              "incident_export",
+              "operational_coupling",
+              "policy_explain"
+            ]
+          },
+          "status": { "type": "string", "enum": ["ok", "skipped", "failed"] },
+          "error": { "type": "string" },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "report_relpath": { "type": "string", "minLength": 1 },
+    "notes": { "type": "string" }
+  }
+}

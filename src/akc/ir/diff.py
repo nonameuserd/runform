@@ -4,8 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from akc.ir.schema import IRDocument, IRNode
-from akc.utils.fingerprint import stable_json_fingerprint
+from akc.ir.schema import IRDocument
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +45,6 @@ class IRDiff:
         )
 
 
-def _node_fingerprint(node: IRNode) -> str:
-    return stable_json_fingerprint(node.to_json_obj())
-
-
 def diff_ir(*, before: IRDocument, after: IRDocument) -> IRDiff:
     if before.tenant_id != after.tenant_id or before.repo_id != after.repo_id:
         raise ValueError("cannot diff IR documents across tenant/repo scopes")
@@ -65,7 +60,7 @@ def diff_ir(*, before: IRDocument, after: IRDocument) -> IRDiff:
 
     changed_ids: list[str] = []
     for node_id in sorted(left_ids & right_ids):
-        if _node_fingerprint(left[node_id]) != _node_fingerprint(right[node_id]):
+        if left[node_id].fingerprint() != right[node_id].fingerprint():
             changed_ids.append(node_id)
 
     return IRDiff(added=added, removed=removed, changed=tuple(changed_ids))

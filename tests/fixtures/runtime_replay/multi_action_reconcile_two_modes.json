@@ -1,0 +1,298 @@
+{
+  "transcript": [
+    {
+      "event_id": "ev-a",
+      "event_type": "runtime.action.completed",
+      "timestamp": 10,
+      "context": {},
+      "payload": {
+        "action": {
+          "action_id": "act-a",
+          "action_type": "noop"
+        },
+        "transition": {
+          "from_state": "ready",
+          "to_state": "completed",
+          "trigger_id": "x",
+          "transition_id": "t1",
+          "occurred_at": 15
+        }
+      }
+    },
+    {
+      "event_id": "ev-b",
+      "event_type": "runtime.action.completed",
+      "timestamp": 20,
+      "context": {},
+      "payload": {
+        "action": {
+          "action_id": "act-b",
+          "action_type": "noop"
+        },
+        "transition": {
+          "from_state": "pending",
+          "to_state": "skipped",
+          "trigger_id": "y",
+          "transition_id": "t2",
+          "occurred_at": 18
+        }
+      }
+    }
+  ],
+  "manifest_template": {
+    "schema_kind": "run_manifest",
+    "manifest_version": 1,
+    "run_id": "run-x",
+    "tenant_id": "tenant-a",
+    "repo_id": "repo-a",
+    "ir_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "intent_semantic_fingerprint": null,
+    "intent_goal_text_fingerprint": null,
+    "stable_intent_sha256": null,
+    "knowledge_semantic_fingerprint": null,
+    "knowledge_provenance_fingerprint": null,
+    "knowledge_snapshot": null,
+    "ir_document": null,
+    "ir_format_version": null,
+    "replay_mode": "runtime_replay",
+    "retrieval_snapshots": [],
+    "passes": [],
+    "model": null,
+    "model_params": null,
+    "tool_params": null,
+    "partial_replay_passes": [],
+    "llm_vcr": null,
+    "budgets": null,
+    "output_hashes": null,
+    "runtime_bundle": {
+      "path": "b.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "runtime_event_transcript": {
+      "path": "e.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "runtime_evidence": [
+      {
+        "evidence_type": "action_decision",
+        "timestamp": 10,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "action_id": "act-a",
+          "decision": "allowed"
+        }
+      },
+      {
+        "evidence_type": "retry_budget",
+        "timestamp": 12,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "action_id": "act-a",
+          "retry_count": 2,
+          "budget_burn": {
+            "retries": 2
+          }
+        }
+      },
+      {
+        "evidence_type": "transition_application",
+        "timestamp": 15,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "action_id": "act-a",
+          "transition": {
+            "from_state": "ready",
+            "to_state": "completed",
+            "trigger_id": "x",
+            "transition_id": "t1",
+            "occurred_at": 15
+          }
+        }
+      },
+      {
+        "evidence_type": "action_decision",
+        "timestamp": 16,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "action_id": "act-b",
+          "decision": "denied"
+        }
+      },
+      {
+        "evidence_type": "transition_application",
+        "timestamp": 18,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "action_id": "act-b",
+          "transition": {
+            "from_state": "pending",
+            "to_state": "skipped",
+            "trigger_id": "y",
+            "transition_id": "t2",
+            "occurred_at": 18
+          }
+        }
+      },
+      {
+        "evidence_type": "rollback_chain",
+        "timestamp": 50,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "resource_id": "svc-a",
+          "chain": [
+            "hash-prev",
+            "hash-stable"
+          ]
+        }
+      },
+      {
+        "evidence_type": "reconcile_outcome",
+        "timestamp": 60,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "resource_id": "svc-a",
+          "operation_type": "update",
+          "applied": true,
+          "observed_hash": "want",
+          "health_status": "healthy"
+        }
+      },
+      {
+        "evidence_type": "reconcile_outcome",
+        "timestamp": 70,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "resource_id": "svc-b",
+          "operation_type": "noop",
+          "applied": false,
+          "health_status": "healthy"
+        }
+      },
+      {
+        "evidence_type": "terminal_health",
+        "timestamp": 100,
+        "runtime_run_id": "rr-golden-1",
+        "payload": {
+          "resource_id": "svc-b",
+          "health_status": "healthy"
+        }
+      }
+    ],
+    "trace_spans": [],
+    "control_plane": {
+      "runtime_run_id": "rr-golden-1"
+    },
+    "cost_attribution": null
+  },
+  "expected_runtime_replay": {
+    "mode": "runtime_replay",
+    "reconcile_decision_count": 2,
+    "reconcile_decisions": [
+      {
+        "applied": true,
+        "health_status": "healthy",
+        "operation_type": "update",
+        "payload": {
+          "applied": true,
+          "health_status": "healthy",
+          "observed_hash": "want",
+          "operation_type": "update",
+          "resource_id": "svc-a"
+        },
+        "resource_id": "svc-a",
+        "rollback_chain": [
+          "hash-prev",
+          "hash-stable"
+        ]
+      },
+      {
+        "applied": false,
+        "health_status": "healthy",
+        "operation_type": "noop",
+        "payload": {
+          "applied": false,
+          "health_status": "healthy",
+          "operation_type": "noop",
+          "resource_id": "svc-b"
+        },
+        "resource_id": "svc-b",
+        "rollback_chain": []
+      }
+    ],
+    "runtime_run_id": "rr-golden-1",
+    "terminal_health_status": "healthy",
+    "transition_count": 2,
+    "transitions": [
+      {
+        "action_decision": "allowed",
+        "budget_burn": {
+          "retries": 2
+        },
+        "event_id": "ev-a",
+        "event_type": "runtime.action.completed",
+        "retry_count": 2,
+        "transition": {
+          "from_state": "ready",
+          "occurred_at": 15,
+          "to_state": "completed",
+          "transition_id": "t1",
+          "trigger_id": "x"
+        }
+      },
+      {
+        "action_decision": "denied",
+        "budget_burn": null,
+        "event_id": "ev-b",
+        "event_type": "runtime.action.completed",
+        "retry_count": 0,
+        "transition": {
+          "from_state": "pending",
+          "occurred_at": 18,
+          "to_state": "skipped",
+          "transition_id": "t2",
+          "trigger_id": "y"
+        }
+      }
+    ]
+  },
+  "expected_reconcile_replay": {
+    "mode": "reconcile_replay",
+    "reconcile_decision_count": 2,
+    "reconcile_decisions": [
+      {
+        "applied": true,
+        "health_status": "healthy",
+        "operation_type": "update",
+        "payload": {
+          "applied": true,
+          "health_status": "healthy",
+          "observed_hash": "want",
+          "operation_type": "update",
+          "resource_id": "svc-a"
+        },
+        "resource_id": "svc-a",
+        "rollback_chain": [
+          "hash-prev",
+          "hash-stable"
+        ]
+      },
+      {
+        "applied": false,
+        "health_status": "healthy",
+        "operation_type": "noop",
+        "payload": {
+          "applied": false,
+          "health_status": "healthy",
+          "operation_type": "noop",
+          "resource_id": "svc-b"
+        },
+        "resource_id": "svc-b",
+        "rollback_chain": []
+      }
+    ],
+    "runtime_run_id": "rr-golden-1",
+    "terminal_health_status": "healthy",
+    "transition_count": 0,
+    "transitions": []
+  }
+}

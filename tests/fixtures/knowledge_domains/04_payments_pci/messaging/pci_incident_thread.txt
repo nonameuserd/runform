@@ -1,0 +1,5 @@
+[2026-01-03 09:41] @sec-eng: Incident: cardholder data may have been included in query strings.
+[2026-01-03 09:42] @payments-oncall: We must not leak PII. Disable the callback query-string usage.
+[2026-01-03 09:44] @sec-eng: Also: ensure API keys are not printed in logs. Secrets must not be exported.
+[2026-01-03 09:50] @payments-oncall: Confirm outbound HTTPS egress is blocked by default until approved.
+

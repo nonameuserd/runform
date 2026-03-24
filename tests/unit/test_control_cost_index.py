@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from akc.control.cost_index import CostIndex, RunCostRecord
@@ -21,6 +22,8 @@ def test_cost_index_upsert_and_tenant_totals(tmp_path: Path) -> None:
             total_tokens=150,
             wall_time_ms=20,
             estimated_cost_usd=0.12,
+            pricing_version="prices-2026-03-20",
+            cost_breakdown={"by_pass": {"generate": {"llm_calls": 2}}},
         )
     )
     idx.upsert_run_cost(
@@ -143,3 +146,52 @@ def test_cost_index_list_runs_orders_by_latest_upsert(tmp_path: Path, monkeypatc
     runs = idx.list_runs(tenant_id=tenant_id, repo_id=repo_id, limit=2)
     assert runs[0]["run_id"] == "run-1"
     assert runs[1]["run_id"] == "run-2"
+    assert runs[0]["pricing_version"] is None
+    assert runs[0]["cost_breakdown"] == {}
+
+
+def test_cost_index_migrates_legacy_schema_with_breakdown_columns(tmp_path: Path) -> None:
+    db = tmp_path / "metrics.sqlite"
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE run_costs (
+                tenant_id TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                llm_calls INTEGER NOT NULL,
+                tool_calls INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                wall_time_ms INTEGER NOT NULL,
+                estimated_cost_usd REAL NOT NULL,
+                PRIMARY KEY (tenant_id, repo_id, run_id)
+            )
+            """
+        )
+
+    idx = CostIndex(sqlite_path=db)
+    idx.upsert_run_cost(
+        record=RunCostRecord(
+            tenant_id="t1",
+            repo_id="repo-a",
+            run_id="run-legacy",
+            llm_calls=1,
+            tool_calls=1,
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            wall_time_ms=2,
+            estimated_cost_usd=0.02,
+            pricing_version="prices-2026-03-20",
+            cost_breakdown={"currency": "USD", "by_component": {"controller": {"llm_calls": 1}}},
+        )
+    )
+
+    runs = idx.list_runs(tenant_id="t1", repo_id="repo-a", limit=1)
+    assert runs[0]["pricing_version"] == "prices-2026-03-20"
+    assert runs[0]["cost_breakdown"] == {
+        "currency": "USD",
+        "by_component": {"controller": {"llm_calls": 1}},
+    }

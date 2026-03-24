@@ -15,7 +15,9 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "jsonschema>=4.22",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -26,7 +28,6 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",
-    "jsonschema>=4.22",
     "types-jsonschema>=4.22.0.0",
     "types-PyYAML>=6.0.0.0",
     "PyYAML>=6.0",
@@ -67,6 +68,13 @@ vectorstore-pg = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.4",
 ]
+# Offline Ragas ID metrics on deterministic retrieval fixtures (CI: optional extra).
+# Not included in the default pip-audit export (see .github/workflows/ci.yml): the Ragas
+# stack pulls large transitive deps; audit the lockfile separately if you need SBOM parity.
+eval-rag = [
+    "ragas>=0.2",
+    "rapidfuzz>=3.14.3",
+]
 
 [project.scripts]
 akc = "akc.cli:main"
@@ -81,13 +89,21 @@ packages = ["src/akc"]
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/akc/coordination/static/coordination_sdk.ts" = "akc/coordination/static/coordination_sdk.ts"
+"src/akc/coordination/schemas/agent_coordination_spec.v1.schema.json" = "akc/coordination/schemas/agent_coordination_spec.v1.schema.json"
+"src/akc/control/operator_dashboard/index.html" = "akc/control/operator_dashboard/index.html"
+"src/akc/control/operator_dashboard/app.js" = "akc/control/operator_dashboard/app.js"
+"src/akc/control/operator_dashboard/README.md" = "akc/control/operator_dashboard/README.md"
+"src/akc/cli/compile_tools_policy_stub.rego" = "akc/cli/compile_tools_policy_stub.rego"
+
 [tool.hatch.build.targets.sdist]
 include = ["src/akc"]
 
 # Ruff: lint + format
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -114,6 +130,7 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+implicit_reexport = true
 warn_return_any = true
 warn_unused_ignores = true
 show_error_codes = true

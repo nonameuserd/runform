@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/policy_bundle.v1.schema.json",
+  "title": "AKC fleet-scale policy bundle lifecycle (governance visibility)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_kind", "version", "rollout_stage"],
+  "properties": {
+    "schema_kind": { "type": "string", "const": "akc_policy_bundle" },
+    "version": { "type": "integer", "const": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "repo_id": { "type": "string", "minLength": 1 },
+    "revision_id": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Operator-chosen label for this bundle revision (intent pointer for security)."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "OPA-like provenance metadata for ownership and signature attestation.",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Revision label from the policy source of truth (may mirror revision_id)."
+        },
+        "root_owner": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Trusted owner of the policy root or namespace."
+        },
+        "signature": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "key_id": { "type": "string", "maxLength": 256 },
+            "algorithm": { "type": "string", "maxLength": 128 },
+            "value": { "type": "string", "maxLength": 4096 }
+          }
+        }
+      }
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "opa_bundle_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of the OPA/Rego bundle bytes operators intend to enforce."
+        },
+        "opa_bundle_uri": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional URI or registry reference for the pinned bundle."
+        },
+        "rego_path_refs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": "Repo-relative or logical paths to Rego sources in scope."
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Tenant/repo policy defaults (opaque to AKC v1; governance metadata only)."
+    },
+    "governance_profile": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Tenant-scoped governance controls consumed by AKC runtime/compile verification surfaces.",
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "assurance_mode": { "type": "string", "enum": ["hybrid", "artifact_only"] },
+        "verifier_coupling_default": { "type": "boolean" },
+        "verifier_enforcement": { "type": "string", "enum": ["advisory", "blocking", "auto"] },
+        "provider_allowlist": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "escalation_thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_errors_before_block": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "compile_defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional org-wide compile defaults (overlays rollout_stage-derived keys). Same precedence as rollout_stage inside governance compile resolution.",
+          "properties": {
+            "sandbox": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "strong_lane_preference": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "policy_mode": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "replay_mode": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "promotion_mode": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "stored_assertion_index": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        }
+      }
+    },
+    "rollout_stage": {
+      "type": "string",
+      "enum": ["observe", "enforce"],
+      "description": "Lifecycle stage: observe (telemetry only) vs enforce."
+    },
+    "last_reviewed": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "at_ms": { "type": "integer", "minimum": 0 },
+        "by": { "type": "string", "maxLength": 256 },
+        "notes": { "type": "string", "maxLength": 4096 }
+      }
+    }
+  }
+}

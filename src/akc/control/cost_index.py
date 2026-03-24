@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -24,11 +25,17 @@ class RunCostRecord:
     total_tokens: int
     wall_time_ms: int
     estimated_cost_usd: float
+    pricing_version: str | None = None
+    cost_breakdown: dict[str, JSONValue] | None = None
 
     def __post_init__(self) -> None:
         require_non_empty(self.tenant_id, name="run_cost_record.tenant_id")
         require_non_empty(self.repo_id, name="run_cost_record.repo_id")
         require_non_empty(self.run_id, name="run_cost_record.run_id")
+        if self.pricing_version is not None and not str(self.pricing_version).strip():
+            raise ValueError("run_cost_record.pricing_version must be non-empty when set")
+        if self.cost_breakdown is not None and not isinstance(self.cost_breakdown, dict):
+            raise ValueError("run_cost_record.cost_breakdown must be an object when set")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +65,8 @@ class CostIndex:
                 wall_time_ms INTEGER NOT NULL,
                 updated_at_ms INTEGER NOT NULL,
                 estimated_cost_usd REAL NOT NULL,
+                pricing_version TEXT NOT NULL DEFAULT '',
+                breakdown_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (tenant_id, repo_id, run_id)
             )
             """
@@ -65,16 +74,14 @@ class CostIndex:
         # Backward-compat for older DBs created before `updated_at_ms` existed.
         cols = {row[1] for row in conn.execute("PRAGMA table_info(run_costs)").fetchall()}
         if "updated_at_ms" not in cols:
-            conn.execute(
-                "ALTER TABLE run_costs ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0"
-            )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_run_costs_updated_at ON run_costs(updated_at_ms)"
-        )
+            conn.execute("ALTER TABLE run_costs ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0")
+        if "pricing_version" not in cols:
+            conn.execute("ALTER TABLE run_costs ADD COLUMN pricing_version TEXT NOT NULL DEFAULT ''")
+        if "breakdown_json" not in cols:
+            conn.execute("ALTER TABLE run_costs ADD COLUMN breakdown_json TEXT NOT NULL DEFAULT '{}'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_run_costs_updated_at ON run_costs(updated_at_ms)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_costs_tenant ON run_costs(tenant_id)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_run_costs_tenant_repo ON run_costs(tenant_id, repo_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_run_costs_tenant_repo ON run_costs(tenant_id, repo_id)")
         return conn
 
     def upsert_run_cost(self, *, record: RunCostRecord) -> None:
@@ -85,8 +92,8 @@ class CostIndex:
                 INSERT INTO run_costs (
                     tenant_id, repo_id, run_id, llm_calls, tool_calls,
                     input_tokens, output_tokens, total_tokens, wall_time_ms,
-                    updated_at_ms, estimated_cost_usd
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at_ms, estimated_cost_usd, pricing_version, breakdown_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id, repo_id, run_id) DO UPDATE SET
                     llm_calls=excluded.llm_calls,
                     tool_calls=excluded.tool_calls,
@@ -95,7 +102,9 @@ class CostIndex:
                     total_tokens=excluded.total_tokens,
                     wall_time_ms=excluded.wall_time_ms,
                     updated_at_ms=excluded.updated_at_ms,
-                    estimated_cost_usd=excluded.estimated_cost_usd
+                    estimated_cost_usd=excluded.estimated_cost_usd,
+                    pricing_version=excluded.pricing_version,
+                    breakdown_json=excluded.breakdown_json
                 """,
                 (
                     record.tenant_id,
@@ -109,6 +118,8 @@ class CostIndex:
                     int(record.wall_time_ms),
                     int(updated_at_ms),
                     float(record.estimated_cost_usd),
+                    str(record.pricing_version or ""),
+                    json.dumps(record.cost_breakdown or {}, sort_keys=True, ensure_ascii=False),
                 ),
             )
 
@@ -210,7 +221,8 @@ class CostIndex:
                     """
                     SELECT
                         tenant_id, repo_id, run_id, llm_calls, tool_calls,
-                        input_tokens, output_tokens, total_tokens, wall_time_ms, estimated_cost_usd
+                        input_tokens, output_tokens, total_tokens, wall_time_ms,
+                        estimated_cost_usd, pricing_version, breakdown_json
                     FROM run_costs
                     WHERE tenant_id = ? AND repo_id = ?
                     ORDER BY updated_at_ms DESC, rowid DESC
@@ -223,7 +235,8 @@ class CostIndex:
                     """
                     SELECT
                         tenant_id, repo_id, run_id, llm_calls, tool_calls,
-                        input_tokens, output_tokens, total_tokens, wall_time_ms, estimated_cost_usd
+                        input_tokens, output_tokens, total_tokens, wall_time_ms,
+                        estimated_cost_usd, pricing_version, breakdown_json
                     FROM run_costs
                     WHERE tenant_id = ?
                     ORDER BY updated_at_ms DESC, rowid DESC
@@ -233,6 +246,15 @@ class CostIndex:
                 ).fetchall()
         out: list[dict[str, JSONValue]] = []
         for row in rows:
+            breakdown: dict[str, JSONValue] | None = None
+            breakdown_raw = row[11]
+            if isinstance(breakdown_raw, str) and breakdown_raw.strip():
+                try:
+                    parsed = json.loads(breakdown_raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    breakdown = parsed
             out.append(
                 {
                     "tenant_id": str(row[0]),
@@ -245,6 +267,8 @@ class CostIndex:
                     "total_tokens": int(row[7]),
                     "wall_time_ms": int(row[8]),
                     "estimated_cost_usd": float(row[9]),
+                    "pricing_version": str(row[10]) if str(row[10]).strip() else None,
+                    "cost_breakdown": breakdown,
                 }
             )
         return out

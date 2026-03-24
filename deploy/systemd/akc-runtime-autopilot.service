@@ -1,0 +1,53 @@
+# Reference systemd unit: run `akc runtime autopilot` with restart-on-failure and resource caps.
+#
+# Install (example):
+#   sudo install -m 0644 deploy/systemd/akc-runtime-autopilot.service /etc/systemd/system/
+#   sudo install -m 0600 deploy/systemd/akc-runtime-autopilot.env /etc/akc/autopilot.env
+#   sudo systemctl daemon-reload && sudo systemctl enable --now akc-runtime-autopilot.service
+#
+# Health: `systemctl status akc-runtime-autopilot` (Main PID alive) and journal:
+#   journalctl -u akc-runtime-autopilot -f
+#
+# Single-writer: use one replica per scope or k8s Lease backend; see deploy/README.md.
+
+[Unit]
+Description=AKC runtime autopilot (living recompile loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=akc
+Group=akc
+WorkingDirectory=/var/lib/akc
+EnvironmentFile=-/etc/akc/autopilot.env
+
+# Example command — replace paths and flags; pin budgets or use --unattended-defaults with profile.
+ExecStart=/usr/local/bin/akc runtime autopilot \
+  --outputs-root /var/lib/akc/outputs \
+  --ingest-state-path /var/lib/akc/ingest_state.json \
+  --living-automation-profile living_loop_unattended_v1 \
+  --unattended-defaults \
+  --env-profile prod \
+  --lease-backend filesystem \
+  --controller-id %H
+
+Restart=on-failure
+RestartSec=15
+# Avoid tight crash loops burning CPU
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Resource limits (tune for host)
+MemoryMax=2G
+CPUQuota=200%
+
+# Optional: watchdog if your akc build supports systemd notify (not default)
+# WatchdogSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=akc-autopilot
+
+[Install]
+WantedBy=multi-user.target

@@ -5,14 +5,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from akc.compile.interfaces import LLMMessage, LLMRequest
+from akc.compile.artifact_passes import (
+    build_patch_artifact_prompt_envelope,
+    parse_patch_artifact_metadata,
+    parse_patch_artifact_strict,
+    parse_patch_artifact_vcr_cache,
+)
+from akc.compile.interfaces import LLMRequest
 from akc.compile.ir_passes import IRGeneratePromptPass, IRRepairPromptPass
-from akc.compile.patch_utils import extract_touched_paths
 from akc.compile.repair import FailureSummary
 from akc.ir import IRDocument
 from akc.memory.models import PlanState
 from akc.run.manifest import RunManifest
-from akc.run.vcr import llm_vcr_prompt_key
 
 StageName = Literal["generate", "repair"]
 
@@ -39,9 +43,12 @@ class ResolvedPatch:
 
 
 def candidate_from_patch_text(*, patch_text: str) -> PatchCandidate:
+    parsed = parse_patch_artifact_strict(text=patch_text)
+    if parsed is None:
+        raise ValueError("patch_text is not a strict unified diff artifact")
     return PatchCandidate(
-        patch_text=patch_text,
-        touched_paths=tuple(extract_touched_paths(patch_text)),
+        patch_text=parsed.patch_text,
+        touched_paths=parsed.touched_paths,
     )
 
 
@@ -64,9 +71,7 @@ def _cached_candidate_text(*, plan: PlanState, step_id: str) -> str | None:
     return None
 
 
-def _manifest_pass_metadata(
-    *, replay_manifest: RunManifest | None, pass_name: StageName
-) -> dict[str, Any] | None:
+def _manifest_pass_metadata(*, replay_manifest: RunManifest | None, pass_name: StageName) -> dict[str, Any] | None:
     if replay_manifest is None:
         return None
     for rec in replay_manifest.passes:
@@ -92,9 +97,9 @@ def _replayed_candidate_text(
     if md is None:
         return None
 
-    raw = md.get("llm_text")
-    if isinstance(raw, str) and raw.strip():
-        return raw
+    parsed = parse_patch_artifact_metadata(metadata=md)
+    if parsed is not None:
+        return parsed.patch_text
     return None
 
 
@@ -108,6 +113,10 @@ def resolve_patch_candidate_from_prompt(
     tier_model: str,
     temperature: float,
     max_output_tokens: int | None,
+    intent_id: str,
+    active_objectives: list[Mapping[str, Any]],
+    linked_constraints: list[Mapping[str, Any]],
+    active_success_criteria: list[Mapping[str, Any]],
     goal: str,
     retrieved_context: Mapping[str, Any],
     test_policy: Mapping[str, Any] | None = None,
@@ -132,6 +141,10 @@ def resolve_patch_candidate_from_prompt(
             raise ValueError("test_policy is required for generate stage")
         user_prompt = generate_prompt_pass.build_prompt(
             ir_doc=ir_doc,
+            intent_id=intent_id,
+            active_objectives=active_objectives,
+            linked_constraints=linked_constraints,
+            active_success_criteria=active_success_criteria,
             goal=goal,
             plan=plan,
             retrieved_context=retrieved_context,
@@ -140,11 +153,13 @@ def resolve_patch_candidate_from_prompt(
         )
     else:
         if step_title is None or last_generation_text is None or failure is None:
-            raise ValueError(
-                "step_title, last_generation_text, and failure are required for repair stage"
-            )
+            raise ValueError("step_title, last_generation_text, and failure are required for repair stage")
         user_prompt = repair_prompt_pass.build_prompt(
             ir_doc=ir_doc,
+            intent_id=intent_id,
+            active_objectives=active_objectives,
+            linked_constraints=linked_constraints,
+            active_success_criteria=active_success_criteria,
             goal=goal,
             plan=plan,
             step_id=step_id,
@@ -155,28 +170,18 @@ def resolve_patch_candidate_from_prompt(
             verifier_feedback=verifier_feedback,
         )
 
-    llm_messages = [
-        LLMMessage(role="system", content="You are an AKC compile loop assistant."),
-        LLMMessage(role="user", content=user_prompt),
-    ]
-    llm_request = LLMRequest(
-        messages=llm_messages,
+    envelope = build_patch_artifact_prompt_envelope(
+        user_prompt=user_prompt,
+        tier_name=tier_name,
+        tier_model=tier_model,
+        plan_id=plan.id,
+        step_id=step_id,
+        replay_mode=replay_mode,
         temperature=float(temperature),
         max_output_tokens=int(max_output_tokens) if max_output_tokens is not None else None,
-        metadata={
-            "tier": tier_name,
-            "tier_model": tier_model,
-            "plan_id": plan.id,
-            "step_id": step_id,
-            "replay_mode": replay_mode,
-        },
     )
-    prompt_key = llm_vcr_prompt_key(
-        messages=llm_messages,
-        temperature=float(temperature),
-        max_output_tokens=int(max_output_tokens) if max_output_tokens is not None else None,
-        metadata=llm_request.metadata,
-    )
+    llm_request: LLMRequest = envelope.llm_request
+    prompt_key = envelope.prompt_key
 
     if should_call_model:
         return ModelCallNeeded(
@@ -186,9 +191,12 @@ def resolve_patch_candidate_from_prompt(
             user_prompt=user_prompt,
         )
 
-    llm_vcr = dict(replay_manifest.llm_vcr or {})
-    cached_text = llm_vcr.get(prompt_key)
-    if not cached_text:
+    parsed_cached = parse_patch_artifact_vcr_cache(
+        llm_vcr=(replay_manifest.llm_vcr or {}),
+        prompt_key=prompt_key,
+    )
+    cached_text = parsed_cached.patch_text if parsed_cached is not None else None
+    if cached_text is None:
         cached_text = _replayed_candidate_text(
             plan=plan,
             step_id=step_id,

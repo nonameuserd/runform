@@ -16,8 +16,7 @@ def llm_vcr_prompt_key(
 ) -> str:
     payload: dict[str, Any] = {
         "messages": [
-            {"role": str(getattr(m, "role", "")), "content": str(getattr(m, "content", ""))}
-            for m in messages
+            {"role": str(getattr(m, "role", "")), "content": str(getattr(m, "content", ""))} for m in messages
         ],
         "temperature": float(temperature),
         "max_output_tokens": int(max_output_tokens) if max_output_tokens is not None else None,

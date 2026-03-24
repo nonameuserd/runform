@@ -1,0 +1,9 @@
+{
+  "name": "akc-coordination-sdk",
+  "private": true,
+  "description": "Dev-only TypeScript tooling for src/akc/coordination/static/coordination_sdk.ts",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

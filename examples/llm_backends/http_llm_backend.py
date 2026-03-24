@@ -40,9 +40,7 @@ class HttpLLMBackendConfig:
             timeout_s = 30.0
 
         if not url:
-            raise ValueError(
-                "AKC_HTTP_LLM_URL must be set when using HttpLLMBackend (custom living backend)"
-            )
+            raise ValueError("AKC_HTTP_LLM_URL must be set when using HttpLLMBackend (custom living backend)")
         if timeout_s <= 0:
             timeout_s = 30.0
 

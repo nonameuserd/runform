@@ -171,8 +171,7 @@ def _validate_pg_identifier(value: str, *, name: str) -> str:
     _require_non_empty(value, name=name)
     if _PG_IDENT_RE.fullmatch(value) is None:
         raise ValueError(
-            f"{name} must be a simple identifier (letters/numbers/underscore), "
-            "optionally schema-qualified"
+            f"{name} must be a simple identifier (letters/numbers/underscore), optionally schema-qualified"
         )
     return value
 
@@ -311,15 +310,11 @@ class PgVectorStore(VectorStore):
         try:
             import importlib
         except Exception as e:  # pragma: no cover
-            raise VectorStoreError(
-                "PgVectorStore requires optional dependencies: psycopg[binary]"
-            ) from e
+            raise VectorStoreError("PgVectorStore requires optional dependencies: psycopg[binary]") from e
         try:
             psycopg = importlib.import_module("psycopg")
         except Exception as e:  # pragma: no cover
-            raise VectorStoreError(
-                "PgVectorStore requires optional dependencies: psycopg[binary]"
-            ) from e
+            raise VectorStoreError("PgVectorStore requires optional dependencies: psycopg[binary]") from e
         return psycopg.connect(self._dsn)
 
     def _ensure_schema(self) -> None:
@@ -346,9 +341,7 @@ class PgVectorStore(VectorStore):
                 WITH (lists = 100)
                 """
             )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS {self._table}_tenant_id ON {self._table}(tenant_id)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {self._table}_tenant_id ON {self._table}(tenant_id)")
 
     def add(self, *, tenant_id: str, documents: Iterable[Document]) -> int:
         _require_non_empty(tenant_id, name="tenant_id")

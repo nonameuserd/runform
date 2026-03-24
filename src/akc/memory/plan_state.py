@@ -131,7 +131,13 @@ def _new_plan(
                 title=str(title),
                 status="pending",
                 order_idx=int(idx),
-                inputs={"constraint_ids": [], "goal_fingerprint": fp},
+                inputs={
+                    "intent_id": "",
+                    "active_objectives": [],
+                    "linked_constraints": [],
+                    "active_success_criteria": [],
+                    "goal_fingerprint": fp,
+                },
                 outputs={},
             )
         )
@@ -251,9 +257,7 @@ class JsonFilePlanStateStore(PlanStateStore):
             raise PlanStateError("tenant_id mismatch between argument and plan.tenant_id")
         if normalize_repo_id(plan_n.repo_id) != repo:
             raise PlanStateError("repo_id mismatch between argument and plan.repo_id")
-        p = _plan_path(
-            base_dir=self._base_dir, tenant_id=tenant_id, repo_id=repo, plan_id=plan_n.id
-        )
+        p = _plan_path(base_dir=self._base_dir, tenant_id=tenant_id, repo_id=repo, plan_id=plan_n.id)
         obj = plan_n.to_json_obj()
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +285,13 @@ class JsonFilePlanStateStore(PlanStateStore):
             title=title,
             status="pending",
             order_idx=order_idx,
-            inputs={"constraint_ids": [], "goal_fingerprint": fp},
+            inputs={
+                "intent_id": "",
+                "active_objectives": [],
+                "linked_constraints": [],
+                "active_success_criteria": [],
+                "goal_fingerprint": fp,
+            },
             outputs={},
         )
         steps = tuple(list(plan.steps) + [step])
@@ -691,7 +701,13 @@ class SQLitePlanStateStore(PlanStateStore):
             title=title,
             status="pending",
             order_idx=order_idx,
-            inputs={"constraint_ids": [], "goal_fingerprint": fp},
+            inputs={
+                "intent_id": "",
+                "active_objectives": [],
+                "linked_constraints": [],
+                "active_success_criteria": [],
+                "goal_fingerprint": fp,
+            },
             outputs={},
         )
         updated = replace(plan, steps=tuple(list(plan.steps) + [step]), updated_at_ms=now_ms())

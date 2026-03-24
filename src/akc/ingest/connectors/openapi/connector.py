@@ -42,6 +42,8 @@ class OpenAPIConnectorConfig:
     max_resolved_chars: int = 12_000
     user_agent: str = "akc-openapi-connector/0.1"
     timeout_seconds: float = 20.0
+    # Emit extra synthetic chunks with stable normative statements for A4 soft assertions (optional).
+    emit_soft_assertion_chunks: bool = False
 
 
 class OpenAPIConnector(BaseConnector):
@@ -106,9 +108,7 @@ class OpenAPIConnector(BaseConnector):
                 logical_locator=f"{canonical_source}#endpoints",
                 content=render_endpoint_index(spec, ops),
                 metadata=(
-                    {"url": canonical_source}
-                    if looks_like_url(canonical_source)
-                    else {"path": canonical_source}
+                    {"url": canonical_source} if looks_like_url(canonical_source) else {"path": canonical_source}
                 ),
             )
         )
@@ -160,20 +160,14 @@ class OpenAPIConnector(BaseConnector):
                     logical_locator=logical_locator,
                     content=content,
                     metadata=metadata
-                    | (
-                        {"url": canonical_source}
-                        if looks_like_url(canonical_source)
-                        else {"path": canonical_source}
-                    ),
+                    | ({"url": canonical_source} if looks_like_url(canonical_source) else {"path": canonical_source}),
                 )
             )
 
         for name, schema in iter_component_schemas(spec):
             logical_locator = f"{canonical_source}#/components/schemas/{name}"
             resolved = resolver.resolve(schema)
-            rendered = render_component_schema(
-                name=name, schema=resolved, max_chars=self._config.max_resolved_chars
-            )
+            rendered = render_component_schema(name=name, schema=resolved, max_chars=self._config.max_resolved_chars)
             docs.append(
                 self._make_document(
                     source=canonical_source,
@@ -191,7 +185,107 @@ class OpenAPIConnector(BaseConnector):
                 )
             )
 
+        if self._config.emit_soft_assertion_chunks:
+            docs.extend(self._build_soft_assertion_documents(spec=spec, canonical_source=canonical_source))
+
         return docs
+
+    def _build_soft_assertion_documents(self, *, spec: Mapping[str, Any], canonical_source: str) -> list[Document]:
+        """Deterministic normative sentences for servers, security schemes, and required JSON fields."""
+
+        out: list[Document] = []
+        base = "akc:openapi:soft_assertions"
+        loc_prefix = f"{base}:{canonical_source}"
+
+        servers = spec.get("servers")
+        if isinstance(servers, list):
+            for i, srv in enumerate(servers):
+                if not isinstance(srv, dict):
+                    continue
+                url = srv.get("url")
+                if not isinstance(url, str) or not url.strip():
+                    continue
+                desc = str(srv.get("description") or "").strip()
+                content = f"OpenAPI server entry {i}: clients MUST use this base URL: {url.strip()}.\n" + (
+                    f"Server description: {desc}\n" if desc else ""
+                )
+                out.append(
+                    self._make_document(
+                        source=canonical_source,
+                        logical_locator=f"{loc_prefix}#server/{i}",
+                        content=content,
+                        metadata={
+                            "ingest_source_kind": "openapi",
+                            "openapi_soft_kind": "server",
+                            "server_index": i,
+                            **(
+                                {"url": canonical_source}
+                                if looks_like_url(canonical_source)
+                                else {"path": canonical_source}
+                            ),
+                        },
+                    )
+                )
+
+        comps = spec.get("components")
+        if isinstance(comps, dict):
+            schemes = comps.get("securitySchemes")
+            if isinstance(schemes, dict):
+                for idx, (name, scheme) in enumerate(sorted(schemes.items(), key=lambda x: str(x[0]))):
+                    if not isinstance(name, str) or not isinstance(scheme, dict):
+                        continue
+                    stype = str(scheme.get("type") or "unknown")
+                    content = (
+                        f"OpenAPI security scheme `{name}` (type {stype}) MUST be applied "
+                        f"for operations that reference it."
+                    )
+                    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:120]
+                    out.append(
+                        self._make_document(
+                            source=canonical_source,
+                            logical_locator=f"{loc_prefix}#security/{idx}:{safe}",
+                            content=content,
+                            metadata={
+                                "ingest_source_kind": "openapi",
+                                "openapi_soft_kind": "security_scheme",
+                                "security_scheme": name,
+                                **(
+                                    {"url": canonical_source}
+                                    if looks_like_url(canonical_source)
+                                    else {"path": canonical_source}
+                                ),
+                            },
+                        )
+                    )
+
+        for name, schema in iter_component_schemas(spec):
+            if not isinstance(name, str) or not isinstance(schema, dict):
+                continue
+            req = schema.get("required")
+            if not isinstance(req, list) or not req or not all(isinstance(x, str) for x in req):
+                continue
+            joined = ", ".join(sorted(req))
+            content = f"JSON schema `{name}` MUST define required properties: {joined}."
+            safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:120]
+            out.append(
+                self._make_document(
+                    source=canonical_source,
+                    logical_locator=f"{loc_prefix}#schema_required:{safe}",
+                    content=content,
+                    metadata={
+                        "ingest_source_kind": "openapi",
+                        "openapi_soft_kind": "schema_required",
+                        "component_name": name,
+                        **(
+                            {"url": canonical_source}
+                            if looks_like_url(canonical_source)
+                            else {"path": canonical_source}
+                        ),
+                    },
+                )
+            )
+
+        return out
 
 
 def build_openapi_connector(
@@ -205,6 +299,7 @@ def build_openapi_connector(
     max_resolved_chars: int = 12_000,
     user_agent: str = "akc-openapi-connector/0.1",
     timeout_seconds: float = 20.0,
+    emit_soft_assertion_chunks: bool = False,
 ) -> OpenAPIConnector:
     spec_str = str(spec) if isinstance(spec, Path) else spec
     return OpenAPIConnector(
@@ -218,6 +313,7 @@ def build_openapi_connector(
             max_resolved_chars=max_resolved_chars,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
+            emit_soft_assertion_chunks=emit_soft_assertion_chunks,
         ),
     )
 

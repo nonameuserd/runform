@@ -526,6 +526,4 @@ def test_success_criteria_living_drift_triggers_safe_recompile_with_gates(tmp_pa
         accept_mode="quick",
     )
     assert code == 0
-    assert (
-        outputs_root / ".akc" / "living" / "canary" / tenant_id / repo_id / ".akc" / "living"
-    ).exists()
+    assert (outputs_root / ".akc" / "living" / "canary" / tenant_id / repo_id / ".akc" / "living").exists()

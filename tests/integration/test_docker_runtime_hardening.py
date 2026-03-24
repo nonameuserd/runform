@@ -78,10 +78,7 @@ def test_docker_runtime_read_only_rootfs_blocks_writes_outside_tmpfs(tmp_path: P
             command=[
                 "python",
                 "-c",
-                (
-                    "from pathlib import Path; "
-                    "Path('/var/tmp/akc-blocked.txt').write_text('blocked', encoding='utf-8')"
-                ),
+                ("from pathlib import Path; Path('/var/tmp/akc-blocked.txt').write_text('blocked', encoding='utf-8')"),
             ]
         ),
     )

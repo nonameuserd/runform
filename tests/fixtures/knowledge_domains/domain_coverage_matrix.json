@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "description": "Small domain coverage matrix for knowledge / ingest / runtime-projection proofs. Pair with corpus_manifest.json.",
+  "defaults_reference": {
+    "doc_derived_assertions_mode": "limited",
+    "source": "akc.compile.controller_config.ControllerConfig"
+  },
+  "domains": [
+    {
+      "id": "security_network_secrets",
+      "intent": "Curated keywords and normative language for knowledge_runtime_envelope_from_ir heuristics (network / secrets-PII / destructive) in runtime_projection.py.",
+      "fixture_prefix": "01_security_network/",
+      "ingest_source_kinds": ["docs", "openapi", "messaging"],
+      "runtime_projection": {
+        "regex_classes_exercised": [
+          "_NETWORK_HINTS",
+          "_SECRETS_PII_HINTS",
+          "_DESTRUCTIVE_HINTS"
+        ],
+        "notes": "IR knowledge_constraint summaries produced downstream should mention these themes when mapped to hard forbidden/must_not_use predicates."
+      }
+    },
+    {
+      "id": "conflicting_norms",
+      "intent": "Contradictory organizational norms to exercise mediation, ConflictDetector, and knowledge_unresolved_conflict_policy (fail_closed | warn_and_continue | defer_to_intent).",
+      "fixture_prefix": "02_conflicting_norms/",
+      "ingest_source_kinds": ["docs"],
+      "mediation": {
+        "notes": "Pair with intent constraints or deterministic extraction paths as in tests/integration/test_knowledge_mediation_phase2.py; newer metadata can bias tie-breaks when tests set indexed_at_ms / doc_version."
+      }
+    },
+    {
+      "id": "doc_derived_surface",
+      "intent": "RFC2119 + table + numbered lines for doc-derived soft assertions when doc_derived_assertions_mode=limited (default); with doc_derived_assertions_mode=off and empty intent, extract_knowledge_snapshot returns an empty snapshot—proving opt-out disables doc-derived depth.",
+      "fixture_prefix": "03_doc_derived_surface/",
+      "ingest_source_kinds": ["docs"],
+      "doc_derived_assertions": {
+        "mode_off": "No soft assertions from retrieved docs alone when intent has no constraints (see extract_knowledge_snapshot early return).",
+        "mode_limited": "Soft assertions from MUST/SHOULD/BCP14-style patterns under doc_derived_max_assertions cap; compile-side patterns default via DocDerivedPatternOptions flags vs ingest DEFAULT_INGEST_DOC_DERIVED_PATTERNS in assertion_index_store."
+      }
+    },
+    {
+      "id": "payments_pci",
+      "intent": "Payments/PCI-style constraints to broaden proof of secrets/PII + network egress + destructive-deny projection from docs/OpenAPI/messaging sources.",
+      "fixture_prefix": "04_payments_pci/",
+      "ingest_source_kinds": ["docs", "openapi", "messaging"],
+      "runtime_projection": {
+        "regex_classes_exercised": ["_NETWORK_HINTS", "_SECRETS_PII_HINTS", "_DESTRUCTIVE_HINTS"],
+        "notes": "Ensure knowledge_runtime_envelope_from_ir emits deny rules for subprocess/http and apply/rollback when summaries mention PII/secrets, external APIs, and destructive ops."
+      }
+    },
+    {
+      "id": "platform_migrations",
+      "intent": "Migration runbooks that include destructive operations and egress constraints; ensures projection behaves outside security-network wording.",
+      "fixture_prefix": "05_platform_migrations/",
+      "ingest_source_kinds": ["docs"],
+      "runtime_projection": {
+        "regex_classes_exercised": ["_NETWORK_HINTS", "_DESTRUCTIVE_HINTS"],
+        "notes": "Migration wording like drop/wipe/purge/rm -rf should map to destructive deny rules."
+      }
+    }
+  ]
+}

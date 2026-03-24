@@ -1,0 +1,7 @@
+[2024-01-10 09:01] sec-bot: Possible credential exposure in shared log — rotate API key and review SSN handling.
+[2024-01-10 09:04] oncall: Treating as token leak; scrub secrets from attachments before egress to the ticket system.
+
+## Normative incident handling
+
+1. Operators MUST NOT leak API keys or secrets into external logs or shared channels.
+2. Customer SSN and authentication tokens MUST NOT be exported outside the tenant boundary.

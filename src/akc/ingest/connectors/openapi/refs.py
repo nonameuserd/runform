@@ -97,9 +97,7 @@ class RefResolver:
             )
             ext = parse_spec(raw, source_hint=canonical)
             fragment = parsed.fragment
-            val2: Any = (
-                ext if not fragment else self._resolve_pointer(ext, "#/" + fragment.lstrip("/"))
-            )
+            val2: Any = ext if not fragment else self._resolve_pointer(ext, "#/" + fragment.lstrip("/"))
             self._cache[ref] = val2
             return val2
 
@@ -130,9 +128,7 @@ class RefResolver:
         prev = self._base_path
         self._base_path = base2
         try:
-            val5: Any = (
-                ext2 if not fragment2 else self._resolve_pointer(ext2, "#/" + fragment2.lstrip("/"))
-            )
+            val5: Any = ext2 if not fragment2 else self._resolve_pointer(ext2, "#/" + fragment2.lstrip("/"))
         finally:
             self._base_path = prev
         self._cache[ref] = val5

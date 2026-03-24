@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from akc.artifacts.validate import validate_obj
+from akc.memory.code_memory import SQLiteCodeMemoryStore
 from akc.memory.models import MemoryModelError, PlanState, normalize_repo_id, require_non_empty
 from akc.memory.plan_state import JsonFilePlanStateStore, SQLitePlanStateStore
 
+from .control_panels import load_operator_panels_for_scope
 from .models import EvidenceIndex, EvidenceKind, EvidenceRef, Manifest, ViewerInputs, ViewerSnapshot
 
 
@@ -46,9 +48,7 @@ def _load_plan_state(inputs: ViewerInputs) -> PlanState:
     try:
         active_id = json_store.get_active_plan_id(tenant_id=inputs.tenant_id, repo_id=repo_n)
         if active_id is not None:
-            plan = json_store.load_plan(
-                tenant_id=inputs.tenant_id, repo_id=repo_n, plan_id=active_id
-            )
+            plan = json_store.load_plan(tenant_id=inputs.tenant_id, repo_id=repo_n, plan_id=active_id)
             if plan is not None:
                 return plan
     except Exception:
@@ -56,9 +56,7 @@ def _load_plan_state(inputs: ViewerInputs) -> PlanState:
         pass
 
     # Fallback: sqlite memory under scoped outputs dir (.akc/memory.sqlite)
-    scoped = _scoped_outputs_dir(
-        outputs_root=inputs.outputs_root, tenant_id=inputs.tenant_id, repo_id=repo_n
-    )
+    scoped = _scoped_outputs_dir(outputs_root=inputs.outputs_root, tenant_id=inputs.tenant_id, repo_id=repo_n)
     sqlite_path = scoped / ".akc" / "memory.sqlite"
     if sqlite_path.exists():
         try:
@@ -66,9 +64,7 @@ def _load_plan_state(inputs: ViewerInputs) -> PlanState:
             active_id = sqlite_store.get_active_plan_id(tenant_id=inputs.tenant_id, repo_id=repo_n)
             if active_id is None:
                 raise ViewerError(f"no active plan found in sqlite store: {sqlite_path}")
-            plan = sqlite_store.load_plan(
-                tenant_id=inputs.tenant_id, repo_id=repo_n, plan_id=active_id
-            )
+            plan = sqlite_store.load_plan(tenant_id=inputs.tenant_id, repo_id=repo_n, plan_id=active_id)
             if plan is None:
                 raise ViewerError(f"active plan id not found in sqlite store: {active_id}")
             return plan
@@ -77,9 +73,7 @@ def _load_plan_state(inputs: ViewerInputs) -> PlanState:
         except Exception as e:  # pragma: no cover
             raise ViewerError(f"failed to load plan from sqlite store: {sqlite_path}") from e
 
-    raise ViewerError(
-        "no plan state found: expected .akc/plan active pointer or scoped .akc/memory.sqlite"
-    )
+    raise ViewerError("no plan state found: expected .akc/plan active pointer or scoped .akc/memory.sqlite")
 
 
 def _load_manifest(*, scoped_outputs_dir: Path) -> Manifest | None:
@@ -146,13 +140,63 @@ def _index_evidence(*, manifest: Manifest | None) -> EvidenceIndex:
     return EvidenceIndex(by_step=by_step, all=all_refs)
 
 
+def _load_knowledge_envelope(*, scoped_outputs_dir: Path) -> dict[str, Any] | None:
+    kpath = scoped_outputs_dir / ".akc" / "knowledge" / "snapshot.json"
+    if not kpath.is_file():
+        return None
+    try:
+        obj = json.loads(kpath.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _load_knowledge_mediation_envelope(*, scoped_outputs_dir: Path) -> dict[str, Any] | None:
+    mpath = scoped_outputs_dir / ".akc" / "knowledge" / "mediation.json"
+    if not mpath.is_file():
+        return None
+    try:
+        obj = json.loads(mpath.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _load_conflict_reports_from_memory(
+    *,
+    scoped_outputs_dir: Path,
+    tenant_id: str,
+    repo_id: str,
+) -> tuple[dict[str, Any], ...]:
+    mem_path = scoped_outputs_dir / ".akc" / "memory.sqlite"
+    if not mem_path.is_file():
+        return ()
+    try:
+        store = SQLiteCodeMemoryStore(path=str(mem_path))
+        items = store.list_items(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            artifact_id=None,
+            kind_filter=("conflict_report",),
+            limit=200,
+        )
+    except Exception:
+        return ()
+    reports: list[dict[str, Any]] = []
+    for it in items:
+        md = it.metadata or {}
+        rep = md.get("report")
+        if isinstance(rep, dict):
+            reports.append(dict(rep))
+    reports.sort(key=lambda r: str(r.get("conflict_id", "")))
+    return tuple(reports)
+
+
 def load_viewer_snapshot(inputs: ViewerInputs) -> ViewerSnapshot:
     """Load a viewer snapshot for a tenant/repo scope (read-only)."""
 
     repo_n = normalize_repo_id(inputs.repo_id)
-    scoped = _scoped_outputs_dir(
-        outputs_root=inputs.outputs_root, tenant_id=inputs.tenant_id, repo_id=repo_n
-    )
+    scoped = _scoped_outputs_dir(outputs_root=inputs.outputs_root, tenant_id=inputs.tenant_id, repo_id=repo_n)
     plan = _load_plan_state(inputs)
 
     # Validate plan object against frozen schema (tolerant: collect issues).
@@ -173,6 +217,29 @@ def load_viewer_snapshot(inputs: ViewerInputs) -> ViewerSnapshot:
 
     manifest = _load_manifest(scoped_outputs_dir=scoped)
     evidence = _index_evidence(manifest=manifest)
+    knowledge_envelope = _load_knowledge_envelope(scoped_outputs_dir=scoped)
+    knowledge_mediation_envelope = _load_knowledge_mediation_envelope(scoped_outputs_dir=scoped)
+    conflict_reports = _load_conflict_reports_from_memory(
+        scoped_outputs_dir=scoped,
+        tenant_id=inputs.tenant_id,
+        repo_id=repo_n,
+    )
+    operator_panels = load_operator_panels_for_scope(
+        outputs_root=inputs.outputs_root.expanduser().resolve(),
+        scoped_outputs_dir=scoped,
+        tenant_id=inputs.tenant_id,
+        repo_id=repo_n,
+        manifest=dict(manifest) if manifest is not None else None,
+        plan_run_id=str(plan.id),
+    )
     return ViewerSnapshot(
-        inputs=inputs, plan=plan, manifest=manifest, scoped_outputs_dir=scoped, evidence=evidence
+        inputs=inputs,
+        plan=plan,
+        manifest=manifest,
+        scoped_outputs_dir=scoped,
+        evidence=evidence,
+        knowledge_envelope=knowledge_envelope,
+        knowledge_mediation_envelope=knowledge_mediation_envelope,
+        conflict_reports=conflict_reports,
+        operator_panels=operator_panels,
     )

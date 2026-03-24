@@ -68,9 +68,7 @@ def test_run_exec_via_pyo3_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     scope, req = _make_scope_and_request()
-    res: ExecutionResult = run_exec_via_pyo3(
-        cfg=RustExecConfig(mode="pyo3"), scope=scope, request=req
-    )
+    res: ExecutionResult = run_exec_via_pyo3(cfg=RustExecConfig(mode="pyo3"), scope=scope, request=req)
 
     assert res.exit_code == 0
     assert res.stdout == "ok"
@@ -181,9 +179,7 @@ def test_run_ingest_via_pyo3_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
     scope, _ = _make_scope_and_request()
     ingest_req = IngestRequest()
 
-    res: IngestResult = run_ingest_via_pyo3(
-        cfg=RustExecConfig(mode="pyo3"), scope=scope, request=ingest_req
-    )
+    res: IngestResult = run_ingest_via_pyo3(cfg=RustExecConfig(mode="pyo3"), scope=scope, request=ingest_req)
 
     assert res.ok is True
     assert len(fake.calls) == 1
@@ -203,9 +199,7 @@ def test_run_ingest_via_pyo3_maps_messaging_kind(monkeypatch: pytest.MonkeyPatch
     )
 
     scope, _ = _make_scope_and_request()
-    ingest_req = IngestRequest(
-        messaging=IngestRequest.Messaging(export_path="/abs/path/to/export.jsonl")
-    )
+    ingest_req = IngestRequest(messaging=IngestRequest.Messaging(export_path="/abs/path/to/export.jsonl"))
 
     _ = run_ingest_via_pyo3(cfg=RustExecConfig(mode="pyo3"), scope=scope, request=ingest_req)
 
@@ -420,10 +414,7 @@ def test_parse_wasm_error_marker_success() -> None:
 
 
 def test_parse_wasm_error_marker_rejects_mismatched_exit_code() -> None:
-    stderr = (
-        "AKC_WASM_ERROR code=WASM_CPU_FUEL_EXHAUSTED exit_code=137 "
-        "message=wasm cpu/fuel budget exhausted"
-    )
+    stderr = "AKC_WASM_ERROR code=WASM_CPU_FUEL_EXHAUSTED exit_code=137 message=wasm cpu/fuel budget exhausted"
     parsed = rust_bridge_mod._parse_wasm_error(stderr, exit_code=124)
     assert parsed is None
 

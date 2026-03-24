@@ -72,6 +72,8 @@ def test_conflict_detector_surfaces_contradictory_constraints_and_stores_reports
                 "object": "psycopg[binary]",
                 "polarity": 1,
                 "scope": "repo",
+                "provenance": [{"doc_id": "docA", "chunk_index": 0}],
+                "evidence_doc_ids": ["docA"],
             },
         ),
         WhyNode(
@@ -83,6 +85,8 @@ def test_conflict_detector_surfaces_contradictory_constraints_and_stores_reports
                 "object": "psycopg[binary]",
                 "polarity": -1,
                 "scope": "repo",
+                "provenance": [{"doc_id": "docB", "chunk_index": 1}],
+                "evidence_doc_ids": ["docB"],
             },
         ),
     ]
@@ -95,6 +99,11 @@ def test_conflict_detector_surfaces_contradictory_constraints_and_stores_reports
     )
     assert reports
     assert any(r.conflict_type == "constraint_contradiction" for r in reports)
+    contradiction = next(r for r in reports if r.conflict_type == "constraint_contradiction")
+    assert contradiction.conflicting_provenance is not None
+    assert set(contradiction.conflicting_provenance.keys()) == {"a", "b"}
+    assert contradiction.evidence_doc_ids is not None
+    assert set(contradiction.evidence_doc_ids) == {"docA", "docB"}
 
     mem = InMemoryCodeMemoryStore()
     wrote = detector.store_reports(
@@ -148,7 +157,10 @@ def test_conflict_detector_surfaces_plan_drift_missing_constraints() -> None:
                 status="pending",  # type: ignore[arg-type]
                 order_idx=0,
                 inputs={
-                    "constraint_ids": ["c-present", "c-missing"],
+                    "linked_constraints": [
+                        {"constraint_id": "c-present"},
+                        {"constraint_id": "c-missing"},
+                    ],
                     "goal_fingerprint": goal_fingerprint("do x"),
                 },
                 outputs={},
@@ -193,7 +205,7 @@ def test_conflict_detector_surfaces_plan_drift_goal_fingerprint_mismatch() -> No
                 status="pending",  # type: ignore[arg-type]
                 order_idx=0,
                 inputs={
-                    "constraint_ids": [],
+                    "linked_constraints": [],
                     "goal_fingerprint": goal_fingerprint("old goal"),
                 },
                 outputs={},

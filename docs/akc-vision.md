@@ -9,12 +9,14 @@
 ## Core Idea
 
 Turn:
+
 - messy docs
 - APIs
 - conversations
 - goals
 
 Into:
+
 - running services
 - agents
 - workflows
@@ -29,9 +31,11 @@ Not just generating code — but generating **complete, executable systems**.
 ### 1. Intent → System (Instantly)
 
 Input:
+
 > "Reduce churn by 20%"
 
 Output:
+
 - services deployed
 - agents monitoring churn
 - workflows reacting to signals
@@ -47,7 +51,6 @@ Like compilers replaced manual assembly coding:
   - goals
   - constraints
   - policies
-
 - The system:
   - builds everything else
 
@@ -56,6 +59,7 @@ Like compilers replaced manual assembly coding:
 ### 3. Living Systems
 
 Systems that:
+
 - observe themselves
 - adapt continuously
 - recompile when reality changes
@@ -75,6 +79,7 @@ Knowledge becomes runnable:
 ### 5. Replace Entire Layers
 
 Removes need for:
+
 - backend scaffolding
 - DevOps glue
 - internal tools
@@ -85,6 +90,7 @@ Removes need for:
 ### 6. Multi-Agent Infrastructure
 
 Every system becomes:
+
 - a network of coordinated agents
 - governed and observable
 
@@ -109,6 +115,7 @@ Every system becomes:
 ### 9. New Developer Role
 
 Developers focus on:
+
 - constraints
 - architecture
 - debugging compiled systems
@@ -122,6 +129,7 @@ Developers focus on:
 - Not a code generator
 
 It is a:
+
 > **Compiler + Runtime for systems**
 
 ---
@@ -129,11 +137,13 @@ It is a:
 ## Key Differences vs Existing Tools
 
 ### Traditional Tools
+
 - Generate code
 - Build single agents
 - Require manual wiring
 
 ### Agentic Knowledge Compiler
+
 - Generates full systems
 - Connects components automatically
 - Evolves over time
@@ -143,12 +153,14 @@ It is a:
 ## Architecture (High-Level)
 
 ### 1. Input Layer
+
 - documents
 - APIs
 - conversations
 - goals
 
 ### 2. Intermediate Representation (IR)
+
 - structured graph of:
   - entities
   - workflows
@@ -156,6 +168,7 @@ It is a:
   - dependencies
 
 ### 3. Compiler Passes
+
 - planning
 - system design
 - code generation
@@ -163,11 +176,13 @@ It is a:
 - infra generation
 
 ### 4. Runtime
+
 - executes agents
 - manages workflows
 - handles coordination
 
 ### 5. Control Plane
+
 - observability
 - cost tracking
 - policy enforcement
@@ -178,49 +193,29 @@ It is a:
 ## Core Problems to Solve
 
 ### 1. Representation
+
 What is the IR for knowledge?
 
 ### 2. Correctness
+
 How to guarantee reliable outputs?
 
 ### 3. Control
+
 Prevent runaway agents and cost explosions
 
 ### 4. Observability
+
 Understand why systems behave the way they do
 
 ### 5. Boundaries
+
 Define what agents are allowed to do
-
----
-
-## Naming Direction
-
-Top candidates:
-- Foundry
-- Fabric
-- Synth
-- Axiom
-- Runform
 
 ---
 
 ## Final Framing
 
-> Software that writes, runs, and evolves itself from intent — with guarantees.
+> Software that compiles intent and knowledge into fully working, evolving systems.
 
 ---
-
-## Future Impact
-
-If successful, this becomes:
-- the next abstraction layer after programming
-- a replacement for manual system assembly
-- a foundation for autonomous software systems
-
----
-
-## Short Positioning Statement
-
-**"Compile knowledge into systems."**
-

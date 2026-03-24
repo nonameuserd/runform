@@ -5,7 +5,7 @@
 AKC includes an **optional, local-first, read-only viewer** that renders:
 
 - plan progress from `.akc/plan` (or the scoped sqlite memory store when present), and
-- emitted evidence artifacts referenced by `manifest.json` (e.g. `.akc/tests/*`, `.akc/verification/*`).
+- emitted evidence artifacts referenced by `manifest.json` (e.g. `.akc/tests/*`, `.akc/verification/*`, `.akc/design/*`, `.akc/orchestration/*`, `.akc/agents/*`, `.akc/deployment/*`, and generated `.github/workflows/akc_deploy_*.yml`).
 
 The viewer is intentionally thin and **does not execute** anything.
 
@@ -15,8 +15,13 @@ The viewer is a read-only consumer of artifacts:
 
 - It **never** runs commands, applies patches, imports dynamic modules, or invokes the executor/compile loop.
 - It treats plan state and artifacts as **untrusted input** and only renders/copies them.
+- It is schema-driven against `docs/artifact-contracts.md` and must ignore unknown additive fields.
 
 See `docs/viewer-trust-boundary.md`.
+
+### Intent authority in manifests and replay sidecars
+
+When rendering run manifests or `.akc/run/*.replay_decisions.json`, treat **intent** as the contract boundary: **`stable_intent_sha256`** ties the run to the normalized intent artifact, and each replay decision’s **`inputs_snapshot`** may record that hash plus **`intent_mandatory_partial_replay_passes`** (passes required under `partial_replay` because of success-criterion evaluation modes). When the manifest and current run both carry a stable hash, a mismatch forces a full pass invalidation path (see **`intent_stable_changed`** in **`recompile_triggers`**). Behavior is specified in **`docs/akc-alignment.md`** under *Intent authority and replay*.
 
 ## CLI usage
 

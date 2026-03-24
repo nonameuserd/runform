@@ -42,9 +42,7 @@ def _seed_metrics(outputs_root: Path) -> None:
     )
 
 
-def test_cli_metrics_json_outputs_rollup(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
+def test_cli_metrics_json_outputs_rollup(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _seed_metrics(tmp_path)
     with pytest.raises(SystemExit) as excinfo:
         main(
@@ -69,9 +67,7 @@ def test_cli_metrics_json_outputs_rollup(
     assert len(payload["runs"]) == 2
 
 
-def test_cli_metrics_repo_filter_scopes_totals(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
+def test_cli_metrics_repo_filter_scopes_totals(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _seed_metrics(tmp_path)
     with pytest.raises(SystemExit) as excinfo:
         main(

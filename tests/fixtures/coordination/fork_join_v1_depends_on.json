@@ -1,0 +1,48 @@
+{
+  "spec_version": 1,
+  "run_id": "fixture-fork-join",
+  "tenant_id": "t",
+  "repo_id": "r",
+  "coordination_graph": {
+    "nodes": [
+      { "node_id": "branch_a", "kind": "step" },
+      { "node_id": "branch_b", "kind": "step" },
+      { "node_id": "fork", "kind": "step" },
+      { "node_id": "join", "kind": "step" }
+    ],
+    "edges": [
+      {
+        "edge_id": "e_fork_a",
+        "kind": "depends_on",
+        "src_step_id": "fork",
+        "dst_step_id": "branch_a"
+      },
+      {
+        "edge_id": "e_fork_b",
+        "kind": "depends_on",
+        "src_step_id": "fork",
+        "dst_step_id": "branch_b"
+      },
+      {
+        "edge_id": "e_a_join",
+        "kind": "depends_on",
+        "src_step_id": "branch_a",
+        "dst_step_id": "join"
+      },
+      {
+        "edge_id": "e_b_join",
+        "kind": "depends_on",
+        "src_step_id": "branch_b",
+        "dst_step_id": "join"
+      }
+    ]
+  },
+  "orchestration_bindings": [
+    {
+      "role_name": "planner",
+      "agent_name": "ag",
+      "orchestration_step_ids": ["fork"]
+    }
+  ],
+  "agent_roles": [{ "name": "planner" }]
+}
