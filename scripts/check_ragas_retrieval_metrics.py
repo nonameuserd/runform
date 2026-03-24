@@ -24,11 +24,19 @@ async def _score_id_metrics(
 ) -> tuple[float, float]:
     """Run Ragas ID-based context precision/recall (offline, no LLM)."""
     # Ragas 0.4 deprecates some top-level metric imports; keep stderr clean in CI.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from ragas import RunConfig
-        from ragas.dataset_schema import SingleTurnSample
-        from ragas.metrics import IDBasedContextPrecision, IDBasedContextRecall
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            from ragas import RunConfig
+            from ragas.dataset_schema import SingleTurnSample
+            from ragas.metrics import IDBasedContextPrecision, IDBasedContextRecall
+    except ModuleNotFoundError:
+        retrieved = {str(x).strip() for x in retrieved_ids if str(x).strip()}
+        reference = {str(x).strip() for x in reference_ids if str(x).strip()}
+        overlap = len(retrieved & reference)
+        precision = float(overlap / len(retrieved)) if retrieved else 1.0
+        recall = float(overlap / len(reference)) if reference else 1.0
+        return precision, recall
 
     cfg = RunConfig()
     precision_m = IDBasedContextPrecision()
@@ -134,6 +142,7 @@ def check_ragas_retrieval_metrics(
         "fixtures_path": str(fixtures_path),
         "min_id_precision": min_id_precision,
         "min_id_recall": min_id_recall,
+        "scoring_backend": _ragas_backend(),
         "ragas_version": _ragas_version(),
         "cases": case_reports,
         "failures": failures,
@@ -147,6 +156,10 @@ def _ragas_version() -> str:
         return str(getattr(ragas, "__version__", "unknown"))
     except Exception:  # pragma: no cover - defensive
         return "unavailable"
+
+
+def _ragas_backend() -> str:
+    return "ragas" if _ragas_version() != "unavailable" else "fallback"
 
 
 def main() -> int:
@@ -182,6 +195,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"passed: {bool(report.get('passed', False))}")
+        print(f"backend: {report.get('scoring_backend')}")
         print(f"ragas: {report.get('ragas_version')}")
         for row in report.get("cases", []):
             cid = row.get("case_id")

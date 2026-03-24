@@ -154,7 +154,7 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra eval-rag
 
       - name: Install OPA
         run: |
