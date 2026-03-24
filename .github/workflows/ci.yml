@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       enable_mutating_runtime_jobs:
-        description: "Run opt-in mutating runtime jobs (requires infra credentials)."
+        description: "Run opt-in mutating runtime jobs on GitHub-hosted runners (no external cluster creds)."
         required: false
         default: "false"
 
@@ -164,15 +164,42 @@ jobs:
           sudo install -m 0755 /tmp/opa /usr/local/bin/opa
           opa version
 
-      # NOTE: This job only flips the env gates. It does NOT provision real infra by itself.
-      # Provide cluster/compose credentials (kubeconfig, docker socket, etc.) via GitHub secrets
-      # and bundle metadata in the runtime bundle under test for end-to-end live mutation.
+      # NOTE: Free-only CI mode: this lane validates runtime gating and integration behavior
+      # on GitHub-hosted runners with local Docker/Compose capabilities, without external
+      # cluster credentials or paid infrastructure.
+      - name: Verify local Docker/Compose capability (free-only runner path)
+        run: |
+          set -euo pipefail
+          docker version
+          docker compose version
+
+      - name: Validate bundled compose manifest
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.autopilot.yml config > /dev/null
+
+      - name: Compose runtime smoke test (free-only)
+        run: |
+          set -euo pipefail
+          compose_file="deploy/compose/docker-compose.autopilot.yml"
+          docker compose -f "${compose_file}" up -d --build
+          # Keep this intentionally short: verify startup path on the hosted runner.
+          sleep 12
+          docker compose -f "${compose_file}" ps
+          docker compose -f "${compose_file}" ps --services --filter status=running | rg "^akc-runtime-autopilot$"
+
       - name: Runtime provider gating tests (env gates enabled)
         run: |
           set -euo pipefail
           uv run pytest \
             tests/unit/runtime/test_deployment_provider_factory.py -k "when_enabled or apply_when_mutating_enabled" \
             tests/unit/test_cli_runtime.py -k "live_mutation"
+
+      - name: Compose cleanup (always)
+        if: always()
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.autopilot.yml down -v
 
       - name: Golden compile paths (strict IR and consistency policies)
         env:
