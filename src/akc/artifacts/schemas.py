@@ -13,6 +13,7 @@ SchemaKind = Literal[
     "operational_assurance_result",
     "operational_evidence_window",
     "runtime_bundle",
+    "delivery_plan",
     "runtime_evidence_stream",
     "run_trace_spans",
     "run_cost_attribution",
@@ -507,6 +508,135 @@ RUNTIME_BUNDLE_V4: Final[dict[str, Any]] = {
 # Default schema_version for newly emitted runtime bundles (compile/runtime handoff).
 RUNTIME_BUNDLE_SCHEMA_VERSION: Final[int] = 4
 
+# Structured questions for non-technical / guided UIs: only `status: "missing"` rows are emitted
+# today; bindings point at IR properties so re-compile stays authoritative (no parallel plan model).
+_DELIVERY_PLAN_UI_PROMPT_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "audience": {
+            "type": "string",
+            "description": "Who the copy is written for (UI may vary tone).",
+            "enum": ["non_technical", "operator", "developer"],
+        },
+        "title": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1},
+        "help_text": {"type": "string"},
+        "value_kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque hint for input widgets (e.g. hostname, url_path).",
+        },
+        "sensitive": {"type": "boolean"},
+    },
+    "required": ["audience", "title", "question", "value_kind", "sensitive"],
+}
+
+_DELIVERY_PLAN_ANSWER_BINDING_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "kind": {
+            "type": "string",
+            "description": "Where answers are written on re-ingest / re-compile.",
+            "enum": ["ir_node_property"],
+        },
+        "property": {"type": "string", "minLength": 1},
+        "scope": {
+            "type": "string",
+            "enum": ["listed_targets", "repo", "tenant"],
+        },
+        "target_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+    "required": ["kind", "property", "scope"],
+}
+
+_DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {
+            "type": "string",
+            "description": "Emit step lists only missing items; satisfied rows are omitted.",
+            "enum": ["missing", "satisfied"],
+        },
+        "blocking_for": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "description": "Environments where this gap blocks promotion-style rollout.",
+        },
+        "reason": {"type": "string"},
+        "ask_order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Stable ordering for question wizards (lower first).",
+        },
+        "context": {
+            "type": "object",
+            "additionalProperties": True,
+            "description": "UI-only detail (e.g. secret name lists); compile remains driven by IR + plan JSON.",
+        },
+        "ui_prompt": _DELIVERY_PLAN_UI_PROMPT_V1,
+        "answer_binding": _DELIVERY_PLAN_ANSWER_BINDING_V1,
+    },
+    "required": ["id", "status", "ui_prompt", "answer_binding"],
+}
+
+DELIVERY_PLAN_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_plan", version=1),
+    "title": "AKC delivery plan",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_plan"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "inputs_fingerprint": {"type": "string", "minLength": 1},
+        "targets": {"type": "array", "items": {"type": "object"}},
+        "environments": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "environment_model": {"type": "array", "items": {"type": "object"}},
+        "delivery_paths": {"type": "object"},
+        "operational_profiles": {"type": "object"},
+        "required_human_inputs": {
+            "type": "array",
+            "items": _DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1,
+        },
+        "promotion_readiness": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "status": {"type": "string", "enum": ["ready", "blocked"]},
+                "blocking_inputs": {"type": "array", "items": {"type": "string"}},
+                "promotion_blockers": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "description": "Human input ids plus compile-time gates (e.g. production_manual_approval_gate).",
+                },
+                "production_manual_approval_required": {
+                    "type": "boolean",
+                    "description": "True when the production environment model requires manual approval before deploy.",
+                },
+                "is_promotion_ready": {"type": "boolean"},
+                "default_promotion_environment": {"type": "string", "minLength": 1},
+            },
+            "required": ["status"],
+        },
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "targets",
+        "environments",
+        "delivery_paths",
+        "required_human_inputs",
+        "promotion_readiness",
+    ],
+}
+
 
 _TRACE_SPAN_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
@@ -678,6 +808,10 @@ RUNTIME_EVIDENCE_STREAM_V1: Final[dict[str, Any]] = {
                     "policy_mode",
                     "converged",
                 ],
+            ),
+            _runtime_evidence_item_schema(
+                evidence_type="delivery_lifecycle",
+                required_payload_keys=["event"],
             ),
         ]
     },
@@ -1169,6 +1303,10 @@ def get_schema(*, kind: SchemaKind, version: int = ARTIFACT_SCHEMA_VERSION) -> d
         if int(version) == 4:
             return RUNTIME_BUNDLE_V4
         raise ValueError(f"unsupported runtime_bundle schema version: {version}")
+    if kind == "delivery_plan":
+        if int(version) == 1:
+            return DELIVERY_PLAN_V1
+        raise ValueError(f"unsupported delivery_plan schema version: {version}")
     if int(version) != 1:
         raise ValueError(f"unsupported schema version: {version}")
     if kind == "manifest":

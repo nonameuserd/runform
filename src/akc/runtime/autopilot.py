@@ -109,6 +109,11 @@ class AutopilotHistoryEntry:
     intent_to_healthy_runtime_ms: float | None = None
     compile_to_healthy_runtime_ms: float | None = None
     compression_factor_vs_baseline: float | None = None
+    intent_to_staging_ms: float | None = None
+    intent_to_prod_ms: float | None = None
+    staging_to_prod_ms: float | None = None
+    approval_wait_ms: float | None = None
+    manual_touch_count: int | None = None
 
     # Prevention metadata.
     prevented_reason: str | None = None
@@ -132,6 +137,11 @@ class AutopilotHistoryEntry:
             "intent_to_healthy_runtime_ms": self.intent_to_healthy_runtime_ms,
             "compile_to_healthy_runtime_ms": self.compile_to_healthy_runtime_ms,
             "compression_factor_vs_baseline": self.compression_factor_vs_baseline,
+            "intent_to_staging_ms": self.intent_to_staging_ms,
+            "intent_to_prod_ms": self.intent_to_prod_ms,
+            "staging_to_prod_ms": self.staging_to_prod_ms,
+            "approval_wait_ms": self.approval_wait_ms,
+            "manual_touch_count": self.manual_touch_count,
             "prevented_reason": self.prevented_reason,
             "compile_realization_mode": self.compile_realization_mode,
             "compile_apply_applied": self.compile_apply_applied,
@@ -176,6 +186,24 @@ class AutopilotHistoryEntry:
         compression_factor_vs_baseline: float | None = None
         if isinstance(cf_raw, (int, float)) and not isinstance(cf_raw, bool):
             compression_factor_vs_baseline = float(cf_raw)
+
+        def _opt_metric_float(raw: Any) -> float | None:
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                return float(raw)
+            return None
+
+        def _opt_metric_int(raw: Any) -> int | None:
+            if isinstance(raw, int) and not isinstance(raw, bool):
+                return int(raw)
+            if isinstance(raw, float) and not isinstance(raw, bool) and raw >= 0:
+                return int(raw)
+            return None
+
+        intent_to_staging_ms = _opt_metric_float(obj.get("intent_to_staging_ms"))
+        intent_to_prod_ms = _opt_metric_float(obj.get("intent_to_prod_ms"))
+        staging_to_prod_ms = _opt_metric_float(obj.get("staging_to_prod_ms"))
+        approval_wait_ms = _opt_metric_float(obj.get("approval_wait_ms"))
+        manual_touch_count = _opt_metric_int(obj.get("manual_touch_count"))
         prevented_reason = obj.get("prevented_reason")
         crm_raw = obj.get("compile_realization_mode")
         compile_realization_mode: str | None = (
@@ -209,6 +237,11 @@ class AutopilotHistoryEntry:
             intent_to_healthy_runtime_ms=intent_to_healthy_runtime_ms,
             compile_to_healthy_runtime_ms=compile_to_healthy_runtime_ms,
             compression_factor_vs_baseline=compression_factor_vs_baseline,
+            intent_to_staging_ms=intent_to_staging_ms,
+            intent_to_prod_ms=intent_to_prod_ms,
+            staging_to_prod_ms=staging_to_prod_ms,
+            approval_wait_ms=approval_wait_ms,
+            manual_touch_count=manual_touch_count,
             prevented_reason=str(prevented_reason).strip() if prevented_reason is not None else None,
             compile_realization_mode=compile_realization_mode,
             compile_apply_applied=compile_apply_applied,
@@ -340,6 +373,15 @@ class ReliabilityScoreboard:
         }
 
 
+def _percentile_sorted(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = int(round((len(s) - 1) * q))
+    idx = max(0, min(idx, len(s) - 1))
+    return float(s[idx])
+
+
 def compute_reliability_scoreboard(
     *,
     tenant_id: str,
@@ -424,6 +466,39 @@ def compute_reliability_scoreboard(
         1 for h in prevented if isinstance(h.prevented_reason, str) and "compile_apply_denied:" in h.prevented_reason
     )
 
+    window_ms = max(1, int(window_end_ms) - int(window_start_ms))
+    weeks = float(window_ms) / float(7 * 24 * 60 * 60 * 1000)
+    delivery_throughput_rollouts_per_week_est = float(rollouts_total) / weeks if weeks > 0 else 0.0
+    delivery_change_instability_proxy = (
+        float(rollouts_with_rollback) / float(rollouts_total) if rollouts_total > 0 else 0.0
+    )
+
+    intent_to_staging_vals = [
+        float(h.intent_to_staging_ms)
+        for h in runtime_rollouts
+        if isinstance(h.intent_to_staging_ms, (int, float)) and not isinstance(h.intent_to_staging_ms, bool)
+    ]
+    intent_to_prod_vals = [
+        float(h.intent_to_prod_ms)
+        for h in runtime_rollouts
+        if isinstance(h.intent_to_prod_ms, (int, float)) and not isinstance(h.intent_to_prod_ms, bool)
+    ]
+    staging_to_prod_vals = [
+        float(h.staging_to_prod_ms)
+        for h in runtime_rollouts
+        if isinstance(h.staging_to_prod_ms, (int, float)) and not isinstance(h.staging_to_prod_ms, bool)
+    ]
+    approval_wait_vals = [
+        float(h.approval_wait_ms)
+        for h in runtime_rollouts
+        if isinstance(h.approval_wait_ms, (int, float)) and not isinstance(h.approval_wait_ms, bool)
+    ]
+    manual_touch_total = 0
+    for h in runtime_rollouts:
+        mtc = h.manual_touch_count
+        if isinstance(mtc, int) and not isinstance(mtc, bool) and mtc >= 0:
+            manual_touch_total += int(mtc)
+
     return ReliabilityScoreboard(
         tenant_id=tenant_id,
         repo_id=repo_id,
@@ -447,6 +522,18 @@ def compute_reliability_scoreboard(
             "mutation_attempts_blocked_by_policy": int(mutation_attempts_blocked_by_policy),
             "compile_scoped_apply_rollouts_total": int(compile_scoped_apply_rollouts_total),
             "compile_apply_gate_prevented_total": int(compile_apply_gate_prevented_total),
+            "delivery_throughput_rollouts_per_week_est": delivery_throughput_rollouts_per_week_est,
+            "delivery_change_instability_proxy": delivery_change_instability_proxy,
+            "delivery_lead_time_ms_p50": _percentile_sorted(intent_to_prod_vals, 0.5),
+            "delivery_lead_time_ms_p90": _percentile_sorted(intent_to_prod_vals, 0.9),
+            "intent_to_staging_ms_p50": _percentile_sorted(intent_to_staging_vals, 0.5),
+            "staging_to_prod_latency_ms_p50": _percentile_sorted(staging_to_prod_vals, 0.5),
+            "approval_wait_ms_p50": _percentile_sorted(approval_wait_vals, 0.5),
+            "manual_touch_count_total": int(manual_touch_total),
+            "delivery_improvement_signals_note": (
+                "DORA-shaped service delivery proxies for trends only; pair with reliability KPIs and "
+                "avoid single-score gates."
+            ),
         },
     )
 
@@ -550,6 +637,22 @@ def _compile_fields_for_history(compile_summary: dict[str, Any]) -> dict[str, An
         "compile_apply_policy_allowed": compile_summary.get("compile_apply_policy_allowed"),
         "compile_apply_denial_reason": compile_summary.get("compile_apply_denial_reason"),
     }
+
+
+def _history_tcm_float(tcm: dict[str, Any], key: str) -> float | None:
+    v = tcm.get(key)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    return None
+
+
+def _history_tcm_int(tcm: dict[str, Any], key: str) -> int | None:
+    v = tcm.get(key)
+    if isinstance(v, int) and not isinstance(v, bool):
+        return int(v)
+    if isinstance(v, float) and not isinstance(v, bool) and v >= 0:
+        return int(v)
+    return None
 
 
 def _now_ms() -> int:
@@ -1738,6 +1841,20 @@ def run_runtime_autopilot(
             _save_scope_state_file(state_path=state_path, scope_state=scope_state)
 
             # Append rollout attempt to history.
+            manifest_post_runtime = manifest
+            try:
+                manifest_post_runtime = load_run_manifest(
+                    path=next_manifest_path,
+                    expected_tenant_id=tid,
+                    expected_repo_id=rid,
+                )
+            except Exception:
+                manifest_post_runtime = manifest
+            cp_post = (
+                manifest_post_runtime.control_plane if isinstance(manifest_post_runtime.control_plane, dict) else {}
+            )
+            tcm = dict(cp_post.get("time_compression_metrics") or {}) if isinstance(cp_post, dict) else {}
+
             history_entry = AutopilotHistoryEntry(
                 event_kind="runtime_rollout",
                 attempt_id=attempt_id,
@@ -1747,33 +1864,14 @@ def run_runtime_autopilot(
                 rollback_count=rollback_count,
                 rollback_success_count=rollback_success_count,
                 convergence_latency_ms=conv_avg,
-                intent_to_healthy_runtime_ms=(
-                    float(
-                        dict(cast(dict[str, Any], manifest.control_plane).get("time_compression_metrics", {})).get(
-                            "intent_to_healthy_runtime_ms", 0.0
-                        )
-                    )
-                    if isinstance(manifest.control_plane, dict)
-                    else None
-                ),
-                compile_to_healthy_runtime_ms=(
-                    float(
-                        dict(cast(dict[str, Any], manifest.control_plane).get("time_compression_metrics", {})).get(
-                            "compile_to_healthy_runtime_ms", 0.0
-                        )
-                    )
-                    if isinstance(manifest.control_plane, dict)
-                    else None
-                ),
-                compression_factor_vs_baseline=(
-                    float(
-                        dict(cast(dict[str, Any], manifest.control_plane).get("time_compression_metrics", {})).get(
-                            "compression_factor_vs_baseline", 0.0
-                        )
-                    )
-                    if isinstance(manifest.control_plane, dict)
-                    else None
-                ),
+                intent_to_healthy_runtime_ms=_history_tcm_float(tcm, "intent_to_healthy_runtime_ms"),
+                compile_to_healthy_runtime_ms=_history_tcm_float(tcm, "compile_to_healthy_runtime_ms"),
+                compression_factor_vs_baseline=_history_tcm_float(tcm, "compression_factor_vs_baseline"),
+                intent_to_staging_ms=_history_tcm_float(tcm, "intent_to_staging_ms"),
+                intent_to_prod_ms=_history_tcm_float(tcm, "intent_to_prod_ms"),
+                staging_to_prod_ms=_history_tcm_float(tcm, "staging_to_prod_ms"),
+                approval_wait_ms=_history_tcm_float(tcm, "approval_wait_ms"),
+                manual_touch_count=_history_tcm_int(tcm, "manual_touch_count"),
                 **_compile_fields_for_history(compile_summary),
             )
             _append_history_jsonl(path=history_path, entry=history_entry)

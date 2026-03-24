@@ -11,7 +11,12 @@ from akc.runtime.reconciler import (
 )
 
 
-def _bundle(*, resource_ids: tuple[str, ...], strategy: Mapping) -> RuntimeBundle:
+def _bundle(
+    *,
+    resource_ids: tuple[str, ...],
+    strategy: Mapping,
+    enrich_targets: bool = False,
+) -> RuntimeBundle:
     context = RuntimeContext(
         tenant_id="tenant-a",
         repo_id="repo-a",
@@ -40,6 +45,20 @@ def _bundle(*, resource_ids: tuple[str, ...], strategy: Mapping) -> RuntimeBundl
                     "depends_on": [],
                     "effects": None,
                     "contract_id": "contract-1",
+                    **(
+                        {
+                            "target_class": "backend_service",
+                            "environment_support": ["local", "staging", "production"],
+                            "delivery_paths": {
+                                "local": ["direct_apply"],
+                                "staging": ["direct_apply", "workflow_handoff"],
+                                "production": ["gitops_handoff", "workflow_handoff"],
+                            },
+                            "operational_profile_fingerprint": f"fp-{rid}",
+                        }
+                        if enrich_targets
+                        else {}
+                    ),
                 }
                 for rid in resource_ids
             ],
@@ -126,6 +145,36 @@ def test_progressive_canary_abort_failure_triggers_rollback_and_prevents_full_pr
     assert evidence[2].operations[0].operation.operation_type == "noop"
     assert provider.observed["svc-b"].observed_hash == old_hash
     assert provider.observed["svc-c"].observed_hash == old_hash
+
+
+def test_progressive_canary_with_enriched_delivery_plan_style_intents_same_abort_semantics() -> None:
+    resource_ids = ("svc-a", "svc-b", "svc-c")
+    old_hash = "old-hash"
+    observed = {
+        rid: ObservedResource(
+            resource_id=rid,
+            resource_class="service",
+            observed_hash=old_hash,
+            health_status="healthy",
+            payload={},
+            health_conditions=(),
+        )
+        for rid in resource_ids
+    }
+    provider = _FailingApplyProvider(observed=observed, failing_ids=("svc-a",))
+    reconciler = DeploymentReconciler(mode="canary", provider=provider, canary_limit=1)
+    reconciler.desired_hash_history["svc-a"] = [old_hash]
+    reconciler.desired_hash_history["svc-b"] = [old_hash]
+    reconciler.desired_hash_history["svc-c"] = [old_hash]
+
+    statuses, evidence = reconciler.reconcile_with_evidence(
+        bundle=_bundle(resource_ids=resource_ids, strategy={"enabled": True}, enrich_targets=True),
+    )
+
+    assert [s.resource_id for s in statuses] == ["svc-a", "svc-b", "svc-c"]
+    assert provider.apply_calls == ["svc-a"]
+    assert evidence[0].rollback_triggered is True
+    assert evidence[0].rollback_target_hash == old_hash
 
 
 def test_progressive_canary_failure_rollback_success_rate_ge_95() -> None:

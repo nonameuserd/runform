@@ -63,3 +63,6 @@ def test_compute_reliability_scoreboard_kpis() -> None:
     assert sb.kpi["mttr_like_repair_latency_ms_avg"] == 300.0  # only rollback rollout
     assert sb.kpi["intent_to_healthy_runtime_ms_p50"] == 0.0
     assert sb.kpi["compression_factor_vs_baseline_avg"] == 0.0
+    assert sb.kpi["delivery_change_instability_proxy"] == 0.5
+    assert sb.kpi["manual_touch_count_total"] == 0
+    assert "delivery_improvement_signals_note" in sb.kpi

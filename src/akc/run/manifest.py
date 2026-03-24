@@ -200,6 +200,7 @@ RuntimeEvidenceType = Literal[
     "rollback_result",
     "terminal_health",
     "convergence_certificate",
+    "delivery_lifecycle",
 ]
 ALLOWED_RUNTIME_EVIDENCE_TYPES: tuple[str, ...] = (
     "action_decision",
@@ -213,6 +214,7 @@ ALLOWED_RUNTIME_EVIDENCE_TYPES: tuple[str, ...] = (
     "rollback_result",
     "terminal_health",
     "convergence_certificate",
+    "delivery_lifecycle",
 )
 
 

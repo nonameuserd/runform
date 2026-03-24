@@ -24,6 +24,7 @@ from akc.compile.artifact_consistency import (
 )
 from akc.compile.artifact_passes import (
     run_agent_coordination_pass,
+    run_delivery_plan_pass,
     run_deployment_config_pass,
     run_orchestration_spec_pass,
     run_runtime_bundle_pass,
@@ -32,6 +33,7 @@ from akc.compile.artifact_passes import (
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import ControllerConfig
 from akc.compile.controller_policy_runtime import COMPILE_PATCH_APPLY_ACTION
+from akc.compile.delivery_projection import parse_json_artifact_text, render_delivery_summary_markdown
 from akc.compile.executors import SubprocessExecutor
 from akc.compile.interfaces import Executor, Index, LLMBackend, TenantRepoScope
 from akc.compile.ir_builder import build_ir_document_from_plan
@@ -1596,6 +1598,8 @@ class CompileSession:
                                 if artifact_path.endswith(".json")
                                 else "application/yaml; charset=utf-8"
                                 if artifact_path.endswith((".yml", ".yaml"))
+                                else "text/markdown; charset=utf-8"
+                                if artifact_path.endswith(".md")
                                 else "text/plain; charset=utf-8"
                             ),
                             metadata=None,
@@ -1664,16 +1668,26 @@ class CompileSession:
                 output_hashes[artifact.path] = artifact.sha256_hex()
             pass_order.append(name)
             groups[group].append(name)
-            metadata: dict[str, JSONValue] = {
-                "artifact_group": group,
-                "artifact_paths": list(artifact_paths),
-                "artifact_hashes": dict(artifact_hashes),
-            }
-            if base_metadata:
-                metadata.update(base_metadata)
+            # Base metadata first (replay markers, counts, …); paths/hashes must match `pass_artifacts`
+            # so baselines cannot clobber expanded artifact lists (e.g. delivery summary companion).
+            metadata: dict[str, JSONValue] = dict(base_metadata) if base_metadata else {}
             if replay_source_run_id is not None:
                 metadata["replay_source_run_id"] = replay_source_run_id
                 metadata["reused_from_replay_manifest"] = True
+            metadata["artifact_group"] = group
+            metadata["artifact_paths"] = list(artifact_paths)
+            metadata["artifact_hashes"] = dict(artifact_hashes)
+            if name == "runtime_bundle":
+                rb_path = next((p for p in artifact_paths if str(p).endswith(".runtime_bundle.json")), None)
+                if rb_path is not None:
+                    metadata["runtime_bundle_path"] = rb_path
+            if name == "delivery_plan":
+                dp_path = next((p for p in artifact_paths if str(p).endswith(".delivery_plan.json")), None)
+                if dp_path is not None:
+                    metadata["delivery_plan_path"] = dp_path
+                ds_path = next((p for p in artifact_paths if str(p).endswith(".delivery_summary.md")), None)
+                if ds_path is not None:
+                    metadata["delivery_summary_path"] = ds_path
             pass_records.append(
                 PassRecord(
                     name=name,
@@ -1845,6 +1859,61 @@ class CompileSession:
                 span_start_ns=coordination_span_start_ns,
             )
 
+        delivery_plan_json_text: str
+        delivery_plan_replayed = _maybe_load_replay_pass("delivery_plan")
+        if delivery_plan_replayed is not None:
+            delivery_plan_span_start_ns = now_unix_nano()
+            previous, delivery_plan_artifacts = delivery_plan_replayed
+            delivery_plan_artifacts = list(delivery_plan_artifacts)
+            delivery_plan_json_artifact = next(
+                artifact for artifact in delivery_plan_artifacts if artifact.path.endswith(".json")
+            )
+            delivery_plan_json_text = delivery_plan_json_artifact.text()
+            if not any(str(a.path).endswith(".delivery_summary.md") for a in delivery_plan_artifacts):
+                plan_obj = parse_json_artifact_text(delivery_plan_json_text)
+                summary_text = render_delivery_summary_markdown(run_id=run_id, delivery_plan=plan_obj)
+                delivery_plan_artifacts.append(
+                    OutputArtifact.from_text(
+                        path=f".akc/design/{run_id}.delivery_summary.md",
+                        text=summary_text,
+                        media_type="text/markdown; charset=utf-8",
+                        metadata={
+                            "run_id": run_id,
+                            "kind": "delivery_summary_markdown",
+                            "companion_of": delivery_plan_json_artifact.path,
+                            "synthesized_from_replay": True,
+                        },
+                    )
+                )
+            _register_pass(
+                name="delivery_plan",
+                pass_artifacts=delivery_plan_artifacts,
+                group="deployment_configs",
+                base_metadata={
+                    **dict(previous.metadata or {}),
+                    **({"replay_mode": replay_manifest.replay_mode} if replay_manifest else {}),
+                },
+                replay_source_run_id=replay_manifest.run_id if replay_manifest else None,
+                span_start_ns=delivery_plan_span_start_ns,
+            )
+        else:
+            delivery_plan_span_start_ns = now_unix_nano()
+            delivery_plan_result = run_delivery_plan_pass(
+                run_id=run_id,
+                ir_document=ir_doc,
+                intent_spec=intent_spec,
+                orchestration_spec_text=orchestration_json_text,
+                coordination_spec_text=coordination_json_text,
+            )
+            delivery_plan_json_text = delivery_plan_result.artifact_json.text()
+            _register_pass(
+                name="delivery_plan",
+                pass_artifacts=[delivery_plan_result.artifact_json, delivery_plan_result.artifact_summary_md],
+                group="deployment_configs",
+                base_metadata=dict(delivery_plan_result.metadata),
+                span_start_ns=delivery_plan_span_start_ns,
+            )
+
         runtime_bundle_replayed = _maybe_load_replay_pass("runtime_bundle")
         if runtime_bundle_replayed is not None:
             runtime_bundle_span_start_ns = now_unix_nano()
@@ -1871,6 +1940,7 @@ class CompileSession:
                 intent_spec=intent_spec,
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
+                delivery_plan_text=delivery_plan_json_text,
                 embed_system_ir=bool(runtime_bundle_embed_system_ir),
                 runtime_bundle_schema_version=int(runtime_bundle_schema_version),
                 reconcile_deploy_targets_from_ir_only=bool(reconcile_deploy_targets_from_ir_only),
@@ -1913,6 +1983,7 @@ class CompileSession:
                 intent_spec=intent_spec,
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
+                delivery_plan_text=delivery_plan_json_text,
             )
             deployment_docker_compose_text = deployment_result.artifact_docker_compose.text()
             _register_pass(
@@ -1923,6 +1994,7 @@ class CompileSession:
                     deployment_result.artifact_k8s_service,
                     deployment_result.artifact_k8s_configmap,
                     deployment_result.artifact_github_actions,
+                    *deployment_result.additional_artifacts,
                 ],
                 group="deployment_configs",
                 base_metadata=dict(deployment_result.metadata),

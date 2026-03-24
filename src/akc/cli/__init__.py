@@ -1243,6 +1243,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format for diagnostics (structured policy denial on policy-related failures).",
     )
+    runtime_start.add_argument(
+        "--delivery-target-lane",
+        choices=["staging", "production"],
+        default=None,
+        help=(
+            "Maps aggregate health timestamps to staging vs production delivery lifecycle fields "
+            "(default: AKC_DELIVERY_TARGET_LANE, else staging)."
+        ),
+    )
     runtime_start.add_argument("--verbose", action="store_true", help="Enable debug logging")
     runtime_start.set_defaults(func=cmd_runtime_start)
 

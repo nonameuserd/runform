@@ -13,6 +13,7 @@ from akc.compile.artifact_passes import (
     parse_patch_artifact_strict,
     parse_patch_artifact_vcr_cache,
     run_agent_coordination_pass,
+    run_delivery_plan_pass,
     run_deployment_config_pass,
     run_orchestration_spec_pass,
     run_runtime_bundle_pass,
@@ -282,11 +283,20 @@ def test_run_deployment_config_pass_emits_hardened_configs() -> None:
     assert res.artifact_docker_compose.path == ".akc/deployment/docker-compose.yml"
     assert "read_only: true" in res.artifact_docker_compose.text()
     assert "no-new-privileges:true" in res.artifact_docker_compose.text()
+    assert "AKC_ROLLOUT_STRATEGY: rolling" in res.artifact_docker_compose.text()
+    assert "healthcheck:" in res.artifact_docker_compose.text()
+    assert "env_file:" in res.artifact_docker_compose.text()
     assert res.artifact_k8s_deployment.path == ".akc/deployment/k8s/deployment.yml"
     deployment_text = res.artifact_k8s_deployment.text()
     assert "runAsNonRoot: true" in deployment_text
+    assert "seccompProfile:" in deployment_text
+    assert "RuntimeDefault" in deployment_text
     assert "allowPrivilegeEscalation: false" in deployment_text
     assert "readOnlyRootFilesystem: true" in deployment_text
+    assert "readinessProbe:" in deployment_text
+    assert "livenessProbe:" in deployment_text
+    assert "startupProbe:" in deployment_text
+    assert "app.kubernetes.io/managed-by: akc" in deployment_text
     assert res.artifact_k8s_service.path == ".akc/deployment/k8s/service.yml"
     assert res.artifact_k8s_configmap.path == ".akc/deployment/k8s/configmap.yml"
     configmap_text = res.artifact_k8s_configmap.text()
@@ -296,7 +306,44 @@ def test_run_deployment_config_pass_emits_hardened_configs() -> None:
     workflow_text = res.artifact_github_actions.text()
     assert "pull_request_target" not in workflow_text
     assert "permissions:" in workflow_text
+    assert "deploy_staging:" in workflow_text
+    assert "health_check:" in workflow_text
+    assert "approval:" in workflow_text
+    assert "deploy_prod:" in workflow_text
+    assert "rollback:" in workflow_text
     assert "contents: read" in workflow_text
+    assert "Require production approval" in workflow_text
+    assert "OIDC" in workflow_text
+    additional_paths = {artifact.path for artifact in res.additional_artifacts}
+    assert ".akc/deployment/compose/app.env" in additional_paths
+    assert ".akc/deployment/compose/app-config.json" in additional_paths
+    assert ".akc/deployment/compose/docker-compose.staging.yml" in additional_paths
+    assert ".akc/deployment/compose/docker-compose.production.yml" in additional_paths
+    assert ".akc/deployment/k8s/base/kustomization.yml" in additional_paths
+    assert ".akc/deployment/k8s/secrets.yml" not in additional_paths
+    kustom_txt = next(
+        a.text() for a in res.additional_artifacts if a.path.endswith("k8s/base/kustomization.yml")
+    )
+    assert "secrets.yml" not in kustom_txt
+    assert res.metadata.get("k8s_secret_manifest_count") == 0
+    assert ".akc/deployment/k8s/overlays/staging/kustomization.yml" in additional_paths
+    assert ".akc/deployment/k8s/overlays/production/kustomization.yml" in additional_paths
+    assert ".akc/deployment/gitops/flux-kustomization.yml" in additional_paths
+    assert ".akc/deployment/gitops/argo-application.yml" in additional_paths
+    staging_overlay = next(
+        artifact
+        for artifact in res.additional_artifacts
+        if artifact.path.endswith("compose/docker-compose.staging.yml")
+    )
+    assert "AKC_ENVIRONMENT: staging" in staging_overlay.text()
+    flux_template = next(
+        artifact for artifact in res.additional_artifacts if artifact.path.endswith("gitops/flux-kustomization.yml")
+    )
+    assert "kind: Kustomization" in flux_template.text()
+    argo_template = next(
+        artifact for artifact in res.additional_artifacts if artifact.path.endswith("gitops/argo-application.yml")
+    )
+    assert "kind: Application" in argo_template.text()
     docker_metadata = res.artifact_docker_compose.metadata
     assert docker_metadata is not None
     intent_projection = docker_metadata.get("intent_projection")
@@ -333,6 +380,380 @@ def test_run_deployment_config_pass_emits_hardened_configs() -> None:
     assert res.output_sha256 == res.artifact_docker_compose.sha256_hex()
 
 
+def test_run_deployment_config_pass_canary_rollout_marks_direct_apply_support() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_canary",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={"cloud_account": "acct-1"},
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    delivery_plan_obj = {
+        "run_id": "run_canary",
+        "tenant_id": "tenant_a",
+        "repo_id": "repo_a",
+        "targets": [
+            {
+                "target_id": "svc_canary",
+                "rollout_recovery_policy": {"strategy": "canary"},
+                "supported_delivery_paths": {
+                    "local": ["direct_apply"],
+                    "staging": ["direct_apply", "workflow_handoff"],
+                    "production": ["gitops_handoff", "workflow_handoff"],
+                },
+            }
+        ],
+        "environments": ["local", "staging", "production"],
+        "delivery_paths": {},
+        "required_human_inputs": [],
+        "promotion_readiness": {"status": "ready"},
+    }
+    res = run_deployment_config_pass(
+        run_id="run_canary",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_canary","tenant_id":"tenant_a","repo_id":"repo_a"}',
+        coordination_spec_text='{"run_id":"run_canary","tenant_id":"tenant_a","repo_id":"repo_a"}',
+        delivery_plan_text=json.dumps(delivery_plan_obj),
+    )
+    assert res.metadata["rollout_strategy"] == "canary"
+    assert res.metadata["canary_direct_apply_supported"] is True
+    compose_text = res.artifact_docker_compose.text()
+    assert "AKC_ROLLOUT_STRATEGY: canary" in compose_text
+    assert "AKC_CANARY_DIRECT_APPLY_SUPPORTED:" in compose_text
+
+
+def test_run_delivery_plan_pass_projects_ops_contracts_and_missing_inputs() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_web",
+                tenant_id="tenant_a",
+                kind="service",
+                name="web frontend",
+                properties={"public": True},
+            ),
+            IRNode(
+                id="svc_worker",
+                tenant_id="tenant_a",
+                kind="service",
+                name="background worker",
+                properties={},
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_delivery",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_delivery","steps":[]}',
+        coordination_spec_text='{"run_id":"run_delivery","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert validate_obj(obj=obj, kind="delivery_plan", version=1) == []
+    assert res.artifact_json.path == ".akc/deployment/run_delivery.delivery_plan.json"
+    assert obj["promotion_readiness"]["status"] == "blocked"
+    assert obj["promotion_readiness"]["is_promotion_ready"] is False
+    assert obj["promotion_readiness"]["default_promotion_environment"] == "production"
+    assert obj["environments"] == ["local", "staging", "production"]
+    env_model = {row["environment"]: row for row in obj["environment_model"]}
+    assert env_model["local"]["preferred_runtime"] == "docker_compose"
+    assert env_model["local"]["preferred_delivery_path"] == "direct_apply"
+    assert env_model["staging"]["reconcile_mode"] == "direct"
+    assert env_model["staging"]["supported_delivery_paths"] == ["direct_apply", "workflow_handoff"]
+    assert env_model["production"]["preferred_delivery_path"] == "workflow_handoff"
+    assert env_model["production"]["gitops_compatible_handoff"] is True
+    assert env_model["production"]["approval_gates_required"] is True
+    assert env_model["production"]["readiness_checks_required"] is True
+    target = next(t for t in obj["targets"] if t["target_id"] == "svc_web")
+    assert target["build_contract"]["artifact_type"] == "container_image"
+    assert target["runtime_contract"]["runtime"] == "container"
+    assert target["exposure_model"]["public"] is True
+    assert target["operational_config"]["probes"]["readiness"]["path"] == "/healthz"
+    assert target["operational_config"]["security_context"]["pod"]["runAsNonRoot"] is True
+    assert "secrets_placeholders" in target["operational_config"]
+    assert "domain_name" in [item["id"] for item in obj["required_human_inputs"]]
+    assert "cloud_credentials" in [item["id"] for item in obj["required_human_inputs"]]
+    pb = obj["promotion_readiness"]["promotion_blockers"]
+    assert "production_manual_approval_gate" in pb
+    assert "domain_name" in pb
+    domain_item = next(i for i in obj["required_human_inputs"] if i["id"] == "domain_name")
+    assert domain_item["status"] == "missing"
+    assert domain_item["ask_order"] == 10
+    assert domain_item["ui_prompt"]["audience"] == "non_technical"
+    assert "question" in domain_item["ui_prompt"]
+    assert domain_item["answer_binding"]["property"] == "domain"
+    assert "svc_web" in domain_item["answer_binding"]["target_ids"]
+    orders = [int(i["ask_order"]) for i in obj["required_human_inputs"]]
+    assert orders == sorted(orders)
+    assert res.artifact_summary_md is not None
+    assert res.artifact_summary_md.path == ".akc/design/run_delivery.delivery_summary.md"
+    md = res.artifact_summary_md.text()
+    assert "## What AKC inferred" in md
+    assert "## What will be deployed where" in md
+    assert "## Approvals and gates" in md
+    assert "## Information we still need from you" in md
+    assert "## What healthy means for this system" in md
+
+
+def test_run_delivery_plan_pass_adds_health_question_when_endpoint_unknown() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-9",
+                    "health_endpoint_known": False,
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_health_q",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_health_q","steps":[]}',
+        coordination_spec_text='{"run_id":"run_health_q","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert validate_obj(obj=obj, kind="delivery_plan", version=1) == []
+    assert obj["promotion_readiness"]["status"] == "blocked"
+    ids = [i["id"] for i in obj["required_human_inputs"]]
+    assert ids == ["health_check_url"]
+    health_item = obj["required_human_inputs"][0]
+    assert health_item["answer_binding"]["property"] == "health_path"
+    assert "svc_api" in health_item["answer_binding"]["target_ids"]
+    assert "Health check address" in res.artifact_summary_md.text()
+
+
+def test_run_delivery_plan_pass_batches_configuration_secrets_when_declared() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-99",
+                    "secrets": ["API_KEY", "DB_PASSWORD"],
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_secrets_batch",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_secrets_batch","steps":[]}',
+        coordination_spec_text='{"run_id":"run_secrets_batch","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert validate_obj(obj=obj, kind="delivery_plan", version=1) == []
+    ids = [i["id"] for i in obj["required_human_inputs"]]
+    assert "configuration_secrets" in ids
+    sec_item = next(i for i in obj["required_human_inputs"] if i["id"] == "configuration_secrets")
+    assert sec_item["answer_binding"]["property"] == "secrets_provisioned_in_store"
+    assert "svc_api" in sec_item["answer_binding"]["target_ids"]
+    by_t = sec_item["context"]["secret_requirements_by_target"]
+    assert set(by_t["svc_api"]) == {"API_KEY", "DB_PASSWORD"}
+    assert "Secret names" in res.artifact_summary_md.text()
+    assert "secrets_provisioned_in_store" in res.artifact_summary_md.text()
+
+
+def test_run_delivery_plan_pass_no_configuration_secrets_when_acknowledged() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-99",
+                    "secrets": ["API_KEY"],
+                    "secrets_provisioned_in_store": True,
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_secrets_ok",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_secrets_ok","steps":[]}',
+        coordination_spec_text='{"run_id":"run_secrets_ok","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert validate_obj(obj=obj, kind="delivery_plan", version=1) == []
+    assert obj["required_human_inputs"] == []
+    assert obj["promotion_readiness"]["status"] == "blocked"
+    assert obj["promotion_readiness"]["is_promotion_ready"] is False
+    assert "production_manual_approval_gate" in obj["promotion_readiness"]["promotion_blockers"]
+
+
+def test_run_delivery_plan_pass_batches_configuration_env_when_declared() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-77",
+                    "env": ["LOG_LEVEL", "FEATURE_FOO"],
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_env_batch",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_env_batch","steps":[]}',
+        coordination_spec_text='{"run_id":"run_env_batch","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert validate_obj(obj=obj, kind="delivery_plan", version=1) == []
+    ids = [i["id"] for i in obj["required_human_inputs"]]
+    assert ids == ["configuration_env"]
+    env_item = obj["required_human_inputs"][0]
+    assert env_item["answer_binding"]["property"] == "env_config_provisioned"
+    by_t = env_item["context"]["env_requirements_by_target"]
+    assert set(by_t["svc_api"]) == {"FEATURE_FOO", "LOG_LEVEL"}
+    assert "Non-secret env keys" in res.artifact_summary_md.text()
+
+
+def test_run_delivery_plan_pass_no_configuration_env_when_acknowledged() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-77",
+                    "env": ["REGION"],
+                    "env_config_provisioned": True,
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_env_ok",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_env_ok","steps":[]}',
+        coordination_spec_text='{"run_id":"run_env_ok","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert obj["required_human_inputs"] == []
+    assert obj["promotion_readiness"]["status"] == "blocked"
+    assert "production_manual_approval_gate" in obj["promotion_readiness"]["promotion_blockers"]
+
+
+def test_run_delivery_plan_pass_orders_configuration_secrets_before_env() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api",
+                properties={
+                    "public": False,
+                    "cloud_account": "acct-1",
+                    "secrets": ["TOKEN"],
+                    "env": ["LOG_LEVEL"],
+                },
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_both_cfg",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_both_cfg","steps":[]}',
+        coordination_spec_text='{"run_id":"run_both_cfg","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    ids = [i["id"] for i in obj["required_human_inputs"]]
+    assert ids == ["configuration_secrets", "configuration_env"]
+    assert obj["required_human_inputs"][0]["ask_order"] < obj["required_human_inputs"][1]["ask_order"]
+
+
+def test_run_delivery_plan_pass_blocks_on_production_approval_gate_when_inputs_satisfied() -> None:
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(
+            IRNode(
+                id="svc_api",
+                tenant_id="tenant_a",
+                kind="service",
+                name="api backend",
+                properties={"public": False, "cloud_account": "acct-123"},
+            ),
+        ),
+    )
+    intent = _intent_spec(allow_network=False)
+    res = run_delivery_plan_pass(
+        run_id="run_ready",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text='{"run_id":"run_ready","steps":[]}',
+        coordination_spec_text='{"run_id":"run_ready","orchestration_bindings":[]}',
+    )
+    obj = json.loads(res.artifact_json.text())
+    assert obj["required_human_inputs"] == []
+    assert obj["promotion_readiness"]["status"] == "blocked"
+    assert obj["promotion_readiness"]["is_promotion_ready"] is False
+    assert obj["promotion_readiness"]["promotion_blockers"] == ["production_manual_approval_gate"]
+    assert obj["promotion_readiness"]["production_manual_approval_required"] is True
+    assert res.artifact_summary_md.path.endswith(".delivery_summary.md")
+    md = res.artifact_summary_md.text()
+    assert "fail-closed" in md
+    assert "production_manual_approval_gate" in md
+
+
 def test_run_runtime_bundle_pass_emits_versioned_runtime_bundle_schema() -> None:
     ir_doc = IRDocument(
         tenant_id="tenant_a",
@@ -357,6 +778,19 @@ def test_run_runtime_bundle_pass_emits_versioned_runtime_bundle_schema() -> None
         ),
     )
     intent = _intent_spec(allow_network=True)
+    delivery_plan = run_delivery_plan_pass(
+        run_id="run_1",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text=(
+            '{"run_id":"run_1","tenant_id":"tenant_a","repo_id":"repo_a",'
+            '"steps":[{"inputs":{"ir_node_id":"workflow-1"}}]}'
+        ),
+        coordination_spec_text=(
+            '{"run_id":"run_1","tenant_id":"tenant_a","repo_id":"repo_a",'
+            '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
+        ),
+    )
 
     result = run_runtime_bundle_pass(
         run_id="run_1",
@@ -370,6 +804,7 @@ def test_run_runtime_bundle_pass_emits_versioned_runtime_bundle_schema() -> None
             '{"run_id":"run_1","tenant_id":"tenant_a","repo_id":"repo_a",'
             '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
         ),
+        delivery_plan_text=delivery_plan.artifact_json.text(),
     )
     bundle_obj = json.loads(result.artifact_json.text())
 
@@ -381,6 +816,7 @@ def test_run_runtime_bundle_pass_emits_versioned_runtime_bundle_schema() -> None
     assert bundle_obj.get("embed_system_ir") is False
     assert bundle_obj["system_ir_ref"]["path"] == ".akc/ir/run_1.json"
     assert bundle_obj["coordination_ref"]["path"] == ".akc/agents/run_1.coordination.json"
+    assert bundle_obj["delivery_plan_ref"]["path"] == ".akc/deployment/run_1.delivery_plan.json"
     assert bundle_obj["coordination_ref"]["fingerprint"] == bundle_obj["spec_hashes"]["coordination_spec_sha256"]
     assert bundle_obj["system_ir_ref"]["fingerprint"] == ir_doc.fingerprint()
     assert bundle_obj["system_ir_ref"]["format_version"] == ir_doc.format_version
@@ -444,6 +880,19 @@ def test_run_runtime_bundle_pass_v4_emits_phase_d_reconcile_metadata_when_reques
         ),
     )
     intent = _intent_spec(allow_network=False)
+    delivery_plan = run_delivery_plan_pass(
+        run_id="run_phase_d",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text=(
+            '{"run_id":"run_phase_d","tenant_id":"tenant_a","repo_id":"repo_a",'
+            '"steps":[{"inputs":{"ir_node_id":"workflow-1"}}]}'
+        ),
+        coordination_spec_text=(
+            '{"run_id":"run_phase_d","tenant_id":"tenant_a","repo_id":"repo_a",'
+            '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
+        ),
+    )
     result = run_runtime_bundle_pass(
         run_id="run_phase_d",
         ir_document=ir_doc,
@@ -456,6 +905,7 @@ def test_run_runtime_bundle_pass_v4_emits_phase_d_reconcile_metadata_when_reques
             '{"run_id":"run_phase_d","tenant_id":"tenant_a","repo_id":"repo_a",'
             '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
         ),
+        delivery_plan_text=delivery_plan.artifact_json.text(),
         runtime_bundle_schema_version=4,
         reconcile_deploy_targets_from_ir_only=True,
         deployment_intents_ir_alignment="strict",
@@ -510,6 +960,7 @@ def test_run_runtime_bundle_pass_without_success_criteria_still_prefers_ir_recon
             '{"run_id":"run_no_sc","tenant_id":"tenant_a","repo_id":"repo_a",'
             '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
         ),
+        delivery_plan_text=None,
     )
     bundle_obj = json.loads(result.artifact_json.text())
     assert bundle_obj.get("reconcile_desired_state_source") == "ir"
