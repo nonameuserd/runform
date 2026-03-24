@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -76,16 +77,22 @@ def _patch_base_cmd(patch_bin: str) -> list[str]:
     return [patch_bin, "-p1", "--forward", "--batch"]
 
 
+def _stage_patch_inputs(*, scope_root: Path, staged_root: Path, rel_paths: list[str]) -> None:
+    for rel in rel_paths:
+        src = scope_root / rel
+        dst = staged_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_file():
+            shutil.copy2(src, dst)
+
+
 def _run_patch(
     *,
     patch_bin: str,
     cwd: Path,
     patch_text: str,
-    dry_run: bool,
 ) -> subprocess.CompletedProcess[bytes]:
     cmd = _patch_base_cmd(patch_bin)
-    if dry_run:
-        cmd.append("--check")
     normalized_patch_text = _normalize_patch_text(patch_text)
     return subprocess.run(
         cmd,
@@ -211,11 +218,14 @@ def run_scoped_apply_pipeline(
             }
         )
 
-    check_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=normalized_patch_text, dry_run=True)
+    with tempfile.TemporaryDirectory(prefix="akc-scoped-apply-") as tmp_dir:
+        staged_root = Path(tmp_dir)
+        _stage_patch_inputs(scope_root=scope_root, staged_root=staged_root, rel_paths=paths)
+        check_res = _run_patch(patch_bin=patch_bin, cwd=staged_root, patch_text=normalized_patch_text)
     if int(check_res.returncode) != 0:
         stderr = (check_res.stderr or b"").decode("utf-8", errors="replace").strip()
         stdout = (check_res.stdout or b"").decode("utf-8", errors="replace").strip()
-        msg = stderr or stdout or f"patch --check exit {check_res.returncode}"
+        msg = stderr or stdout or f"staged patch apply exit {check_res.returncode}"
         return ScopedApplyAccounting(
             compile_realization_mode="scoped_apply",
             attempted=True,
@@ -229,7 +239,7 @@ def run_scoped_apply_pipeline(
             files=tuple(before_rows),
         ).to_json_obj()
 
-    apply_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=normalized_patch_text, dry_run=False)
+    apply_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=normalized_patch_text)
     if int(apply_res.returncode) != 0:
         stderr = (apply_res.stderr or b"").decode("utf-8", errors="replace").strip()
         stdout = (apply_res.stdout or b"").decode("utf-8", errors="replace").strip()
