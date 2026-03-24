@@ -141,10 +141,12 @@ wheels = [
 name = "akc"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+]
 
 [package.optional-dependencies]
 dev = [
-    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pip-audit" },
     { name = "pre-commit" },
@@ -195,7 +197,7 @@ requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'ingest-docs'", specifier = ">=4.12" },
     { name = "chromadb", marker = "extra == 'ingest-vectorstore'", specifier = ">=0.5" },
     { name = "httpx", marker = "extra == 'ingest-embed'", specifier = ">=0.27" },
-    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.22" },
+    { name = "jsonschema", specifier = ">=4.22" },
     { name = "markdown-it-py", marker = "extra == 'ingest-docs'", specifier = ">=3.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "pgvector", marker = "extra == 'vectorstore-pg'", specifier = ">=0.4" },

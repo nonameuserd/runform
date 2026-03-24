@@ -15,7 +15,9 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "jsonschema>=4.22",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -26,7 +28,6 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",
-    "jsonschema>=4.22",
     "types-jsonschema>=4.22.0.0",
     "types-PyYAML>=6.0.0.0",
     "PyYAML>=6.0",
