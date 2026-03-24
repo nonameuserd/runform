@@ -2058,9 +2058,8 @@ class CompileSession:
             if pass_name is None:
                 continue
             rollup = by_pass.setdefault(pass_name, self._new_cost_rollup())
-            rollup["wall_time_ms"] = (
-                json_value_as_int(rollup.get("wall_time_ms"), default=0)
-                + self._span_duration_ms(span=span)
+            rollup["wall_time_ms"] = json_value_as_int(rollup.get("wall_time_ms"), default=0) + self._span_duration_ms(
+                span=span
             )
             attrs = span.get("attributes")
             attrs_dict = attrs if isinstance(attrs, dict) else {}

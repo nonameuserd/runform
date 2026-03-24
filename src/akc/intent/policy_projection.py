@@ -338,9 +338,7 @@ def project_intent_operating_bounds_to_policy_context(
     )
     base_max_steps = json_value_as_int(baseline.get("max_steps"), default=0)
     req_max_steps = json_value_as_int(requested.get("max_steps"), default=base_max_steps)
-    effective_max_steps = (
-        base_max_steps if requested.get("max_steps") is None else min(req_max_steps, base_max_steps)
-    )
+    effective_max_steps = base_max_steps if requested.get("max_steps") is None else min(req_max_steps, base_max_steps)
     effective_max_input_tokens = _min_optional_int(
         requested=(
             json_value_as_int(requested.get("max_input_tokens"), default=0)
