@@ -352,8 +352,10 @@ def test_cli_runtime_start_updates_existing_compile_run_manifest(
 
 
 def test_runtime_start_live_mutation_requires_signed_live_apply_packet(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER", raising=False)
+    monkeypatch.delenv("AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER", raising=False)
     outputs_root = tmp_path / "out"
     bundle_path = outputs_root / "tenant-a" / "repo-a" / ".akc" / "runtime" / "run-1.runtime_bundle.json"
     _write_runtime_bundle(bundle_path, deployment_provider_kind="kubernetes_apply")
@@ -377,8 +379,10 @@ def test_runtime_start_live_mutation_requires_signed_live_apply_packet(
 
 
 def test_runtime_start_live_mutation_fails_when_compile_apply_manifest_mismatch(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER", raising=False)
+    monkeypatch.delenv("AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER", raising=False)
     outputs_root = tmp_path / "out"
     bundle_path = outputs_root / "tenant-a" / "repo-a" / ".akc" / "runtime" / "run-1.runtime_bundle.json"
     _write_runtime_bundle(bundle_path, deployment_provider_kind="kubernetes_apply")
@@ -418,8 +422,10 @@ def test_runtime_start_live_mutation_fails_when_compile_apply_manifest_mismatch(
 
 
 def test_runtime_start_live_mutation_accepts_valid_live_apply_packet(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER", raising=False)
+    monkeypatch.delenv("AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER", raising=False)
     outputs_root = tmp_path / "out"
     bundle_path = outputs_root / "tenant-a" / "repo-a" / ".akc" / "runtime" / "run-1.runtime_bundle.json"
     _write_runtime_bundle(bundle_path, deployment_provider_kind="kubernetes_apply")
