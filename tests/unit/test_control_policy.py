@@ -60,9 +60,7 @@ def test_subprocess_opa_evaluator_denies_on_false_decision(monkeypatch) -> None:
         stdout = (
             json.dumps({"result": [{"expressions": [{"value": False}]}]})
             if calls == 1
-            else json.dumps(
-                {"result": [{"expressions": [{"value": "policy.executor.stage_not_allowed"}]}]}
-            )
+            else json.dumps({"result": [{"expressions": [{"value": "policy.executor.stage_not_allowed"}]}]})
         )
         return subprocess.CompletedProcess(
             args=args[0],

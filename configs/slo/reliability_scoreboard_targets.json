@@ -1,0 +1,25 @@
+{
+  "window": {
+    "required_consecutive_windows": 2
+  },
+  "kpi_targets": {
+    "policy_compliance_rate": {
+      "gte": 0.95
+    },
+    "rollbacks_total": {
+      "lte": 0
+    },
+    "convergence_latency_ms_avg": {
+      "lte": 60000
+    },
+    "mttr_like_repair_latency_ms_avg": {
+      "lte": 60000
+    },
+    "compression_factor_vs_baseline_avg": {
+      "gte": 1.0
+    },
+    "failed_promotions_prevented": {
+      "gte": 0
+    }
+  }
+}

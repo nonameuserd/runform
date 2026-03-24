@@ -36,9 +36,7 @@ class ProvenancePointer:
         require_non_empty(self.kind, name="provenance.kind")
         require_non_empty(self.source_id, name="provenance.source_id")
         if self.kind not in ALLOWED_PROVENANCE_KINDS:
-            raise ValueError(
-                f"provenance.kind must be one of {ALLOWED_PROVENANCE_KINDS}; got {self.kind!r}"
-            )
+            raise ValueError(f"provenance.kind must be one of {ALLOWED_PROVENANCE_KINDS}; got {self.kind!r}")
         if self.sha256 is not None:
             s = self.sha256.strip().lower()
             if len(s) != 64 or any(ch not in "0123456789abcdef" for ch in s):

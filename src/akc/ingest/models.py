@@ -20,6 +20,12 @@ class DocumentMetadata(TypedDict, total=False):
     user: NotRequired[str]
     chunk_index: NotRequired[int]
     parent_id: NotRequired[str]
+    # Optional structured provenance (A3); connectors may omit any field.
+    connector_id: NotRequired[str]
+    indexed_at_ms: NotRequired[int]
+    operation_id: NotRequired[str]
+    openapi_path: NotRequired[str]
+    openapi_method: NotRequired[str]
 
 
 def _require_non_empty(value: str, *, field_name: str) -> None:

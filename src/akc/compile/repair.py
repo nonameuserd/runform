@@ -9,12 +9,18 @@ The controller is responsible for enforcing budgets and tier policy.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from akc.compile.interfaces import ExecutionResult
+from akc.compile.ir_prompt_context import (
+    format_active_objectives_for_prompt,
+    format_linked_constraints_for_prompt,
+    format_success_criteria_for_prompt,
+)
 from akc.memory.models import JSONValue, require_non_empty
 
 _PYTEST_FAIL_LINE_RE = re.compile(r"^FAILED\s+(?P<test>.+?)\s+-\s+(?P<reason>.+?)\s*$")
@@ -22,9 +28,7 @@ _PYTEST_SHORT_SUMMARY_HEADER_RE = re.compile(
     r"^=+\s*short test summary info\s*=+\s*$",
     re.IGNORECASE,
 )
-_TRACEBACK_HEADER_RE = re.compile(
-    r"^=+\s*FAILURES\s*=+\s*$|^Traceback \(most recent call last\):\s*$"
-)
+_TRACEBACK_HEADER_RE = re.compile(r"^=+\s*FAILURES\s*=+\s*$|^Traceback \(most recent call last\):\s*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +62,7 @@ def parse_execution_failure(*, result: ExecutionResult, max_lines: int = 80) -> 
     if max_lines_i <= 0:
         raise ValueError("max_lines must be > 0")
 
-    combined = (result.stdout or "") + (
-        "\n" + (result.stderr or "") if (result.stderr or "") else ""
-    )
+    combined = (result.stdout or "") + ("\n" + (result.stderr or "") if (result.stderr or "") else "")
     lines = combined.splitlines()
 
     # Scan for pytest "short test summary info" section.
@@ -105,9 +107,14 @@ def parse_execution_failure(*, result: ExecutionResult, max_lines: int = 80) -> 
 def build_repair_prompt(
     *,
     goal: str,
-    plan_json: Mapping[str, Any],
+    ir_context: Mapping[str, Any],
+    plan_trace: Mapping[str, Any],
     step_id: str,
     step_title: str,
+    intent_id: str,
+    active_objectives: list[Mapping[str, Any]],
+    linked_constraints: list[Mapping[str, Any]],
+    active_success_criteria: list[Mapping[str, Any]],
     retrieved_context: Mapping[str, Any],
     last_generation_text: str,
     failure: FailureSummary,
@@ -118,14 +125,24 @@ def build_repair_prompt(
     require_non_empty(goal, name="goal")
     require_non_empty(step_id, name="step_id")
     require_non_empty(step_title, name="step_title")
+    require_non_empty(intent_id, name="intent_id")
     require_non_empty(last_generation_text, name="last_generation_text")
 
     f = failure.to_json_obj()
     vf = dict(verifier_feedback) if verifier_feedback is not None else None
+
     return (
         "You are repairing a codebase change in an AKC compile loop.\n\n"
         f"Goal:\n{goal}\n\n"
-        f"Plan JSON:\n{dict(plan_json)}\n\n"
+        f"Intent context (active objectives/constraints/acceptance):\n"
+        f"- intent_id: {intent_id}\n"
+        f"- active_objectives:\n{format_active_objectives_for_prompt(list(active_objectives))}\n\n"
+        f"- linked_constraints:\n{format_linked_constraints_for_prompt(list(linked_constraints))}\n\n"
+        f"- active_success_criteria:\n{format_success_criteria_for_prompt(list(active_success_criteria))}\n\n"
+        f"IR (compact structural graph):\n"
+        f"{json.dumps(dict(ir_context), sort_keys=True, ensure_ascii=False)}\n\n"
+        f"Plan execution trace:\n"
+        f"{json.dumps(dict(plan_trace), sort_keys=True, ensure_ascii=False)}\n\n"
         f"Current step:\n- id: {step_id}\n- title: {step_title}\n\n"
         f"Retrieved context (index + code memory):\n{dict(retrieved_context)}\n\n"
         "Last generation output (may contain the attempted patch):\n"

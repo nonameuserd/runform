@@ -92,3 +92,25 @@ def test_verifier_budget_accounting_exceeded_emits_error_and_blocks() -> None:
     )
     assert passed is False
     assert any(f.code == "budget.llm_calls_exceeded" for f in findings)
+
+
+def test_verifier_merges_operational_attestation_findings_from_accounting() -> None:
+    policy = VerifierPolicy(strict=True)
+    accounting = {
+        "llm_calls": 0,
+        "operational_verifier_findings": [
+            {
+                "code": "operational.attestation_failed",
+                "message": "injected operational gate",
+                "severity": "error",
+            }
+        ],
+    }
+    passed, findings = _run(
+        patch="--- a/x.py\n+++ b/x.py\n",
+        policy=policy,
+        execution=_mk_exec(0),
+        accounting=accounting,
+    )
+    assert passed is False
+    assert any(f.code == "operational.attestation_failed" for f in findings)

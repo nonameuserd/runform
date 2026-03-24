@@ -6,6 +6,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AKC_RELIABILITY_SOAK_OUTPUTS_ROOT: ""
 
 on:
   push:
@@ -21,6 +22,12 @@ on:
       - master
       - dev
       - "release/*"
+  workflow_dispatch:
+    inputs:
+      enable_mutating_runtime_jobs:
+        description: "Run opt-in mutating runtime jobs on GitHub-hosted runners (no external cluster creds)."
+        required: false
+        default: "false"
 
 jobs:
   policy-test:
@@ -56,7 +63,15 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra eval-rag
+
+      - name: Install OPA (compile policy + scoped-apply integration tests)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/opa \
+            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
+          opa version
 
       - name: Ruff (lint)
         run: uv run ruff check .
@@ -69,6 +84,139 @@ jobs:
 
       - name: pytest
         run: uv run pytest
+
+  # Phase C (progressive disclosure) CI recipes:
+  # - Default: non-mutating runtime gates. We explicitly keep external/mutating deployment providers disabled.
+  # - Opt-in: mutating runtime jobs behind a PR label or workflow_dispatch input.
+  #
+  # See `src/akc/runtime/providers/factory.py` for the exact env gates:
+  # - AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1 enables observe providers
+  # - AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1 enables apply providers (unless bundle opts into full replacement)
+  runtime_integration_non_mutating:
+    name: Runtime integration (non-mutating)
+    runs-on: ubuntu-latest
+    needs: ci
+    env:
+      AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER: "0"
+      AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Install OPA (runtime policy preflight tests)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/opa \
+            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
+          opa version
+
+      - name: Runtime provider gating tests (non-mutating default)
+        run: |
+          set -euo pipefail
+          uv run pytest \
+            tests/unit/runtime/test_deployment_provider_factory.py \
+            tests/integration/test_compile_runtime_live_mutation_gate.py \
+            tests/unit/test_cli_runtime.py -k "preflight_contract or live_mutation"
+
+  runtime_mutating_opt_in:
+    name: Runtime integration (mutating opt-in)
+    runs-on: ubuntu-latest
+    needs: ci
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.enable_mutating_runtime_jobs == 'true') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'mutating-runtime'))
+    env:
+      AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER: "1"
+      AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra eval-rag
+
+      - name: Install OPA
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/opa \
+            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
+          opa version
+
+      # NOTE: Free-only CI mode: this lane validates runtime gating and integration behavior
+      # on GitHub-hosted runners with local Docker/Compose capabilities, without external
+      # cluster credentials or paid infrastructure.
+      - name: Verify local Docker/Compose capability (free-only runner path)
+        run: |
+          set -euo pipefail
+          docker version
+          docker compose version
+
+      - name: Validate bundled compose manifest
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.autopilot.yml config > /dev/null
+
+      - name: Compose runtime smoke test
+        run: |
+          set -euo pipefail
+          compose_file="deploy/compose/docker-compose.autopilot.yml"
+          docker compose -f "${compose_file}" up -d --build
+          # Keep this intentionally short: verify startup path on the hosted runner.
+          sleep 12
+          docker compose -f "${compose_file}" ps
+          if ! docker compose -f "${compose_file}" ps --services --filter status=running | grep -Fxq "akc-runtime-autopilot"; then
+            docker compose -f "${compose_file}" logs --no-color --tail=200
+            exit 1
+          fi
+
+      - name: Runtime provider gating tests (env gates enabled)
+        run: |
+          set -euo pipefail
+          uv run pytest \
+            tests/unit/runtime/test_deployment_provider_factory.py -k "when_enabled or apply_when_mutating_enabled" \
+            tests/unit/test_cli_runtime.py -k "live_mutation"
+
+      - name: Compose cleanup (always)
+        if: always()
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.autopilot.yml down -v
+
+      - name: Golden compile paths (strict IR and consistency policies)
+        env:
+          AKC_IR_OPERATIONAL_STRUCTURE_POLICY: error
+          AKC_IR_GRAPH_INTEGRITY_POLICY: error
+          AKC_ARTIFACT_CONSISTENCY_POLICY: error
+        run: |
+          set -euo pipefail
+          uv run pytest \
+            tests/integration/test_artifact_pass_order_and_hashes.py \
+            tests/integration/test_compile_runtime_handoff.py::test_compile_emits_runtime_bundle_with_correlated_intent_ref \
+            tests/integration/test_partial_replay_missing_artifacts.py \
+            tests/integration/test_compile_scoped_apply_realization.py \
+            tests/integration/test_compile_runtime_live_mutation_gate.py
 
       - name: Security gate (dependency vulns + SBOM)
         run: |
@@ -97,6 +245,51 @@ jobs:
             --outputs-root ./.tmp/akc-evals \
             --baseline-report-path configs/evals/intent_system_v1_baseline.json \
             --report-out ./.tmp/akc-evals/latest-report.json
+
+      - name: Benchmark evidence gate
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_benchmark_evidence_gate.py \
+            --report-path ./.tmp/akc-evals/latest-report.json \
+            --min-sample-count 1 \
+            --min-compression-factor 1.0 \
+            --min-pass-rate 1.0 \
+            --format json > ./.tmp/akc-evals/benchmark_summary.json
+
+      - name: Retrieval proof gate
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_retrieval_proof_gate.py \
+            --fixtures-path configs/evals/fixtures/retrieval_proof_cases.json \
+            --format json > ./.tmp/akc-evals/retrieval_proof_summary.json
+
+      - name: Ragas offline retrieval metrics (deterministic fixtures, ID-based)
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_ragas_retrieval_metrics.py \
+            --fixtures-path configs/evals/fixtures/retrieval_proof_cases.json \
+            --format json > ./.tmp/akc-evals/ragas_retrieval_metrics.json
+
+      # Provenance: eval artifacts are non-release debug outputs; adopt slsa-github-generator or
+      # sigstore/cosign attest-build-provenance before treating uploads as release artifacts.
+      - name: Upload benchmark evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-evidence
+          path: |
+            ./.tmp/akc-evals/latest-report.json
+            ./.tmp/akc-evals/benchmark_summary.json
+            ./.tmp/akc-evals/retrieval_proof_summary.json
+            ./.tmp/akc-evals/ragas_retrieval_metrics.json
+
+      - name: Reliability SLO gate (staging soak)
+        if: ${{ env.AKC_RELIABILITY_SOAK_OUTPUTS_ROOT != '' }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_reliability_slo_gate.py \
+            --outputs-root "${AKC_RELIABILITY_SOAK_OUTPUTS_ROOT}" \
+            --targets-path configs/slo/reliability_scoreboard_targets.json \
+            --format json
 
   rust:
     name: Rust checks

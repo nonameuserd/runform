@@ -17,9 +17,7 @@ logger = logging.getLogger(__name__)
 BackendMode = Literal["cli", "pyo3"]
 ExecLane = Literal["process", "wasm"]
 
-_TENANT_ID_ALLOWED_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-)
+_TENANT_ID_ALLOWED_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 _WASM_ERROR_PREFIX = "AKC_WASM_ERROR "
 _WASM_ERROR_CODE_BY_EXIT_CODE: dict[int, str] = {
     78: "WASM_UNSUPPORTED_PLATFORM_CAPABILITY",
@@ -118,14 +116,10 @@ def _validate_wasm_fs_policy_contract(cfg: RustExecConfig) -> None:
     if cfg.allowed_write_paths:
         preopens = set(cfg.preopen_dirs)
         if not preopens:
-            raise ValueError(
-                "allowed_write_paths for wasm lane require explicit preopen_dirs mapping"
-            )
+            raise ValueError("allowed_write_paths for wasm lane require explicit preopen_dirs mapping")
         for path in cfg.allowed_write_paths:
             if path not in preopens:
-                raise ValueError(
-                    "allowed_write_paths for wasm lane must be a subset of preopen_dirs"
-                )
+                raise ValueError("allowed_write_paths for wasm lane must be a subset of preopen_dirs")
 
 
 def _normalize_wasm_fs_policy_paths(
@@ -142,22 +136,17 @@ def _normalize_wasm_fs_policy_paths(
             return str(path_obj.resolve(strict=True))
         except FileNotFoundError as exc:
             if strict:
-                raise ValueError(
-                    f"{field_name} entry does not exist for strict wasm normalization: {raw!r}"
-                ) from exc
+                raise ValueError(f"{field_name} entry does not exist for strict wasm normalization: {raw!r}") from exc
             return raw
         except OSError as exc:
             if strict:
                 raise ValueError(
-                    f"{field_name} entry could not be canonicalized for strict wasm "
-                    f"normalization: {raw!r}"
+                    f"{field_name} entry could not be canonicalized for strict wasm normalization: {raw!r}"
                 ) from exc
             return raw
 
     normalized_preopens = tuple(_normalize(p, field_name="preopen_dirs") for p in cfg.preopen_dirs)
-    normalized_writes = tuple(
-        _normalize(p, field_name="allowed_write_paths") for p in cfg.allowed_write_paths
-    )
+    normalized_writes = tuple(_normalize(p, field_name="allowed_write_paths") for p in cfg.allowed_write_paths)
     return normalized_preopens, normalized_writes
 
 
@@ -350,9 +339,7 @@ def _request_from_scope_and_execution(
         "lane": {"type": cfg.lane},
         "capabilities": {"network": bool(cfg.allow_network)},
         "limits": {
-            "wall_time_ms": int(request.timeout_s * 1000.0)
-            if request.timeout_s is not None
-            else None,
+            "wall_time_ms": int(request.timeout_s * 1000.0) if request.timeout_s is not None else None,
             "memory_bytes": cfg.memory_bytes,
             "cpu_fuel": cfg.cpu_fuel,
             "stdout_max_bytes": cfg.stdout_max_bytes,
@@ -426,9 +413,7 @@ def _ingest_request_from_scope(*, scope: TenantRepoScope, request: IngestRequest
     return payload
 
 
-def run_exec_via_cli(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest
-) -> ExecutionResult:
+def run_exec_via_cli(*, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
     """Call the `akc-exec` CLI with a JSON request and map the response into ExecutionResult."""
 
     payload = _request_from_scope_and_execution(cfg=cfg, scope=scope, request=request)
@@ -558,9 +543,7 @@ def run_exec_via_cli(
     )
 
 
-def run_exec_via_pyo3(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest
-) -> ExecutionResult:
+def run_exec_via_pyo3(*, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
     """Call the `akc_rust` PyO3 module with a JSON request and map the response."""
 
     # Build/validate payload before importing the optional PyO3 module so
@@ -632,9 +615,7 @@ def run_exec_via_pyo3(
     )
 
 
-def run_ingest_via_cli(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest
-) -> IngestResult:
+def run_ingest_via_cli(*, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest) -> IngestResult:
     """Call the `akc-ingest` CLI with a JSON request and map the response."""
 
     payload = _ingest_request_from_scope(scope=scope, request=request)
@@ -731,9 +712,7 @@ def run_ingest_via_cli(
     return IngestResult(ok=False, error=error_msg, records=None)
 
 
-def run_ingest_via_pyo3(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest
-) -> IngestResult:
+def run_ingest_via_pyo3(*, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest) -> IngestResult:
     """Call the `akc_rust` PyO3 module ingest entrypoint."""
 
     _ = cfg  # reserved for future configuration options
@@ -788,9 +767,7 @@ def run_ingest_via_pyo3(
     return IngestResult(ok=ok, records=records_list if ok else None)
 
 
-def run_exec_with_rust(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest
-) -> ExecutionResult:
+def run_exec_with_rust(*, cfg: RustExecConfig, scope: TenantRepoScope, request: ExecutionRequest) -> ExecutionResult:
     """Dispatch to either the CLI or PyO3-backed executor."""
 
     if cfg.mode == "cli":
@@ -800,9 +777,7 @@ def run_exec_with_rust(
     raise ValueError(f"Unsupported Rust backend mode: {cfg.mode!r}")
 
 
-def run_ingest_with_rust(
-    *, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest
-) -> IngestResult:
+def run_ingest_with_rust(*, cfg: RustExecConfig, scope: TenantRepoScope, request: IngestRequest) -> IngestResult:
     """Dispatch to either the CLI or PyO3-backed ingest adapter."""
 
     if cfg.mode == "cli":

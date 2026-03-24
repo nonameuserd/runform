@@ -21,13 +21,7 @@ def _is_safe_plain_scalar(s: str) -> bool:
 
 def _yaml_quote(s: str) -> str:
     # Double-quoted scalar with minimal escapes.
-    escaped = (
-        s.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-        .replace("\n", "\\n")
-    )
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\t", "\\t").replace("\n", "\\n")
     return f'"{escaped}"'
 
 

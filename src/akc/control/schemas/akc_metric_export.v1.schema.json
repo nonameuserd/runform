@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:metric_export:v1",
+  "title": "AKC metric export record (single JSON line)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["akc_metric_export_version", "source", "resource", "metric"],
+  "properties": {
+    "akc_metric_export_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "type": "string",
+      "enum": ["runtime.metric_point", "compile.metric_point"]
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["attributes"],
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["service.name", "akc.tenant_id", "akc.repo_id", "akc.run_id"],
+          "properties": {
+            "service.name": { "type": "string", "minLength": 1 },
+            "akc.tenant_id": { "type": "string", "minLength": 1 },
+            "akc.repo_id": { "type": "string", "minLength": 1 },
+            "akc.run_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["sum", "gauge"] },
+        "attributes": { "type": "object", "additionalProperties": { "type": "string" } },
+        "as_double": { "type": "number" },
+        "as_int": { "type": "integer" },
+        "time_unix_nano": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["name", "kind"],
+      "allOf": [
+        {
+          "anyOf": [{ "required": ["as_double"] }, { "required": ["as_int"] }]
+        }
+      ]
+    }
+  }
+}

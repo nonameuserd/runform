@@ -1,0 +1,134 @@
+{
+  "$id": "akc:operational_assurance_result:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "advisory_only": {
+      "type": "boolean"
+    },
+    "attestation_fingerprint_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "checked_at_ms": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "enforcement_mode": {
+      "enum": [
+        "advisory",
+        "blocking"
+      ],
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "message": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "severity"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "provider_results": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "details": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "provider": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "error",
+              "missing"
+            ],
+            "type": "string"
+          },
+          "stub_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "stub_id",
+          "provider",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "repo_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_id": {
+      "default": "akc:operational_assurance_result:v1",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": 1,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "tenant_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "checked_at_ms",
+    "enforcement_mode",
+    "passed",
+    "advisory_only",
+    "findings",
+    "provider_results",
+    "attestation_fingerprint_sha256"
+  ],
+  "title": "AKC operational assurance result",
+  "type": "object"
+}

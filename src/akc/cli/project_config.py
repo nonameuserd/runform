@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class AkcProjectConfig:
+    """Repo-scoped defaults under ``.akc/project.{json,yaml}`` (optional)."""
+
+    developer_role_profile: str | None = None
+    tenant_id: str | None = None
+    repo_id: str | None = None
+    outputs_root: str | None = None
+    opa_policy_path: str | None = None
+    opa_decision_path: str | None = None
+    living_automation_profile: str | None = None
+    ingest_state_path: str | None = None
+    living_unattended_claim: bool | None = None
+
+
+def _coerce_str(data: Mapping[str, Any], key: str) -> str | None:
+    v = data.get(key)
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+
+def _coerce_optional_bool(data: Mapping[str, Any], key: str) -> bool | None:
+    v = data.get(key)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def load_akc_project_config(cwd: Path) -> AkcProjectConfig | None:
+    """Load ``.akc/project.json`` or ``.akc/project.yaml`` when present.
+
+    Precedence between files: ``project.json`` wins if both exist.
+    YAML requires PyYAML (optional dev extra).
+    """
+
+    base = cwd / ".akc"
+    json_path = base / "project.json"
+    yaml_path = base / "project.yaml"
+    data: dict[str, Any] | None = None
+    if json_path.is_file():
+        raw = json_path.read_text(encoding="utf-8")
+        loaded = json.loads(raw)
+        if not isinstance(loaded, dict):
+            raise ValueError(f"{json_path} must contain a JSON object")
+        data = loaded
+    elif yaml_path.is_file():
+        try:
+            import yaml
+        except ImportError as exc:
+            raise RuntimeError(
+                "Found .akc/project.yaml but PyYAML is not installed. "
+                "Use .akc/project.json or install PyYAML (e.g. uv sync --extra dev)."
+            ) from exc
+        raw = yaml_path.read_text(encoding="utf-8")
+        loaded = yaml.safe_load(raw)
+        if loaded is None:
+            data = {}
+        elif not isinstance(loaded, dict):
+            raise ValueError(f"{yaml_path} must contain a YAML mapping at the top level")
+        else:
+            data = loaded
+    if data is None:
+        return None
+    return AkcProjectConfig(
+        developer_role_profile=_coerce_str(data, "developer_role_profile"),
+        tenant_id=_coerce_str(data, "tenant_id"),
+        repo_id=_coerce_str(data, "repo_id"),
+        outputs_root=_coerce_str(data, "outputs_root"),
+        opa_policy_path=_coerce_str(data, "opa_policy_path"),
+        opa_decision_path=_coerce_str(data, "opa_decision_path"),
+        living_automation_profile=_coerce_str(data, "living_automation_profile"),
+        ingest_state_path=_coerce_str(data, "ingest_state_path"),
+        living_unattended_claim=_coerce_optional_bool(data, "living_unattended_claim"),
+    )

@@ -79,6 +79,8 @@ class BaseConnector(Connector):
         md["source"] = source
         md["source_type"] = self.source_type
         md["chunk_index"] = chunk_index
+        if "connector_id" not in md:
+            md["connector_id"] = self.source_type
         try:
             return Document(
                 id=doc_id,

@@ -1,0 +1,161 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "presence",
+    "signals": [
+      {
+        "evidence_type": "terminal_health",
+        "payload_path": "health_status"
+      }
+    ],
+    "expected_evidence_types": ["reconcile_outcome"]
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_outcome",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "operation_type": "apply",
+        "applied": true
+      }
+    },
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true,
+        "health_status": "healthy"
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    }
+  ],
+  "otel_records": [
+    {
+      "akc_trace_export_version": 1,
+      "source": "runtime.trace_span",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "span": {
+        "trace_id": "tr",
+        "span_id": "sp",
+        "parent_span_id": null,
+        "name": "akc.runtime.kernel.dispatch",
+        "kind": "internal",
+        "start_time_unix_nano": 0,
+        "end_time_unix_nano": 1,
+        "attributes": { "akc.tenant_id": "t1" },
+        "status": "ok"
+      }
+    }
+  ],
+  "otel_contract": {
+    "required_span_names": ["akc.runtime.kernel.dispatch"],
+    "required_attributes": { "akc.tenant_id": "t1" }
+  },
+  "runtime_bundle_schema_version": null,
+  "success_criterion_id": "otel1",
+  "expected": {
+    "inputs_sha256": "07e47fe094b1def0be00f6731d0f121a96be9cca475d5593db7b6141c5896d14",
+    "verdict_sha256": "3aed8565ea39be19fd46811dcc45c0d2e998c4baa931d8d6ba108cbfe6cc55b4",
+    "combined_sha256": "efc18ed0076586e74896541109f531fa2757ca328e8cfbb7e2f475fa82d24f37",
+    "step_output": {
+      "passed": true,
+      "failures": [],
+      "evaluated_success_criteria": 6,
+      "checks": [
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": ["failed", "degraded", "unknown", "healthy"]
+          }
+        },
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_outcome_applied",
+          "passed": true,
+          "evidence": {
+            "reconcile_outcome_count": 1,
+            "not_applied_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:reconcile_outcome",
+          "passed": true,
+          "evidence": {
+            "observed_evidence_types": [
+              "reconcile_outcome",
+              "reconcile_resource_status",
+              "terminal_health"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_signal:terminal_health:health_status",
+          "passed": true,
+          "evidence": {
+            "selected_record": {
+              "evidence_type": "terminal_health",
+              "timestamp": 3,
+              "runtime_run_id": "r1",
+              "payload": {
+                "resource_id": "__runtime_aggregate__",
+                "health_status": "healthy",
+                "aggregate": true
+              }
+            }
+          }
+        },
+        {
+          "success_criterion_id": "otel1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "otel_span_contract",
+          "passed": true,
+          "evidence": {
+            "matched_span": "akc.runtime.kernel.dispatch",
+            "required_attributes": { "akc.tenant_id": "t1" }
+          }
+        }
+      ]
+    }
+  }
+}

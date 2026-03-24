@@ -15,9 +15,7 @@ from akc.ingest.exceptions import ConnectorError
 def test_slack_connector_emits_thread_documents(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    def fake_post(
-        *, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0
-    ):
+    def fake_post(*, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0):
         calls.append(method)
         assert token == "xoxb-test"
         if method == "conversations.history":
@@ -96,9 +94,7 @@ def test_slack_connector_rejects_unknown_source_id() -> None:
 def test_slack_connector_paginates_history(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, object | None]] = []
 
-    def fake_post(
-        *, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0
-    ):
+    def fake_post(*, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0):
         assert token == "xoxb-test"
         cursor = payload.get("cursor")
         calls.append((method, cursor))
@@ -154,9 +150,7 @@ def test_slack_client_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> Non
 
     state = {"called": False}
 
-    def fake_post(
-        *, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0
-    ):
+    def fake_post(*, token: str, method: str, payload: Mapping[str, object], timeout_s: float = 30.0):
         calls.append(method)
         if not state["called"]:
             state["called"] = True

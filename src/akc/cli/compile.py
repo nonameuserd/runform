@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 from akc.compile import (
     Budget,
@@ -26,9 +27,63 @@ from akc.compile.executors import (
 )
 from akc.compile.interfaces import Executor, LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
 from akc.compile.rust_bridge import BackendMode, ExecLane, RustExecConfig
+from akc.control.policy_bundle import resolve_governance_profile_for_scope
+from akc.control.policy_denial_explain import compile_extract_policy_denial, print_policy_denial
+from akc.intent import IntentCompilerError
+from akc.memory.models import JSONValue
+from akc.promotion import normalize_promotion_mode, requires_deployable_steps, resolve_default_promotion_mode
 from akc.run.manifest import REPLAYABLE_PASSES, ReplayMode
+from akc.utils.fingerprint import stable_json_fingerprint
 
 from .common import configure_logging
+from .profile_defaults import (
+    resolve_compile_profile_defaults,
+    resolve_developer_role_profile,
+    resolve_optional_project_string,
+)
+from .project_config import load_akc_project_config
+
+IrGraphIntegrityPolicy: TypeAlias = Literal["off", "warn", "error"] | None
+
+
+def resolve_compile_policies(
+    *,
+    cli_ir_operational: str | None,
+    cli_ir_graph: str | None,
+    cli_artifact_consistency: str | None,
+) -> tuple[Literal["off", "warn", "error"], IrGraphIntegrityPolicy, Literal["off", "warn", "error"]]:
+    """Resolve IR and artifact policy levels: CLI wins, then env, then defaults."""
+
+    def _from_env(name: str) -> str | None:
+        raw = os.environ.get(name)
+        if raw is None:
+            return None
+        s = str(raw).strip().lower()
+        if not s:
+            return None
+        if s not in {"off", "warn", "error"}:
+            raise ValueError(f"{name} must be one of: off, warn, error (got {raw!r})")
+        return s
+
+    op = cli_ir_operational if cli_ir_operational is not None else _from_env("AKC_IR_OPERATIONAL_STRUCTURE_POLICY")
+    if op is None:
+        op = "warn"
+
+    graph_raw = cli_ir_graph if cli_ir_graph is not None else _from_env("AKC_IR_GRAPH_INTEGRITY_POLICY")
+    graph: IrGraphIntegrityPolicy = None if graph_raw is None else cast(Literal["off", "warn", "error"], graph_raw)
+
+    ac_raw = (
+        cli_artifact_consistency
+        if cli_artifact_consistency is not None
+        else _from_env("AKC_ARTIFACT_CONSISTENCY_POLICY")
+    )
+    if ac_raw is None:
+        ac: Literal["off", "warn", "error"] = "warn"
+    else:
+        ac = cast(Literal["off", "warn", "error"], ac_raw)
+
+    op_lit = cast(Literal["off", "warn", "error"], op)
+    return op_lit, graph, ac
 
 
 def _rust_exec_available(*, mode: BackendMode, exec_bin: str = "akc-exec") -> bool:
@@ -260,9 +315,7 @@ def _preflight_docker_hardening(
             )
         if strong_lane_preference == "wasm":
             return _emit_docker_preflight_failure(
-                summary=(
-                    "Docker hardening flags are incompatible with `--strong-lane-preference wasm`"
-                ),
+                summary=("Docker hardening flags are incompatible with `--strong-lane-preference wasm`"),
                 details=(
                     "Docker hardening cannot be enforced when the strong lane is locked to WASM",
                     "choose `--strong-lane-preference docker|auto` or remove the Docker flags",
@@ -270,12 +323,9 @@ def _preflight_docker_hardening(
             )
         if strong_lane_preference == "auto" and not docker_available:
             return _emit_docker_preflight_failure(
-                summary=(
-                    "configured Docker hardening would be dropped because Docker is unavailable"
-                ),
+                summary=("configured Docker hardening would be dropped because Docker is unavailable"),
                 details=(
-                    "install Docker or change to `--strong-lane-preference docker` "
-                    "after Docker is available",
+                    "install Docker or change to `--strong-lane-preference docker` after Docker is available",
                     "do not rely on `auto` fallback when Docker-specific hardening is required",
                 ),
             )
@@ -345,20 +395,86 @@ class _OfflineLLM(LLMBackend):
         request: LLMRequest,
     ) -> LLMResponse:
         # The offline backend ignores the incoming request and returns
-        # a deterministic patch that exercises both code and tests.
+        # deterministic stage-specific payloads.
         _ = request
+        if stage == "system_design":
+            return LLMResponse(
+                text=json.dumps(
+                    {
+                        "spec_version": 1,
+                        "tenant_id": scope.tenant_id,
+                        "repo_id": scope.repo_id,
+                        "system_id": "offline-system",
+                        "services": [{"name": "compile-controller", "role": "orchestrator"}],
+                    },
+                    sort_keys=True,
+                ),
+                raw=None,
+                usage=None,
+            )
+        if stage == "orchestration_spec":
+            return LLMResponse(
+                text=json.dumps(
+                    {
+                        "spec_version": 1,
+                        "tenant_id": scope.tenant_id,
+                        "repo_id": scope.repo_id,
+                        "state_machine": {
+                            "initial_state": "start",
+                            "transitions": [
+                                {"from": "start", "event": "compile", "to": "done"},
+                            ],
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                raw=None,
+                usage=None,
+            )
+        if stage == "agent_coordination":
+            return LLMResponse(
+                text=json.dumps(
+                    {
+                        "spec_version": 1,
+                        "tenant_id": scope.tenant_id,
+                        "repo_id": scope.repo_id,
+                        "agent_roles": {"planner": {"tools": ["llm.complete"]}},
+                        "coordination_graph": {"nodes": ["planner"], "edges": []},
+                    },
+                    sort_keys=True,
+                ),
+                raw=None,
+                usage=None,
+            )
+        if stage == "deployment_config":
+            return LLMResponse(
+                text=json.dumps(
+                    {
+                        "docker_compose": {"services": {"app": {"read_only": True}}},
+                        "kubernetes": {"securityContext": {"runAsNonRoot": True}},
+                    },
+                    sort_keys=True,
+                ),
+                raw=None,
+                usage=None,
+            )
+
+        # Default controller stages return a deterministic unified diff that
+        # exercises both code and tests. Hunks must be valid for GNU ``patch(1)``
+        # so opt-in ``scoped_apply`` can apply offline stubs under a scope root.
         text = "\n".join(
             [
-                "--- a/src/akc_compiled.py",
+                "--- /dev/null",
                 "+++ b/src/akc_compiled.py",
-                "@@",
+                "@@ -0,0 +1,1 @@",
                 f"+# compiled stage={stage} tenant={scope.tenant_id} repo={scope.repo_id}",
                 "",
-                "--- a/tests/test_akc_compiled.py",
+                "--- /dev/null",
                 "+++ b/tests/test_akc_compiled.py",
-                "@@",
+                "@@ -0,0 +1,3 @@",
                 "+def test_compiled_smoke():",
                 "+    assert True",
+                "+",
                 "",
             ]
         )
@@ -374,6 +490,8 @@ def _build_compile_config(
     cost_input_per_1k_tokens_usd: float,
     cost_output_per_1k_tokens_usd: float,
     cost_tool_call_usd: float,
+    compile_realization_mode: Literal["artifact_only", "scoped_apply"],
+    apply_scope_root: str | None,
 ) -> ControllerConfig:
     """Construct a ControllerConfig preset for CLI compile.
 
@@ -396,6 +514,11 @@ def _build_compile_config(
         test_mode = "smoke"
         full_every = 2
 
+    base_tool_allow: tuple[str, ...] = ("llm.complete", "executor.run")
+    tool_allowlist: tuple[str, ...] = (
+        base_tool_allow + ("compile.patch.apply",) if compile_realization_mode == "scoped_apply" else base_tool_allow
+    )
+
     return ControllerConfig(
         tiers=tiers,
         stage_tiers={"generate": "small", "repair": "small"},
@@ -403,7 +526,7 @@ def _build_compile_config(
         test_mode=test_mode,
         full_test_every_n_iterations=full_every,
         policy_mode="audit_only" if policy_mode == "audit_only" else "enforce",
-        tool_allowlist=("llm.complete", "executor.run"),
+        tool_allowlist=tool_allowlist,
         cost_rates=CostRates(
             input_per_1k_tokens_usd=float(cost_input_per_1k_tokens_usd),
             output_per_1k_tokens_usd=float(cost_output_per_1k_tokens_usd),
@@ -411,6 +534,8 @@ def _build_compile_config(
         ),
         opa_policy_path=opa_policy_path,
         opa_decision_path=opa_decision_path,
+        compile_realization_mode=compile_realization_mode,
+        apply_scope_root=apply_scope_root,
         metadata={"mode": mode},
     )
 
@@ -420,12 +545,63 @@ def cmd_compile(args: argparse.Namespace) -> int:
 
     configure_logging(verbose=args.verbose)
 
+    cwd = Path.cwd()
+    proj = load_akc_project_config(cwd)
+    tenant_r = resolve_optional_project_string(
+        cli_value=getattr(args, "tenant_id", None),
+        env_key="AKC_TENANT_ID",
+        file_value=proj.tenant_id if proj is not None else None,
+        env=os.environ,
+    )
+    repo_r = resolve_optional_project_string(
+        cli_value=getattr(args, "repo_id", None),
+        env_key="AKC_REPO_ID",
+        file_value=proj.repo_id if proj is not None else None,
+        env=os.environ,
+    )
+    outputs_r = resolve_optional_project_string(
+        cli_value=getattr(args, "outputs_root", None),
+        env_key="AKC_OUTPUTS_ROOT",
+        file_value=proj.outputs_root if proj is not None else None,
+        env=os.environ,
+    )
+    if tenant_r.value is None:
+        raise SystemExit(
+            "Missing tenant id: provide --tenant-id, set AKC_TENANT_ID, or add tenant_id to .akc/project.json"
+        )
+    if repo_r.value is None:
+        raise SystemExit("Missing repo id: provide --repo-id, set AKC_REPO_ID, or add repo_id to .akc/project.json")
+    if outputs_r.value is None:
+        raise SystemExit(
+            "Missing outputs root: provide --outputs-root, set AKC_OUTPUTS_ROOT, "
+            "or add outputs_root to .akc/project.json"
+        )
+    args.tenant_id = tenant_r.value
+    args.repo_id = repo_r.value
+    args.outputs_root = outputs_r.value
+
+    opa_policy_r = resolve_optional_project_string(
+        cli_value=getattr(args, "opa_policy_path", None),
+        env_key="AKC_OPA_POLICY_PATH",
+        file_value=proj.opa_policy_path if proj is not None else None,
+        env=os.environ,
+    )
+    opa_decision_r = resolve_optional_project_string(
+        cli_value=getattr(args, "opa_decision_path", None),
+        env_key="AKC_OPA_DECISION_PATH",
+        file_value=proj.opa_decision_path if proj is not None else None,
+        env=os.environ,
+    )
+    opa_policy_effective: str | None = opa_policy_r.value
+    opa_decision_effective: str = str(opa_decision_r.value or "data.akc.allow").strip() or "data.akc.allow"
+
     scope = TenantRepoScope(tenant_id=args.tenant_id, repo_id=args.repo_id)
     outputs_root = Path(args.outputs_root).expanduser()
     outputs_root.mkdir(parents=True, exist_ok=True)
 
     # Keep memory and artifacts scoped under <outputs_root>/<tenant>/<repo>.
     base = outputs_root / scope.tenant_id / scope.repo_id
+    governance_profile = resolve_governance_profile_for_scope(base)
     memory_db = base / ".akc" / "memory.sqlite"
     memory_db.parent.mkdir(parents=True, exist_ok=True)
 
@@ -449,25 +625,42 @@ def cmd_compile(args: argparse.Namespace) -> int:
     stdout_max_bytes = max(0, stdout_max_kb) * 1024
     stderr_max_bytes = max(0, stderr_max_kb) * 1024
     allow_network = bool(getattr(args, "sandbox_allow_network", False))
-    sandbox_mode = str(getattr(args, "sandbox", "dev"))
-    strong_lane_preference = str(getattr(args, "strong_lane_preference", "docker"))
+    dev_role_resolved = resolve_developer_role_profile(
+        cli_value=getattr(args, "developer_role_profile", None),
+        cwd=cwd,
+        env=os.environ,
+        project=proj,
+    )
+    developer_role_profile = dev_role_resolved.value
+    profile_resolved = resolve_compile_profile_defaults(
+        profile=developer_role_profile,
+        governance_profile=governance_profile,
+        sandbox=str(getattr(args, "sandbox", "dev")),
+        strong_lane_preference=str(getattr(args, "strong_lane_preference", "docker")),
+        policy_mode=str(getattr(args, "policy_mode", "enforce")),
+        replay_mode=str(getattr(args, "replay_mode", "live")),
+        promotion_mode=getattr(args, "promotion_mode", None),
+        stored_assertion_index=str(getattr(args, "stored_assertion_index", "off")),
+    )
+    sandbox_mode = str(profile_resolved["sandbox"].value)
+    strong_lane_preference = str(profile_resolved["strong_lane_preference"].value)
+    policy_mode_effective = str(profile_resolved["policy_mode"].value)
+    replay_mode_effective = str(profile_resolved["replay_mode"].value)
+    promotion_mode_explicit = cast(str | None, profile_resolved["promotion_mode"].value)
+    stored_idx = str(profile_resolved["stored_assertion_index"].value)
     docker_available = _docker_cli_available()
     rust_exec_mode_raw = getattr(args, "rust_exec_mode", "cli")
     rust_exec_mode: BackendMode = "pyo3" if rust_exec_mode_raw == "pyo3" else "cli"
     rust_exec_lane_raw = getattr(args, "rust_exec_lane", "process")
     rust_exec_lane: ExecLane = "wasm" if rust_exec_lane_raw == "wasm" else "process"
-    wasm_fs_normalize_existing_paths = bool(
-        getattr(args, "wasm_fs_normalize_existing_paths", False)
-    )
+    wasm_fs_normalize_existing_paths = bool(getattr(args, "wasm_fs_normalize_existing_paths", False))
     wasm_preopen_dirs = _parse_multi_flag_paths(getattr(args, "wasm_preopen_dir", []))
     wasm_allowed_write_dirs = _parse_multi_flag_paths(getattr(args, "wasm_allow_write_dir", []))
-    wasm_fs_normalization_profile = str(
-        getattr(args, "wasm_fs_normalization_profile", "strict")
-    ).strip()
+    wasm_fs_normalization_profile = str(getattr(args, "wasm_fs_normalization_profile", "strict")).strip()
     wasm_fs_normalization_strict = wasm_fs_normalization_profile != "relaxed"
     rust_available = _rust_exec_available(mode=rust_exec_mode)
     wasm_strict_profile = _strict_wasm_profile(
-        policy_mode=str(args.policy_mode),
+        policy_mode=policy_mode_effective,
         wasm_normalization_strict=wasm_fs_normalization_strict,
     )
     wasm_requested = _requested_wasm_backend(
@@ -480,8 +673,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
         return _emit_wasm_preflight_failure(
             summary="WASM filesystem flags require explicit WASM lane selection",
             details=(
-                "set `--sandbox strong --strong-lane-preference wasm` or "
-                "`--use-rust-exec --rust-exec-lane wasm`",
+                "set `--sandbox strong --strong-lane-preference wasm` or `--use-rust-exec --rust-exec-lane wasm`",
                 "WASM filesystem preopens are not applied to docker/process lanes",
             ),
         )
@@ -493,13 +685,12 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
     if docker_preflight_error is not None:
         return docker_preflight_error
-    opa_policy_path = getattr(args, "opa_policy_path", None)
-    if opa_policy_path is not None and str(opa_policy_path).strip() and not _opa_cli_available():
+    if opa_policy_effective is not None and str(opa_policy_effective).strip() and not _opa_cli_available():
         return _emit_policy_preflight_failure(
             summary="configured OPA policy requires the `opa` CLI, but it is unavailable",
             details=(
-                f"policy path: {opa_policy_path}",
-                "install the `opa` binary on PATH or omit --opa-policy-path",
+                f"policy path: {opa_policy_effective}",
+                "install the `opa` binary on PATH or unset policy path env / project file / --opa-policy-path",
             ),
         )
     docker_config_relevant = _docker_hardening_flags_supplied(args) or (
@@ -529,8 +720,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
 
     if wasm_requested and not rust_available:
         remediation = (
-            "Install the Rust WASM execution surface (`akc-exec` on PATH or `akc_rust` for "
-            "`--rust-exec-mode pyo3`)."
+            "Install the Rust WASM execution surface (`akc-exec` on PATH or `akc_rust` for `--rust-exec-mode pyo3`)."
         )
         if bool(getattr(args, "use_rust_exec", False)):
             remediation += " Or choose `--rust-exec-lane process`."
@@ -628,14 +818,52 @@ def cmd_compile(args: argparse.Namespace) -> int:
                 remediation,
             ),
         )
+    realization_mode = str(getattr(args, "compile_realization_mode", "scoped_apply")).strip()
+    if realization_mode not in ("artifact_only", "scoped_apply"):
+        print("--compile-realization-mode must be artifact_only or scoped_apply")
+        return 2
+    apply_scope_root: str | None = None
+    if realization_mode == "scoped_apply":
+        asr = getattr(args, "apply_scope_root", None)
+        if asr is not None and str(asr).strip():
+            apply_scope_root = str(Path(asr).expanduser().resolve())
+        else:
+            apply_scope_root = str(work_root.expanduser().resolve())
+    compile_rm = cast(Literal["artifact_only", "scoped_apply"], realization_mode)
     config = _build_compile_config(
         mode=str(args.mode),
-        policy_mode=str(args.policy_mode),
-        opa_policy_path=str(args.opa_policy_path) if args.opa_policy_path is not None else None,
-        opa_decision_path=str(args.opa_decision_path),
+        policy_mode=policy_mode_effective,
+        opa_policy_path=opa_policy_effective,
+        opa_decision_path=opa_decision_effective,
         cost_input_per_1k_tokens_usd=float(getattr(args, "cost_input_per_1k_usd", 0.0)),
         cost_output_per_1k_tokens_usd=float(getattr(args, "cost_output_per_1k_usd", 0.0)),
         cost_tool_call_usd=float(getattr(args, "cost_tool_call_usd", 0.0)),
+        compile_realization_mode=compile_rm,
+        apply_scope_root=apply_scope_root,
+    )
+    promotion_mode = resolve_default_promotion_mode(
+        explicit=promotion_mode_explicit,
+        sandbox_mode=sandbox_mode,
+    )
+    _ = normalize_promotion_mode(promotion_mode)
+    require_deployable = requires_deployable_steps(
+        promotion_mode=promotion_mode,
+        explicit=getattr(args, "require_deployable_steps", None),
+    )
+    md = dict(config.metadata or {})
+    md["promotion_mode"] = promotion_mode
+    md["require_deployable_steps"] = bool(require_deployable)
+    config = replace(config, metadata=md)
+    op_pol, graph_pol, ac_pol = resolve_compile_policies(
+        cli_ir_operational=getattr(args, "ir_operational_structure_policy", None),
+        cli_ir_graph=getattr(args, "ir_graph_integrity_policy", None),
+        cli_artifact_consistency=getattr(args, "artifact_consistency_policy", None),
+    )
+    config = replace(
+        config,
+        ir_operational_structure_policy=op_pol,
+        ir_graph_integrity_policy=graph_pol,
+        artifact_consistency_policy=ac_pol,
     )
     if selected_backend == "docker":
         default_test_command: tuple[str, ...] | None = (
@@ -650,21 +878,77 @@ def cmd_compile(args: argparse.Namespace) -> int:
         default_test_command = (sys.executable, "-m", "pytest", "-q")
     if default_test_command is not None:
         config = replace(config, test_command=default_test_command)
+    if stored_idx not in ("off", "merge"):
+        print("--stored-assertion-index must be off or merge")
+        return 2
+    config = replace(
+        config,
+        stored_assertion_index_mode=stored_idx,  # type: ignore[arg-type]
+        stored_assertion_index_max_rows=int(getattr(args, "stored_assertion_index_max_rows", 64)),
+        apply_operator_knowledge_decisions=not bool(getattr(args, "no_operator_knowledge_decisions", False)),
+        runtime_bundle_embed_system_ir=bool(getattr(args, "runtime_bundle_embed_system_ir", False)),
+    )
+    if governance_profile is not None:
+        config = config.with_governance_profile(
+            assurance_mode=governance_profile.assurance_mode,
+            verifier_enforcement=governance_profile.verifier_enforcement,
+            provider_allowlist=governance_profile.provider_allowlist,
+            max_errors_before_block=governance_profile.max_errors_before_block,
+            rollout_stage=governance_profile.rollout_stage,
+        )
+    profile_decisions: dict[str, JSONValue] = {
+        "developer_role_profile": developer_role_profile,
+        "resolved": {
+            "sandbox": {"value": sandbox_mode, "source": profile_resolved["sandbox"].source},
+            "strong_lane_preference": {
+                "value": strong_lane_preference,
+                "source": profile_resolved["strong_lane_preference"].source,
+            },
+            "policy_mode": {"value": policy_mode_effective, "source": profile_resolved["policy_mode"].source},
+            "replay_mode": {"value": replay_mode_effective, "source": profile_resolved["replay_mode"].source},
+            "stored_assertion_index": {
+                "value": stored_idx,
+                "source": profile_resolved["stored_assertion_index"].source,
+            },
+            "promotion_mode_explicit": {
+                "value": promotion_mode_explicit,
+                "source": profile_resolved["promotion_mode"].source,
+            },
+            "intent_bootstrap_from_store": {
+                "value": bool(profile_resolved["intent_bootstrap_from_store"].value),
+                "source": profile_resolved["intent_bootstrap_from_store"].source,
+            },
+            "auto_seed_deployable_step": {
+                "value": bool(profile_resolved["auto_seed_deployable_step"].value),
+                "source": profile_resolved["auto_seed_deployable_step"].source,
+            },
+        },
+        "sandbox_backend": selected_backend,
+        "sandbox_memory_mb": sandbox_memory_mb,
+        "sandbox_allow_network": allow_network,
+        "fingerprint_sha256": "",
+    }
+    profile_decisions["fingerprint_sha256"] = stable_json_fingerprint(
+        {k: v for k, v in profile_decisions.items() if k != "fingerprint_sha256"}
+    )
+    md2 = dict(config.metadata or {})
+    md2["developer_role_profile"] = developer_role_profile
+    md2["developer_profile_auto_seed_step"] = bool(profile_resolved["auto_seed_deployable_step"].value)
+    md2["developer_profile_intent_bootstrap_from_store"] = bool(profile_resolved["intent_bootstrap_from_store"].value)
+    config = replace(config, metadata=md2)
     llm = _OfflineLLM()
 
     goal = args.goal or "Compile repository"
+    intent_file = getattr(args, "intent_file", None)
     partial_replay_passes: tuple[str, ...] | None = None
     raw_partial = getattr(args, "partial_replay_passes", None)
     if raw_partial is not None and str(raw_partial).strip():
         partial_replay_passes = tuple(p.strip() for p in str(raw_partial).split(",") if p.strip())
         invalid = [p for p in partial_replay_passes if p not in REPLAYABLE_PASSES]
         if invalid:
-            print(
-                "Invalid --partial-replay-passes values: "
-                f"{invalid}. Allowed: {','.join(REPLAYABLE_PASSES)}"
-            )
+            print(f"Invalid --partial-replay-passes values: {invalid}. Allowed: {','.join(REPLAYABLE_PASSES)}")
             return 2
-        if str(getattr(args, "replay_mode", "live")) != "partial_replay":
+        if replay_mode_effective != "partial_replay":
             print("--partial-replay-passes requires --replay-mode partial_replay")
             return 2
 
@@ -691,6 +975,11 @@ def cmd_compile(args: argparse.Namespace) -> int:
             f"ulimit_nproc={ulimit_nproc_s}"
         )
     print(f"  sandbox_backend: {selected_backend}")
+    print(f"  compile_realization_mode: {realization_mode}")
+    if apply_scope_root is not None:
+        print(f"  apply_scope_root: {apply_scope_root}")
+    print(f"  developer_role_profile: {developer_role_profile}")
+    print(f"  promotion_mode: {promotion_mode} (require_deployable_steps={bool(require_deployable)})")
     if (
         sandbox_mode == "strong"
         and strong_lane_preference == "wasm"
@@ -699,17 +988,24 @@ def cmd_compile(args: argparse.Namespace) -> int:
     ):
         print("  note: Rust execution surface unavailable for requested wasm strong lane")
 
-    result = session.run(
-        goal=goal,
-        llm=llm,
-        executor=executor,
-        config=config,
-        outputs_root=outputs_root,
-        schema_version=int(getattr(args, "schema_version", 1)),
-        replay_mode=cast(ReplayMode, str(getattr(args, "replay_mode", "live"))),
-        replay_manifest_path=getattr(args, "replay_manifest_path", None),
-        partial_replay_passes=partial_replay_passes,
-    )
+    try:
+        result = session.run(
+            goal=goal,
+            llm=llm,
+            executor=executor,
+            config=config,
+            outputs_root=outputs_root,
+            schema_version=int(getattr(args, "schema_version", 1)),
+            replay_mode=cast(ReplayMode, replay_mode_effective),
+            replay_manifest_path=getattr(args, "replay_manifest_path", None),
+            partial_replay_passes=partial_replay_passes,
+            intent_file=intent_file,
+            developer_role_profile=developer_role_profile,
+            developer_profile_decisions=profile_decisions,
+        )
+    except IntentCompilerError as exc:
+        print(f"Intent compilation failed: {exc}")
+        return 2
 
     manifest_path = base / "manifest.json"
     print(f"  status: {result.status}")
@@ -722,4 +1018,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
 
     print("Compile did not succeed within budget; see emitted artifacts for details.")
     _emit_compile_failure_details(base=base)
+    fmt = str(getattr(args, "format", "text"))
+    denial = compile_extract_policy_denial(
+        result,
+        scope_root=base,
+        tenant_id=str(scope.tenant_id),
+        repo_id=str(scope.repo_id),
+        outputs_root=str(outputs_root.expanduser().resolve()),
+        opa_policy_path=opa_policy_effective,
+        opa_decision_path=opa_decision_effective,
+    )
+    if denial is not None:
+        print_policy_denial(payload=denial, format_mode=fmt)
     return 2

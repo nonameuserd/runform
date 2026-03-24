@@ -8,9 +8,7 @@ from typing import Any, Final
 _SAFE_WS_RE: Final[re.Pattern[str]] = re.compile(r"[ \t]{2,}")
 
 
-def render_endpoint_index(
-    spec: Mapping[str, Any], ops: list[tuple[str, str, Mapping[str, Any]]]
-) -> str:
+def render_endpoint_index(spec: Mapping[str, Any], ops: list[tuple[str, str, Mapping[str, Any]]]) -> str:
     title = None
     info = spec.get("info")
     if isinstance(info, dict):
@@ -118,9 +116,7 @@ def render_servers(servers: list[Any] | None) -> str:
     return "\n".join(out).strip()
 
 
-def render_security(
-    security: list[Any] | None, *, security_schemes: Mapping[str, Any] | None
-) -> str:
+def render_security(security: list[Any] | None, *, security_schemes: Mapping[str, Any] | None) -> str:
     if not isinstance(security, list) or not security:
         return ""
     # Render requirements as a friendly list of scheme names (and types, if known).

@@ -1,0 +1,39 @@
+# Example: one-shot `akc living-recompile` when living or ingest state files change (Phase D external trigger).
+# Copy to `.github/workflows/` and set repository variables / secrets for your scope.
+#
+# This complements `akc runtime autopilot` (poll + lease loop) with event-driven recompile for lower latency.
+# Uses the same safe recompile entrypoint as the CLI: `living_recompile_execute` / `safe_recompile_on_drift`.
+
+name: Living recompile on trigger paths (example)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".akc/living/**"
+      - "**/ingest_state.json"
+  workflow_dispatch: {}
+
+jobs:
+  living-recompile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Living recompile (one-shot)
+        env:
+          AKC_TENANT_ID: ${{ secrets.AKC_TENANT_ID }}
+          AKC_REPO_ID: ${{ secrets.AKC_REPO_ID }}
+          AKC_OUTPUTS_ROOT: ${{ secrets.AKC_OUTPUTS_ROOT }}
+          AKC_INGEST_STATE_PATH: ${{ vars.AKC_INGEST_STATE_PATH }}
+          AKC_LIVING_AUTOMATION_PROFILE: ${{ vars.AKC_LIVING_AUTOMATION_PROFILE }}
+        run: |
+          uv run akc living-recompile \
+            --ingest-state "${AKC_INGEST_STATE_PATH}" \
+            --eval-suite-path configs/evals/intent_system_v1.json

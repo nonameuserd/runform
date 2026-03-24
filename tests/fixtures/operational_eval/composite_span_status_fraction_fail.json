@@ -1,0 +1,179 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "presence",
+    "signals": [],
+    "expected_evidence_types": [
+      "reconcile_outcome"
+    ],
+    "composite_predicates": [
+      {
+        "kind": "span_status_fraction",
+        "status_good_value": "ok",
+        "comparator": "gte",
+        "target": 0.99,
+        "max_spans": 10
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_outcome",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "operation_type": "apply",
+        "applied": true
+      }
+    },
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true,
+        "health_status": "healthy"
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    }
+  ],
+  "otel_records": [
+    {
+      "akc_trace_export_version": 1,
+      "source": "runtime.trace_span",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "span": {
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "span_id": "bbbbbbbbbbbbbbbb",
+        "parent_span_id": null,
+        "name": "op",
+        "kind": "internal",
+        "start_time_unix_nano": 1,
+        "end_time_unix_nano": 2,
+        "status": "ok"
+      }
+    },
+    {
+      "akc_trace_export_version": 1,
+      "source": "runtime.trace_span",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "span": {
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "span_id": "cccccccccccccccc",
+        "parent_span_id": null,
+        "name": "op",
+        "kind": "internal",
+        "start_time_unix_nano": 1,
+        "end_time_unix_nano": 2,
+        "status": "error"
+      }
+    }
+  ],
+  "otel_contract": null,
+  "success_criterion_id": "sc",
+  "expected": {
+    "inputs_sha256": "199505b0b418824fda9471cda31a3856863fba4e8be81be73db63e3b185a963b",
+    "verdict_sha256": "b357446e8f6b2fa8a76e096030f0bf828a56fed74eb6ac508c00b927f047a251",
+    "combined_sha256": "e5affa851533769e5c4eb68e66a149c8ef1b5f6b9c4d44f2caf86ed3b057b55a",
+    "step_output": {
+      "passed": false,
+      "failures": [
+        "sc (composite_span_status_fraction:0): fraction 0.5 does not satisfy gte 0.99"
+      ],
+      "evaluated_success_criteria": 5,
+      "checks": [
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": [
+              "failed",
+              "degraded",
+              "unknown",
+              "healthy"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_outcome_applied",
+          "passed": true,
+          "evidence": {
+            "reconcile_outcome_count": 1,
+            "not_applied_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:reconcile_outcome",
+          "passed": true,
+          "evidence": {
+            "observed_evidence_types": [
+              "reconcile_outcome",
+              "reconcile_resource_status",
+              "terminal_health"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "composite_span_status_fraction:0",
+          "passed": false,
+          "evidence": {
+            "good_spans": 1,
+            "matched_spans": 2,
+            "fraction": 0.5,
+            "target": 0.99,
+            "comparator": "gte",
+            "status_good_value": "ok"
+          },
+          "message": "fraction 0.5 does not satisfy gte 0.99"
+        }
+      ]
+    }
+  },
+  "otel_metric_parse_rejected_reason": null
+}

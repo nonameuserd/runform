@@ -95,11 +95,7 @@ def _slack_api_post_once(
     ok = parsed.get("ok")
     if ok is not True:
         err_msg = parsed.get("error")
-        msg = (
-            f"Slack API error: {err_msg}"
-            if isinstance(err_msg, str) and err_msg
-            else "Slack API error"
-        )
+        msg = f"Slack API error: {err_msg}" if isinstance(err_msg, str) and err_msg else "Slack API error"
         raise MessagingError(msg)
     return parsed
 
@@ -442,6 +438,11 @@ class SlackConnector(BaseConnector):
 
             message_ids = [qa.question.id] + [a.id for a in qa.answers]
             user_ids = [qa.question.user_id] + [a.user_id for a in qa.answers]
+            indexed_at_ms: int
+            try:
+                indexed_at_ms = int(float(qa.question.timestamp) * 1000.0)
+            except Exception:
+                indexed_at_ms = int(time.time() * 1000)
             metadata: dict[str, object] = {
                 "channel": qa.channel_id,
                 "thread_id": qa.thread_id,
@@ -449,6 +450,8 @@ class SlackConnector(BaseConnector):
                 "user": qa.question.user_id or "",
                 "message_ids": [m for m in message_ids if isinstance(m, str)],
                 "user_ids": [u for u in user_ids if isinstance(u, str) and u],
+                "ingest_source_kind": "messaging",
+                "indexed_at_ms": indexed_at_ms,
             }
 
             yield self._make_document(

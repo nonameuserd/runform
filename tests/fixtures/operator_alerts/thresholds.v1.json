@@ -1,0 +1,30 @@
+{
+  "fixture_version": 1,
+  "description": "Reference thresholds for operator alerting on autopilot signals (CI and docs cross-check).",
+  "human_escalation_required": {
+    "fire_when_true": true,
+    "signal_paths": [
+      ".akc/autopilot/state.json#budget_state.human_escalation_required",
+      ".akc/autopilot/decisions/*.decision.json#budget_state.human_escalation_required",
+      ".akc/autopilot/decisions/*.decision.json#decision",
+      "expected_decision_values_for_hold": ["escalation_hold"]
+    ]
+  },
+  "lease_never_acquired": {
+    "min_lease_denied_streak": 5,
+    "signal_paths": [
+      ".akc/autopilot/state.json#lease_denied_streak",
+      ".akc/autopilot/decisions/*.decision.json#lease_denied_streak",
+      ".akc/autopilot/decisions/*.decision.json#decision",
+      "expected_decision_values": ["skip_not_lease_holder"]
+    ]
+  },
+  "consecutive_compile_failures": {
+    "compare": "budget_state.consecutive_failures >= autonomy_budget.max_consecutive_rollout_failures",
+    "signal_paths": [
+      ".akc/autopilot/state.json#budget_state.consecutive_failures",
+      ".akc/autopilot/decisions/*.decision.json#decision",
+      "expected_decision_values": ["compile_failed"]
+    ]
+  }
+}

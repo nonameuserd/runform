@@ -79,9 +79,7 @@ class WorkflowJob:
             raise ValueError("job.steps must be non-empty")
         if self.if_ is not None:
             require_non_empty(self.if_, name="job.if")
-        if self.needs is not None and any(
-            not isinstance(n, str) or n.strip() == "" for n in self.needs
-        ):
+        if self.needs is not None and any(not isinstance(n, str) or n.strip() == "" for n in self.needs):
             raise ValueError("job.needs must be a sequence of non-empty strings")
 
     def to_obj(self) -> dict[str, Any]:

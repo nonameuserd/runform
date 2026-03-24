@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/akc_forensics_bundle.v1.schema.json",
+  "title": "AKC cross-signal forensics bundle (operator “why” spine)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_kind",
+    "version",
+    "tenant_id",
+    "repo_id",
+    "run_id",
+    "scope_root",
+    "outputs_root",
+    "operations_index",
+    "replay",
+    "coordination_audit",
+    "otel",
+    "knowledge_snapshot",
+    "omitted",
+    "redaction_applied",
+    "export_metadata"
+  ],
+  "properties": {
+    "schema_kind": { "type": "string", "const": "akc_forensics_bundle" },
+    "version": { "type": "integer", "const": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "repo_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "scope_root": { "type": "string", "minLength": 1 },
+    "outputs_root": { "type": "string", "minLength": 1 },
+    "manifest_source_path": { "type": "string", "minLength": 1 },
+    "operations_index": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sqlite_path", "row_found"],
+      "properties": {
+        "sqlite_path": { "type": "string", "minLength": 1 },
+        "row_found": { "type": "boolean" },
+        "run": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["included"],
+      "properties": {
+        "included": { "type": "boolean" },
+        "control_plane_ref": { "type": ["object", "null"], "additionalProperties": true },
+        "source_relpath": { "type": ["string", "null"] },
+        "bundle_relpath": { "type": ["string", "null"] },
+        "forensics_summary": { "type": ["object", "null"], "additionalProperties": true },
+        "omitted_reason": { "type": ["string", "null"] }
+      }
+    },
+    "coordination_audit": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["included"],
+      "properties": {
+        "included": { "type": "boolean" },
+        "control_plane_ref": { "type": ["object", "null"], "additionalProperties": true },
+        "source_relpath": { "type": ["string", "null"] },
+        "bundle_relpath": { "type": ["string", "null"] },
+        "tail_line_count": { "type": ["integer", "null"], "minimum": 0 },
+        "tail_stats": { "type": ["object", "null"], "additionalProperties": true },
+        "omitted_reason": { "type": ["string", "null"] }
+      }
+    },
+    "otel": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["exports"],
+      "properties": {
+        "exports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["source_relpath"],
+            "properties": {
+              "source_relpath": { "type": "string", "minLength": 1 },
+              "bundle_relpath": { "type": ["string", "null"] },
+              "bytes_copied": { "type": ["integer", "null"], "minimum": 0 },
+              "sha256_expected": { "type": ["string", "null"] },
+              "omitted_reason": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "knowledge_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["included"],
+      "properties": {
+        "included": { "type": "boolean" },
+        "manifest_ref": { "type": ["object", "null"], "additionalProperties": true },
+        "source_relpath": { "type": ["string", "null"] },
+        "bundle_relpath": { "type": ["string", "null"] },
+        "omitted_reason": { "type": ["string", "null"] }
+      }
+    },
+    "included_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["bundle_relpath"],
+        "properties": {
+          "bundle_relpath": { "type": "string", "minLength": 1 },
+          "source_relpath": { "type": ["string", "null"] },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "omitted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["kind", "reason"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "source_relpath": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "redaction_applied": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["policy_version", "total_redactions", "entries"],
+      "properties": {
+        "policy_version": { "type": "string", "minLength": 1 },
+        "total_redactions": { "type": "integer", "minimum": 0 },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["path", "reason", "rule_id"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 },
+              "rule_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "export_metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_kind", "version", "generated_at_ms", "hash_manifest", "policy_refs"],
+      "properties": {
+        "schema_kind": { "type": "string", "const": "akc_bundle_export_metadata" },
+        "version": { "type": "integer", "const": 1 },
+        "generated_at_ms": { "type": "integer", "minimum": 0 },
+        "deterministic_serialization": { "type": "object", "additionalProperties": true },
+        "hash_manifest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["bundle_relpath", "bytes", "sha256"],
+            "properties": {
+              "bundle_relpath": { "type": "string", "minLength": 1 },
+              "source_relpath": { "type": ["string", "null"] },
+              "bytes": { "type": "integer", "minimum": 0 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
+        "policy_refs": { "type": "object", "additionalProperties": true },
+        "signature": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    }
+  }
+}

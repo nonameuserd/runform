@@ -12,6 +12,9 @@ dist/
 # CI / local scratch (pip-audit export, eval outputs)
 .tmp/
 
+# Node (coordination_sdk.ts typecheck)
+node_modules/
+
 # Tooling and cache
 __pycache__/
 *.pyc

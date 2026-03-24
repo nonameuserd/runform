@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:operational_evidence_window:v1",
+  "title": "AKC operational evidence window (rollup)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:operational_evidence_window:v1"
+    },
+    "window_start_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "window_end_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "runtime_evidence_exports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": ["path", "sha256"]
+      }
+    },
+    "notes": {
+      "type": ["string", "null"]
+    }
+  },
+  "required": ["window_start_ms", "window_end_ms", "runtime_evidence_exports"]
+}

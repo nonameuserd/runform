@@ -1,0 +1,95 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "threshold",
+    "signals": [
+      {
+        "evidence_type": "retry_budget",
+        "payload_path": "retry_count"
+      }
+    ],
+    "expected_evidence_types": [],
+    "threshold": 2.0,
+    "threshold_comparator": "lte"
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    },
+    {
+      "evidence_type": "retry_budget",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "action_id": "a1",
+        "retry_count": 1
+      }
+    }
+  ],
+  "otel_records": null,
+  "otel_contract": null,
+  "runtime_bundle_schema_version": null,
+  "success_criterion_id": "thr1",
+  "expected": {
+    "inputs_sha256": "2e5d80aa9f334dbca7ba0178abb9831ed69b95dcdfd41b6aef0c270e683a00b0",
+    "verdict_sha256": "64f27c590149cba196353085b0d1c1c4dbb11d63b3bfcebf47e32393a78a9bee",
+    "combined_sha256": "51cfb56511809550bfd68731a60a790422909a66a1aed6656d61c8d8019e0585",
+    "step_output": {
+      "passed": true,
+      "failures": [],
+      "evaluated_success_criteria": 3,
+      "checks": [
+        {
+          "success_criterion_id": "thr1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": ["failed", "degraded", "unknown", "healthy"]
+          }
+        },
+        {
+          "success_criterion_id": "thr1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "thr1",
+          "evaluation_mode": "operational_spec",
+          "check_name": "threshold_signal:retry_budget:retry_count",
+          "passed": true,
+          "evidence": {
+            "observed": 1,
+            "numeric_value": 1.0,
+            "threshold": 2.0,
+            "comparator": "lte"
+          }
+        }
+      ]
+    }
+  }
+}

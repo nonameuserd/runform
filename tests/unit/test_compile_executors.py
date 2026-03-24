@@ -79,9 +79,7 @@ def test_subprocess_executor_does_not_create_cwd_outside_root(tmp_path: Path) ->
     assert not outside_target.exists()
 
 
-def test_docker_executor_builds_expected_docker_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_docker_executor_builds_expected_docker_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: dict[str, Any] = {}
 
     def _fake_helper(
@@ -269,9 +267,7 @@ def test_docker_executor_run_dir_is_bind_mounted_writable_for_non_root_user(
     assert (run_dir, 0o777) in chmod_calls
 
 
-def test_docker_executor_omits_default_security_profile_flags(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_docker_executor_omits_default_security_profile_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: dict[str, Any] = {}
 
     def _fake_helper(

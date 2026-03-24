@@ -101,6 +101,35 @@ class Verifier(Protocol):
         """Return a structured verification result for gating promotion."""
 
 
+def operational_attestation_findings_from_accounting(accounting: Mapping[str, Any]) -> tuple[VerifierFinding, ...]:
+    """Load optional precomputed findings injected under tenant-scoped accounting (tests, runtime bridge).
+
+    Callers must only attach paths or payloads already resolved under :class:`~akc.compile.interfaces.TenantRepoScope`.
+    This verifier consumes **inline** ``operational_verifier_findings`` only (no filesystem reads).
+    """
+
+    raw = accounting.get("operational_verifier_findings")
+    if not isinstance(raw, list):
+        return ()
+    out: list[VerifierFinding] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        code = str(item.get("code", "")).strip()
+        msg = str(item.get("message", "")).strip()
+        if not code or not msg:
+            continue
+        sev_raw = item.get("severity", "error")
+        sev: VerifierSeverity = "error" if str(sev_raw).strip() != "warning" else "warning"
+        ev_raw = item.get("evidence")
+        evidence: Mapping[str, JSONValue] | None = dict(ev_raw) if isinstance(ev_raw, Mapping) else None
+        try:
+            out.append(VerifierFinding(code=code, message=msg, severity=sev, evidence=evidence))
+        except ValueError:
+            continue
+    return tuple(out)
+
+
 def _extract_patch_paths(patch_text: str) -> list[str]:
     paths: set[str] = set()
     for raw in (patch_text or "").splitlines():
@@ -118,6 +147,15 @@ def _extract_patch_paths(patch_text: str) -> list[str]:
             if p and p != "/dev/null":
                 paths.add(p)
     return sorted(paths)
+
+
+def patch_path_suspicious(p: str) -> tuple[bool, str]:
+    """Return (True, reason) when a unified-diff path must not be applied or verified.
+
+    Exposed for compile-time scoped apply and the deterministic verifier gate.
+    """
+
+    return _is_path_suspicious(p)
 
 
 def _is_path_suspicious(p: str) -> tuple[bool, str]:
@@ -201,7 +239,7 @@ class DeterministicVerifier(Verifier):
                     )
                 )
             for p in touched:
-                suspicious, reason = _is_path_suspicious(p)
+                suspicious, reason = patch_path_suspicious(p)
                 if suspicious:
                     findings.append(
                         VerifierFinding(
@@ -245,10 +283,7 @@ class DeterministicVerifier(Verifier):
                 )
 
         # If strict: any finding vetoes. If relaxed: only errors veto.
-        if policy.strict:
-            passed = len(findings) == 0
-        else:
-            passed = all(f.severity != "error" for f in findings)
+        passed = len(findings) == 0 if policy.strict else all(f.severity != "error" for f in findings)
 
         # Keep a minimal execution sanity check signal.
         if execution is None:
@@ -262,6 +297,11 @@ class DeterministicVerifier(Verifier):
             )
             if policy.strict:
                 passed = False
+
+        op_extra = operational_attestation_findings_from_accounting(accounting)
+        if op_extra:
+            findings.extend(op_extra)
+            passed = len(findings) == 0 if policy.strict else all(f.severity != "error" for f in findings)
 
         return VerifierResult(
             scope=scope,

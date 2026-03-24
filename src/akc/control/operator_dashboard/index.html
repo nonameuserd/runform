@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AKC fleet — operator dashboard (read-only)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f1419;
+        --fg: #e7ecf3;
+        --muted: #8b98a5;
+        --accent: #1d9bf0;
+        --border: #38444d;
+        --ok: #00ba7c;
+        --warn: #f7931a;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f7f9fa;
+          --fg: #0f1419;
+          --muted: #536471;
+          --border: #cfd9de;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        margin: 0;
+        line-height: 1.5;
+      }
+      header {
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 0 0 0.35rem;
+      }
+      header p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        max-width: 52rem;
+      }
+      main {
+        padding: 1rem 1.5rem 2rem;
+        display: grid;
+        gap: 1.25rem;
+        max-width: 1200px;
+      }
+      fieldset {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem 1rem 1rem;
+        margin: 0;
+      }
+      legend {
+        padding: 0 0.35rem;
+        font-weight: 600;
+        font-size: 0.85rem;
+      }
+      label {
+        display: grid;
+        gap: 0.25rem;
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-bottom: 0.65rem;
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="url"] {
+        width: 100%;
+        max-width: 36rem;
+        padding: 0.45rem 0.6rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: inherit;
+        font-size: 0.95rem;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        margin-top: 0.5rem;
+      }
+      button {
+        cursor: pointer;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+        padding: 0.45rem 0.9rem;
+        font-size: 0.9rem;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--fg);
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      #status {
+        font-size: 0.85rem;
+        color: var(--muted);
+        min-height: 1.25rem;
+      }
+      #status.err {
+        color: #f4212e;
+      }
+      #status.ok {
+        color: var(--ok);
+      }
+      .grid-two {
+        display: grid;
+        gap: 1rem;
+      }
+      @media (min-width: 900px) {
+        .grid-two {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.4rem 0.5rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      tr[data-selectable]:hover {
+        background: rgba(29, 155, 240, 0.12);
+        cursor: pointer;
+      }
+      tr.selected {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      pre {
+        margin: 0;
+        padding: 0.75rem;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        overflow: auto;
+        font-size: 0.75rem;
+        max-height: 22rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .hint {
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-top: 0.5rem;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>AKC fleet operator dashboard</h1>
+      <p>
+        Read-only view of merged runs from the fleet HTTP API. No compile, runtime, or artifact download. Use a
+        <code>runs:read</code> token. Token is kept in <code>sessionStorage</code> for this tab only.
+      </p>
+    </header>
+    <main>
+      <fieldset>
+        <legend>Connection</legend>
+        <label>
+          Fleet API base URL
+          <input type="url" id="fleetBase" placeholder="http://127.0.0.1:8765" autocomplete="off" />
+        </label>
+        <label>
+          Bearer token (optional if fleet allows anonymous read)
+          <input type="password" id="token" placeholder="Bearer token" autocomplete="off" />
+        </label>
+        <label>
+          Tenant id
+          <input type="text" id="tenantId" placeholder="e.g. acme" autocomplete="off" />
+        </label>
+        <label>
+          Repo filter (optional)
+          <input type="text" id="repoId" placeholder="leave empty for all repos" autocomplete="off" />
+        </label>
+        <label>
+          Limit
+          <input type="text" id="limit" value="50" style="max-width: 6rem" autocomplete="off" />
+        </label>
+        <div class="row">
+          <button type="button" id="btnHealth" class="secondary">GET /health</button>
+          <button type="button" id="btnRuns">Load merged runs</button>
+          <button type="button" id="btnSave" class="secondary">Save settings</button>
+        </div>
+        <p id="status" role="status"></p>
+        <p class="hint">
+          Cross-origin? Set <code>AKC_FLEET_CORS_ALLOW_ORIGIN</code> on the fleet server to this page’s origin and
+          restart <code>akc fleet serve</code>.
+        </p>
+      </fieldset>
+      <div class="grid-two">
+        <fieldset>
+          <legend>Merged runs</legend>
+          <div style="overflow-x: auto">
+            <table aria-label="Runs">
+              <thead>
+                <tr>
+                  <th>Shard</th>
+                  <th>Repo</th>
+                  <th>Run</th>
+                  <th>Updated (ms)</th>
+                  <th>Health</th>
+                </tr>
+              </thead>
+              <tbody id="runsBody">
+                <tr>
+                  <td colspan="5" style="color: var(--muted)">Load runs to populate.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Run detail &amp; local paths</legend>
+          <p class="hint" id="detailHint">Select a run row for <code>GET /v1/runs/…</code> and path hints.</p>
+          <pre id="detailJson" hidden>{}</pre>
+        </fieldset>
+      </div>
+    </main>
+    <script src="app.js" defer></script>
+  </body>
+</html>

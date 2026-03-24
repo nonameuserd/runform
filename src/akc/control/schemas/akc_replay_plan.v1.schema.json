@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/akc_replay_plan.v1.schema.json",
+  "title": "AKC replay plan (operator-guided partial replay)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_kind",
+    "version",
+    "generated_at_ms",
+    "documentation",
+    "manifest",
+    "intent_replay_context",
+    "suggested_compile",
+    "warnings"
+  ],
+  "properties": {
+    "schema_kind": { "type": "string", "const": "akc_replay_plan" },
+    "version": { "type": "integer", "const": 1 },
+    "generated_at_ms": { "type": "integer", "minimum": 0 },
+    "documentation": { "type": "string", "minLength": 1 },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "run_id", "tenant_id", "repo_id", "replay_mode"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "repo_id": { "type": "string", "minLength": 1 },
+        "replay_mode": { "type": "string", "minLength": 1 },
+        "developer_role_profile": {
+          "description": "Effective developer-role profile for suggested compile argv (CLI overrides manifest when set).",
+          "type": "string",
+          "enum": ["classic", "emerging"]
+        },
+        "developer_role_profile_resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["effective", "source"],
+          "properties": {
+            "manifest": { "type": ["string", "null"] },
+            "cli": { "type": ["string", "null"] },
+            "effective": { "type": "string", "enum": ["classic", "emerging"] },
+            "source": { "type": "string", "enum": ["cli", "manifest", "default"] }
+          }
+        }
+      }
+    },
+    "intent_replay_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partial_replay_passes_declared",
+        "mandatory_partial_replay_passes",
+        "effective_partial_replay_passes",
+        "evaluation_modes_source"
+      ],
+      "properties": {
+        "partial_replay_passes_declared": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "mandatory_partial_replay_passes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "effective_partial_replay_passes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evaluation_modes_source": { "type": "string", "enum": ["cli", "manifest"] },
+        "cli_evaluation_modes": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "manifest_success_criteria_evaluation_modes": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "manifest_success_criteria_evaluation_modes_schema_version": {
+          "type": ["integer", "null"]
+        },
+        "intent_acceptance_fingerprint": { "type": ["string", "null"] }
+      }
+    },
+    "suggested_compile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replay_mode", "partial_replay_passes", "argv_template"],
+      "properties": {
+        "replay_mode": { "type": "string", "const": "partial_replay" },
+        "partial_replay_passes": { "type": "string" },
+        "argv_template": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

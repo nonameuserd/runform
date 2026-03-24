@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "description": "Chunk list aligned with tests/integration/test_ingest_assertion_index_breadth.py shape: doc_id, title, content from path, metadata (ingest_source_kind, optional timestamps). Load in tests via Path.read_text on path relative to this directory.",
+  "chunks": [
+    {
+      "doc_id": "kd-sec-net-docs-firewall",
+      "title": "Firewall and egress policy",
+      "path": "01_security_network/docs/firewall_policy.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000000000,
+        "doc_version": 1
+      }
+    },
+    {
+      "doc_id": "kd-sec-net-docs-destructive",
+      "title": "Destructive operations policy",
+      "path": "01_security_network/docs/destructive_ops.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000600000,
+        "doc_version": 1
+      }
+    },
+    {
+      "doc_id": "kd-sec-net-openapi-callbacks",
+      "title": "External API fragment",
+      "path": "01_security_network/openapi/external_api_fragment.yaml",
+      "metadata": {
+        "ingest_source_kind": "openapi",
+        "indexed_at_ms": 1700000300000,
+        "openapi_version": "3.0.3"
+      }
+    },
+    {
+      "doc_id": "kd-sec-net-msg-incident",
+      "title": "Slack-style incident thread",
+      "path": "01_security_network/messaging/incident_thread.txt",
+      "metadata": {
+        "ingest_source_kind": "messaging",
+        "indexed_at_ms": 1700000100000,
+        "channel": "#security-incidents"
+      }
+    },
+    {
+      "doc_id": "kd-conflict-retention-v1",
+      "title": "Retention policy v1",
+      "path": "02_conflicting_norms/docs/retention_policy_v1.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000000000,
+        "doc_version": 1
+      }
+    },
+    {
+      "doc_id": "kd-conflict-retention-v2",
+      "title": "Retention policy v2",
+      "path": "02_conflicting_norms/docs/retention_policy_v2.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1800000000000,
+        "doc_version": 2
+      }
+    },
+    {
+      "doc_id": "kd-doc-derived-controls",
+      "title": "Controls catalog (tables + numbered reqs)",
+      "path": "03_doc_derived_surface/docs/controls_catalog.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000000000
+      }
+    }
+    ,
+    {
+      "doc_id": "kd-payments-pci-docs-handling",
+      "title": "PCI data handling policy",
+      "path": "04_payments_pci/docs/pci_data_handling.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000000000,
+        "doc_version": 1
+      }
+    },
+    {
+      "doc_id": "kd-payments-pci-openapi-callbacks",
+      "title": "Payments callback API fragment",
+      "path": "04_payments_pci/openapi/payments_callbacks_fragment.yaml",
+      "metadata": {
+        "ingest_source_kind": "openapi",
+        "indexed_at_ms": 1700000300000,
+        "openapi_version": "3.0.3"
+      }
+    },
+    {
+      "doc_id": "kd-payments-pci-msg-incident",
+      "title": "PCI incident thread",
+      "path": "04_payments_pci/messaging/pci_incident_thread.txt",
+      "metadata": {
+        "ingest_source_kind": "messaging",
+        "indexed_at_ms": 1700000100000,
+        "channel": "#payments-incidents"
+      }
+    },
+    {
+      "doc_id": "kd-platform-migrations-docs-destructive",
+      "title": "Migrations and destructive deletes",
+      "path": "05_platform_migrations/docs/migrations_and_deletes.md",
+      "metadata": {
+        "ingest_source_kind": "docs",
+        "indexed_at_ms": 1700000000000,
+        "doc_version": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "presence",
+    "signals": [],
+    "expected_evidence_types": [
+      "akc_otel_metrics_export",
+      "reconcile_outcome"
+    ],
+    "otel_metric_signals": [
+      {
+        "metric_name": "requests_total",
+        "attributes": {
+          "handler": "ping"
+        }
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_outcome",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "operation_type": "apply",
+        "applied": true
+      }
+    },
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true,
+        "health_status": "healthy"
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    }
+  ],
+  "otel_records": null,
+  "otel_contract": null,
+  "otel_metric_records": [
+    {
+      "akc_metric_export_version": 1,
+      "source": "runtime.metric_point",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "metric": {
+        "name": "requests_total",
+        "kind": "sum",
+        "as_int": 3,
+        "attributes": {
+          "handler": "ping"
+        }
+      }
+    }
+  ],
+  "success_criterion_id": "sc",
+  "expected": {
+    "inputs_sha256": "856ef2a9d93ee5d3dc2d6bb8e740f5ff6470aea61cb997c5a75f3bd7f1108750",
+    "verdict_sha256": "3a570531fb9e587767c5fc5fd561a2bec4c348eca924f858377c547d4abd8d99",
+    "combined_sha256": "982feeaffe464f2b8010db30ae3b7dc2eef0ac023bdf5cdfce929a6d980e75c4",
+    "step_output": {
+      "passed": true,
+      "failures": [],
+      "evaluated_success_criteria": 6,
+      "checks": [
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": [
+              "failed",
+              "degraded",
+              "unknown",
+              "healthy"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_outcome_applied",
+          "passed": true,
+          "evidence": {
+            "reconcile_outcome_count": 1,
+            "not_applied_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:akc_otel_metrics_export",
+          "passed": true,
+          "evidence": {
+            "metric_point_count": 1
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:reconcile_outcome",
+          "passed": true,
+          "evidence": {
+            "observed_evidence_types": [
+              "reconcile_outcome",
+              "reconcile_resource_status",
+              "terminal_health"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "otel_metric_signal:0:requests_total",
+          "passed": true,
+          "evidence": {
+            "metric_name": "requests_total",
+            "matched_points": 1,
+            "selector_attributes": {
+              "handler": "ping"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "otel_metric_parse_rejected_reason": null
+}

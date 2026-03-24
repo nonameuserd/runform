@@ -7,6 +7,7 @@ confirms compile terminates successfully, manifest is emitted, and
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def _seed_plan_with_one_step(
 
 
 def test_cli_compile_integration_manifest_and_artifacts(tmp_path: Path) -> None:
-    """Run akc compile in a temp dir; confirm success, manifest, and .akc/tests."""
+    """Run akc compile in a temp dir; confirm scoped artifacts and manifest linkage."""
     tenant_id = "int-tenant"
     repo_id = "int-repo"
     outputs_root = tmp_path
@@ -85,10 +86,27 @@ def test_cli_compile_integration_manifest_and_artifacts(tmp_path: Path) -> None:
 
     manifest = base / "manifest.json"
     assert manifest.exists(), "manifest.json should be emitted"
+    manifest_obj = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_artifact_paths = {str(item.get("path")) for item in manifest_obj.get("artifacts", [])}
 
     tests_dir = base / ".akc" / "tests"
     assert tests_dir.is_dir(), ".akc/tests should exist"
     assert any(tests_dir.rglob("*.json")), "structured test artifacts under .akc/tests"
+
+    run_dir = base / ".akc" / "run"
+    expected_sidecars = {
+        ".spans.json",
+        ".otel.jsonl",
+        ".costs.json",
+        ".replay_decisions.json",
+        ".recompile_triggers.json",
+    }
+    for suffix in expected_sidecars:
+        matched = sorted(run_dir.glob(f"*{suffix}"))
+        assert matched, f"expected at least one {suffix} under the tenant-scoped run dir"
+        for path in matched:
+            relpath = path.relative_to(base).as_posix()
+            assert relpath in manifest_artifact_paths
 
     # Patches are emitted under .akc/patches when a candidate is accepted.
     assert (base / ".akc").is_dir(), ".akc directory should exist"

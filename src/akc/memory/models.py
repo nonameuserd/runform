@@ -19,6 +19,11 @@ from akc.artifacts.contracts import apply_schema_envelope
 
 JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
+# Provenance pointers are produced by the compiler provenance mapper and then
+# persisted in why-graph constraint payloads. This alias keeps the memory layer
+# decoupled from compile-time imports while still type-documenting intent.
+ProvenancePointerJson: TypeAlias = dict[str, Any]
+
 CodeMemoryKind = Literal[
     "snippet",
     "file_snapshot",
@@ -54,6 +59,74 @@ class MemoryModelError(Exception):
 def require_non_empty(value: str, *, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
+
+
+def json_value_as_int(value: JSONValue | None, *, default: int) -> int:
+    """Best-effort int coercion for numeric fields stored as JSON."""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            s = value.strip()
+            return int(s) if s else default
+        except ValueError:
+            return default
+    return default
+
+
+def json_value_as_float(value: JSONValue | None, *, default: float) -> float:
+    """Best-effort float coercion for numeric fields stored as JSON."""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            s = value.strip()
+            return float(s) if s else default
+        except ValueError:
+            return default
+    return default
+
+
+def json_value_as_optional_int(value: JSONValue | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            s = value.strip()
+            return int(s) if s else None
+        except ValueError:
+            return None
+    return None
+
+
+def json_value_as_optional_float(value: JSONValue | None) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            s = value.strip()
+            return float(s) if s else None
+        except ValueError:
+            return None
+    return None
 
 
 def now_ms() -> int:
@@ -376,12 +449,28 @@ class ConflictReport:
     entities: tuple[str, ...]
     summary: str
     suggested_actions: tuple[str, ...]
+    # Best-effort evidence enrichment. Populated when the underlying why-graph
+    # constraint nodes include provenance/evidence pointers.
+    conflicting_provenance: dict[str, list[ProvenancePointerJson]] | None = None
+    evidence_doc_ids: tuple[str, ...] | None = None
+    # Phase 2: align with knowledge-layer mediation (assertion node ids / rules).
+    participant_assertion_ids: tuple[str, ...] | None = None
+    mediation_rule: str | None = None
+    intent_constraint_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         require_non_empty(self.conflict_id, name="conflict_id")
         require_non_empty(self.repo_id, name="repo_id")
         require_non_empty(self.conflict_type, name="conflict_type")
         require_non_empty(self.summary, name="summary")
+        if self.conflicting_provenance is not None:
+            json_dumps(_as_json_object(self.conflicting_provenance))
+        if self.evidence_doc_ids is not None:
+            json_dumps(list(self.evidence_doc_ids))
+        if self.participant_assertion_ids is not None:
+            json_dumps(list(self.participant_assertion_ids))
+        if self.intent_constraint_ids is not None:
+            json_dumps(list(self.intent_constraint_ids))
 
     def to_json_obj(self) -> dict[str, JSONValue]:
         obj: dict[str, JSONValue] = {
@@ -395,5 +484,15 @@ class ConflictReport:
             "summary": self.summary,
             "suggested_actions": list(self.suggested_actions),
         }
+        if self.conflicting_provenance is not None:
+            obj["conflicting_provenance"] = _as_json_object(self.conflicting_provenance)
+        if self.evidence_doc_ids is not None:
+            obj["evidence_doc_ids"] = list(self.evidence_doc_ids)
+        if self.participant_assertion_ids is not None:
+            obj["participant_assertion_ids"] = list(self.participant_assertion_ids)
+        if self.mediation_rule is not None and str(self.mediation_rule).strip():
+            obj["mediation_rule"] = str(self.mediation_rule).strip()
+        if self.intent_constraint_ids is not None:
+            obj["intent_constraint_ids"] = list(self.intent_constraint_ids)
         json_dumps(obj)
         return obj

@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from akc.knowledge.observability import build_knowledge_observation_payload
+
 from .export import _safe_copy
 from .models import ViewerSnapshot
 from .snapshot import ViewerError
@@ -56,6 +58,7 @@ _INDEX_HTML = """<!doctype html>
       .title { font-size: 13px; }
       .detail { padding: 14px; }
       .detail pre { background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 10px; padding: 10px; overflow: auto; font-family: var(--mono); font-size: 12px; }
+      .detail pre.compact { max-height: 200px; }
       .actions a { display: inline-block; margin-right: 10px; margin-top: 8px; color: var(--text); text-decoration: none; border: 1px solid var(--line); padding: 8px 10px; border-radius: 10px; font-size: 12px; }
       .actions a:hover { background: rgba(255,255,255,.04); }
       .muted { color: var(--muted); font-size: 12px; }
@@ -76,6 +79,24 @@ _INDEX_HTML = """<!doctype html>
         <div class="detail">
           <div class="actions" id="downloads"></div>
           <div class="muted" id="hint"></div>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Knowledge (compile/runtime debug)</h3>
+          <pre class="compact" id="knowledge_block">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Mediation events</h3>
+          <pre class="compact" id="mediation_block">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Conflict groups</h3>
+          <pre class="compact" id="groups_block">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Supersession hints</h3>
+          <pre class="compact" id="supersession_block">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Conflict reports</h3>
+          <pre class="compact" id="conflict_block">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Control plane — forensics summary (read-only)</h3>
+          <pre class="compact" id="forensics_panel">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Control plane — playbook report (read-only)</h3>
+          <pre class="compact" id="playbook_panel">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Autopilot scope (read-only)</h3>
+          <pre class="compact" id="autopilot_panel">(loading…)</pre>
+          <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Profile / developer decisions (read-only)</h3>
+          <pre class="compact" id="profile_panel">(loading…)</pre>
           <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Evidence files</h3>
           <div class="list" id="evidence"></div>
           <h3 style="margin: 14px 0 8px; font-size: 13px; color: var(--muted);">Step notes</h3>
@@ -101,6 +122,76 @@ _INDEX_HTML = """<!doctype html>
         const notesEl = document.getElementById("notes");
         const downloadsEl = document.getElementById("downloads");
         const hintEl = document.getElementById("hint");
+        const knowEl = document.getElementById("knowledge_block");
+        const medEl = document.getElementById("mediation_block");
+        const grpEl = document.getElementById("groups_block");
+        const supEl = document.getElementById("supersession_block");
+        const confEl = document.getElementById("conflict_block");
+        const forensicsEl = document.getElementById("forensics_panel");
+        const playbookEl = document.getElementById("playbook_panel");
+        const profileEl = document.getElementById("profile_panel");
+        const autopilotEl = document.getElementById("autopilot_panel");
+
+        let kobs = null;
+        try { kobs = await loadJson("./data/knowledge_obs.json"); } catch (e) {}
+        if (kobs && kobs.knowledge_envelope) {
+          knowEl.textContent = JSON.stringify(kobs.knowledge_envelope, null, 2);
+        } else {
+          knowEl.textContent = "(no persisted knowledge snapshot in this export)";
+        }
+        if (kobs && Array.isArray(kobs.mediation_events) && kobs.mediation_events.length) {
+          medEl.textContent = JSON.stringify(kobs.mediation_events, null, 2);
+        } else {
+          medEl.textContent = "(no mediation events — missing or empty .akc/knowledge/mediation.json)";
+        }
+        if (kobs && kobs.conflict_groups && Object.keys(kobs.conflict_groups).length) {
+          grpEl.textContent = JSON.stringify(kobs.conflict_groups, null, 2);
+        } else {
+          grpEl.textContent = "(no grouped mediation events)";
+        }
+        if (kobs && Array.isArray(kobs.supersession_hints) && kobs.supersession_hints.length) {
+          supEl.textContent = JSON.stringify(kobs.supersession_hints, null, 2);
+        } else {
+          supEl.textContent = "(no supersession hints in mediation events)";
+        }
+        let hintBase = "Evidence items open a local copied file (no execution).";
+        if (kobs && typeof kobs.unresolved_knowledge_conflicts_count === "number") {
+          hintBase = `Unresolved knowledge conflicts (distinct groups): ${kobs.unresolved_knowledge_conflicts_count} — ${hintBase}`;
+        }
+        if (kobs && Array.isArray(kobs.conflict_reports) && kobs.conflict_reports.length) {
+          confEl.textContent = JSON.stringify(kobs.conflict_reports, null, 2);
+        } else {
+          confEl.textContent = "(no conflict_report items in scoped code memory)";
+        }
+
+        let panels = null;
+        try { panels = await loadJson("./data/operator_panels.json"); } catch (e) {}
+        if (panels && panels.forensics && panels.forensics.summary) {
+          forensicsEl.textContent = JSON.stringify(panels.forensics, null, 2);
+        } else {
+          forensicsEl.textContent = "(no forensics bundle under .akc/viewer/forensics for this tenant/repo)";
+        }
+        if (panels && panels.playbook && panels.playbook.summary) {
+          playbookEl.textContent = JSON.stringify(panels.playbook, null, 2);
+        } else {
+          playbookEl.textContent = "(no playbook report under .akc/control/playbooks for this tenant/repo)";
+        }
+        if (panels && panels.autopilot && (panels.autopilot.available || panels.autopilot.scope_state)) {
+          autopilotEl.textContent = JSON.stringify(panels.autopilot, null, 2);
+        } else {
+          autopilotEl.textContent = "(no .akc/autopilot state in this export)";
+        }
+        if (
+          panels &&
+          panels.profile_panel &&
+          (panels.profile_panel.available ||
+            (panels.profile_panel.scope_context &&
+              (panels.profile_panel.scope_context.run_id || panels.profile_panel.scope_context.control_followup_cli)))
+        ) {
+          profileEl.textContent = JSON.stringify(panels.profile_panel, null, 2);
+        } else {
+          profileEl.textContent = "(no profile / scope context in this export)";
+        }
 
         const byStep = new Map();
         if (manifest && Array.isArray(manifest.artifacts)) {
@@ -143,7 +234,7 @@ _INDEX_HTML = """<!doctype html>
             a2.setAttribute("download", "manifest.json");
             downloadsEl.appendChild(a2);
           }
-          hintEl.textContent = "Evidence items open a local copied file (no execution).";
+          hintEl.textContent = hintBase;
         };
 
         const steps = Array.isArray(plan.steps) ? plan.steps.slice().sort((a,b)=> (a.order_idx||0)-(b.order_idx||0)) : [];
@@ -185,20 +276,36 @@ def build_static_viewer(*, snapshot: ViewerSnapshot, out_dir: Path) -> WebBuildR
     files_dir.mkdir(parents=True, exist_ok=True)
 
     (data_dir / "plan.json").write_text(
-        json.dumps(snapshot.plan.to_json_obj(), indent=2, sort_keys=True, ensure_ascii=False)
-        + "\n",
+        json.dumps(snapshot.plan.to_json_obj(), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     if snapshot.manifest is not None:
         (data_dir / "manifest.json").write_text(
-            json.dumps(dict(snapshot.manifest), indent=2, sort_keys=True, ensure_ascii=False)
-            + "\n",
+            json.dumps(dict(snapshot.manifest), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
     else:
         # Keep fetch() failure predictable: no manifest file.
         with contextlib.suppress(FileNotFoundError):
             (data_dir / "manifest.json").unlink()
+
+    kobs_obj = build_knowledge_observation_payload(
+        knowledge_envelope=snapshot.knowledge_envelope,
+        conflict_reports=snapshot.conflict_reports,
+        knowledge_mediation_envelope=snapshot.knowledge_mediation_envelope,
+    )
+    (data_dir / "knowledge_obs.json").write_text(
+        json.dumps(kobs_obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    panels_obj = snapshot.operator_panels
+    if panels_obj is None:
+        panels_obj = {"forensics": None, "playbook": None, "profile_panel": None, "autopilot": None}
+    (data_dir / "operator_panels.json").write_text(
+        json.dumps(panels_obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
     # Copy all referenced artifact files for local opening/downloading.
     copied = 0
@@ -207,9 +314,13 @@ def build_static_viewer(*, snapshot: ViewerSnapshot, out_dir: Path) -> WebBuildR
             relpath = str(a.get("path") or "").strip()
             if not relpath:
                 continue
-            copied += _safe_copy(
-                src_root=snapshot.scoped_outputs_dir, relpath=relpath, dst_root=files_dir
-            )
+            copied += _safe_copy(src_root=snapshot.scoped_outputs_dir, relpath=relpath, dst_root=files_dir)
+    for rel in (
+        ".akc/knowledge/snapshot.json",
+        ".akc/knowledge/snapshot.fingerprint.json",
+        ".akc/knowledge/mediation.json",
+    ):
+        copied += _safe_copy(src_root=snapshot.scoped_outputs_dir, relpath=rel, dst_root=files_dir)
 
     # Write HTML last for atomic-ish success.
     index = (out_dir / "index.html").resolve()

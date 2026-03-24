@@ -1,0 +1,39 @@
+{
+  "contract_version": 1,
+  "schema_id": "akc:operator_alert_contract:v1",
+  "description": "Operator-facing alert definitions for always-on autopilot (artifact- and log-routable signals).",
+  "threshold_fixture": "tests/fixtures/operator_alerts/thresholds.v1.json",
+  "alerts": [
+    {
+      "alert_id": "akc_autopilot_human_escalation",
+      "severity": "critical",
+      "summary": "Autonomy budget or rollout policy requires human intervention",
+      "signals": [
+        "autopilot state or decision JSON: budget_state.human_escalation_required == true",
+        "decision artifact decision == escalation_hold",
+        "optional file under .akc/autopilot/escalations/"
+      ],
+      "threshold_ref": "human_escalation_required"
+    },
+    {
+      "alert_id": "akc_autopilot_lease_not_held",
+      "severity": "warning",
+      "summary": "This controller repeatedly failed to acquire the lease for this tenant/repo scope",
+      "signals": [
+        "state.json lease_denied_streak",
+        "decision artifacts skip_not_lease_holder with rising lease_denied_streak"
+      ],
+      "threshold_ref": "lease_never_acquired"
+    },
+    {
+      "alert_id": "akc_autopilot_compile_failures",
+      "severity": "warning",
+      "summary": "Repeated safe-recompile failures; may trip human_escalation_required when budget ceiling is hit",
+      "signals": [
+        "decision decision == compile_failed",
+        "budget_state.consecutive_failures vs max_consecutive_rollout_failures"
+      ],
+      "threshold_ref": "consecutive_compile_failures"
+    }
+  ]
+}

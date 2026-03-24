@@ -200,9 +200,7 @@ class DocsConnector(BaseConnector):
             yield rp
 
 
-def _read_text(
-    path: Path, *, encoding: str, errors: str, max_bytes: int, reject_binary: bool
-) -> str:
+def _read_text(path: Path, *, encoding: str, errors: str, max_bytes: int, reject_binary: bool) -> str:
     if max_bytes <= 0:
         raise ConnectorError("max_bytes must be > 0")
     try:
@@ -282,12 +280,8 @@ def build_docs_connector(
     root = root_path if isinstance(root_path, Path) else Path(root_path)
     config = DocsConnectorConfig(
         root_path=root,
-        include_globs=(
-            tuple(include_globs) if include_globs is not None else DEFAULT_INCLUDE_GLOBS
-        ),
-        exclude_globs=(
-            tuple(exclude_globs) if exclude_globs is not None else DEFAULT_EXCLUDE_GLOBS
-        ),
+        include_globs=(tuple(include_globs) if include_globs is not None else DEFAULT_INCLUDE_GLOBS),
+        exclude_globs=(tuple(exclude_globs) if exclude_globs is not None else DEFAULT_EXCLUDE_GLOBS),
         encoding=encoding,
         errors=errors,
         max_bytes=max_bytes,

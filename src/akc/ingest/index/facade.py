@@ -58,9 +58,7 @@ class Index:
         query_vector: Sequence[float],
         k: int = 10,
     ) -> list[VectorSearchResult]:
-        return self._vs.similarity_search_by_vector(
-            tenant_id=tenant_id, query_vector=query_vector, k=k
-        )
+        return self._vs.similarity_search_by_vector(tenant_id=tenant_id, query_vector=query_vector, k=k)
 
     def similarity_search(
         self,

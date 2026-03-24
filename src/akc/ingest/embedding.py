@@ -37,9 +37,7 @@ def embed_documents(embedder: Embedder, documents: Iterable[Document]) -> Iterat
         return
     vectors = embedder.embed([d.content for d in docs])
     if len(vectors) != len(docs):
-        raise EmbeddingError(
-            f"embedder returned {len(vectors)} embeddings for {len(docs)} documents"
-        )
+        raise EmbeddingError(f"embedder returned {len(vectors)} embeddings for {len(docs)} documents")
     for doc, vec in zip(docs, vectors, strict=True):
         yield doc.with_updates(embedding=vec)
 
@@ -247,10 +245,7 @@ class GeminiEmbedder(Embedder):
                 raise ValueError("all texts must be non-empty strings")
 
         # REST: POST /v1beta/models/{model}:batchEmbedContents?key=API_KEY
-        url = (
-            self.base_url.rstrip("/")
-            + f"/v1beta/models/{self.model}:batchEmbedContents?key={self.api_key}"
-        )
+        url = self.base_url.rstrip("/") + f"/v1beta/models/{self.model}:batchEmbedContents?key={self.api_key}"
         payload: dict[str, Any] = {
             "requests": [{"content": {"parts": [{"text": t}]}} for t in texts],
         }

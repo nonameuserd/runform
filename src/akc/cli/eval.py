@@ -15,9 +15,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
     suite_path = Path(str(args.suite_path)).expanduser()
     outputs_root = Path(str(args.outputs_root)).expanduser()
     baseline_report_path = (
-        Path(str(args.baseline_report_path)).expanduser()
-        if getattr(args, "baseline_report_path", None)
-        else None
+        Path(str(args.baseline_report_path)).expanduser() if getattr(args, "baseline_report_path", None) else None
     )
 
     try:
@@ -47,10 +45,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             if report.gate_violations:
                 print("Regression gate violations:")
                 for v in report.gate_violations:
-                    print(
-                        f"- {v.gate}: {v.message} "
-                        f"(actual={v.actual:.4f}, expected={v.expected:.4f})"
-                    )
+                    print(f"- {v.gate}: {v.message} (actual={v.actual:.4f}, expected={v.expected:.4f})")
             else:
                 print("Regression gate violations: none")
             print(f"Result: {'PASS' if report.passed else 'FAIL'}")
@@ -62,9 +57,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             "passed": False,
             "suite_path": str(suite_path),
             "outputs_root": str(outputs_root),
-            "baseline_report_path": (
-                str(baseline_report_path) if baseline_report_path is not None else None
-            ),
+            "baseline_report_path": (str(baseline_report_path) if baseline_report_path is not None else None),
             "error": {
                 "type": e.__class__.__name__,
                 "message": str(e),

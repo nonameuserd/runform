@@ -79,9 +79,7 @@ def assert_policy() -> None:
     for wf in workflow_files:
         text = read_text(wf)
         if PULL_REQUEST_TARGET_RE.search(text):
-            errors.append(
-                f"{wf}: contains `pull_request_target` (privileged untrusted input anti-pattern)"
-            )
+            errors.append(f"{wf}: contains `pull_request_target` (privileged untrusted input anti-pattern)")
 
         if not workflow_triggers_pull_request(text):
             # The remaining checks are for untrusted PR contexts only.

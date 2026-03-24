@@ -26,6 +26,18 @@ def schema_id_for(*, kind: str, version: int = ARTIFACT_SCHEMA_VERSION) -> str:
     return f"akc:{kind}:v{int(version)}"
 
 
+def is_runtime_bundle_schema_id(value: str) -> bool:
+    """Return True if ``value`` is a known ``runtime_bundle`` :func:`schema_id_for` string."""
+
+    s = str(value).strip()
+    return s in (
+        schema_id_for(kind="runtime_bundle", version=1),
+        schema_id_for(kind="runtime_bundle", version=2),
+        schema_id_for(kind="runtime_bundle", version=3),
+        schema_id_for(kind="runtime_bundle", version=4),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SchemaEnvelope:
     """Common envelope for versioned artifacts.
