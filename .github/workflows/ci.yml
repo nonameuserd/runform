@@ -178,7 +178,7 @@ jobs:
           set -euo pipefail
           docker compose -f deploy/compose/docker-compose.autopilot.yml config > /dev/null
 
-      - name: Compose runtime smoke test (free-only)
+      - name: Compose runtime smoke test
         run: |
           set -euo pipefail
           compose_file="deploy/compose/docker-compose.autopilot.yml"
@@ -186,7 +186,10 @@ jobs:
           # Keep this intentionally short: verify startup path on the hosted runner.
           sleep 12
           docker compose -f "${compose_file}" ps
-          docker compose -f "${compose_file}" ps --services --filter status=running | rg "^akc-runtime-autopilot$"
+          if ! docker compose -f "${compose_file}" ps --services --filter status=running | grep -Fxq "akc-runtime-autopilot"; then
+            docker compose -f "${compose_file}" logs --no-color --tail=200
+            exit 1
+          fi
 
       - name: Runtime provider gating tests (env gates enabled)
         run: |
