@@ -1,0 +1,14 @@
+# Minimal image for `akc compile --strong-lane-preference docker` CI gates.
+# Build from repository root:
+#   docker build -f deploy/Dockerfile.ci-pytest -t akc-ci-pytest:local .
+FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
+
+# Apply security updates so the image is not stuck at the snapshot CVE set from the base layer alone.
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+  && apt-get upgrade -y --no-install-recommends \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/docker-pytest-ci-requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+  && rm /tmp/requirements.txt

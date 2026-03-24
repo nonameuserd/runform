@@ -159,3 +159,103 @@ def fleet_get_run(
             out["outputs_root"] = str(shard.outputs_root)
             return out
     return None
+
+
+def _iter_shard_delivery_keys(
+    shard: FleetShardConfig,
+    *,
+    tenant_id: str,
+    repo_id: str | None = None,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+) -> Iterator[tuple[int, str, str, str, FleetShardConfig, dict[str, JSONValue]]]:
+    if not shard_accepts_tenant(shard, tenant_id):
+        return
+    db_path = operations_sqlite_path(outputs_root=shard.outputs_root, tenant_id=tenant_id)
+    if not db_path.is_file():
+        return
+    idx = OperationsIndex(sqlite_path=db_path)
+    offset = 0
+    while True:
+        batch = idx.list_deliveries(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            limit=_MERGE_PAGE,
+            offset=offset,
+        )
+        if not batch:
+            break
+        for row in batch:
+            ms = int(cast(int, row["updated_at_ms"]))
+            rid = str(row["repo_id"])
+            did = str(row["delivery_id"])
+            yield (-ms, shard.id, rid, did, shard, row)
+        offset += _MERGE_PAGE
+        if len(batch) < _MERGE_PAGE:
+            break
+
+
+def fleet_list_deliveries_merged(
+    shards: Sequence[FleetShardConfig],
+    *,
+    tenant_id: str,
+    repo_id: str | None = None,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Merge per-shard delivery session indexes (descending ``updated_at_ms``)."""
+
+    require_non_empty(tenant_id, name="tenant_id")
+    lim = max(1, min(int(limit), 500))
+    iters = [
+        _iter_shard_delivery_keys(
+            s,
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            since_ms=since_ms,
+            until_ms=until_ms,
+        )
+        for s in shards
+    ]
+    merged = heapq.merge(*iters)
+    out: list[dict[str, Any]] = []
+    for _tup in merged:
+        _neg_ms, _sid, _rid, _did, shard, row = _tup
+        item = dict(row)
+        item["shard_id"] = shard.id
+        item["outputs_root"] = str(shard.outputs_root)
+        out.append(item)
+        if len(out) >= lim:
+            break
+    return out
+
+
+def fleet_get_delivery(
+    shards: Sequence[FleetShardConfig],
+    *,
+    tenant_id: str,
+    repo_id: str,
+    delivery_id: str,
+) -> dict[str, Any] | None:
+    """Return first matching indexed delivery across shards (shard declaration order)."""
+
+    require_non_empty(tenant_id, name="tenant_id")
+    rnorm = normalize_repo_id(repo_id)
+    did = str(delivery_id).strip()
+    for shard in shards:
+        if not shard_accepts_tenant(shard, tenant_id):
+            continue
+        db_path = operations_sqlite_path(outputs_root=shard.outputs_root, tenant_id=tenant_id)
+        if not db_path.is_file():
+            continue
+        idx = OperationsIndex(sqlite_path=db_path)
+        row = idx.get_delivery(tenant_id=tenant_id, repo_id=rnorm, delivery_id=did)
+        if row is not None:
+            out = dict(row)
+            out["shard_id"] = shard.id
+            out["outputs_root"] = str(shard.outputs_root)
+            return out
+    return None

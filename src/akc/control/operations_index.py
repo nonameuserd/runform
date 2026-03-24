@@ -463,6 +463,31 @@ def _migrate_ops_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delivery_sessions (
+            tenant_id TEXT NOT NULL,
+            repo_id TEXT NOT NULL,
+            delivery_id TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            session_phase TEXT NOT NULL,
+            compile_run_id TEXT,
+            release_mode TEXT,
+            session_rel_path TEXT NOT NULL,
+            events_rel_path TEXT NOT NULL,
+            recipient_count INTEGER NOT NULL DEFAULT 0,
+            platforms_json TEXT,
+            metrics_json TEXT,
+            PRIMARY KEY (tenant_id, repo_id, delivery_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_delivery_sessions_updated ON delivery_sessions(updated_at_ms)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_delivery_sessions_repo ON delivery_sessions(tenant_id, repo_id)"
+    )
 
 
 def _pass_counts(manifest: RunManifest) -> tuple[int, int, int]:
@@ -672,6 +697,170 @@ class OperationsIndex:
         )
         _migrate_ops_schema(conn)
         return conn
+
+    def upsert_delivery_session(
+        self,
+        *,
+        tenant_id: str,
+        repo_id: str,
+        delivery_id: str,
+        updated_at_ms: int,
+        session_phase: str,
+        compile_run_id: str | None,
+        release_mode: str | None,
+        session_rel_path: str,
+        events_rel_path: str,
+        recipient_count: int,
+        platforms_json: str | None,
+        metrics_json: str | None,
+    ) -> None:
+        """Persist delivery control-plane pointers (separate from compile ``runs`` rows)."""
+
+        tid = tenant_id.strip()
+        rid = normalize_repo_id(repo_id)
+        did = delivery_id.strip()
+        require_non_empty(did, name="delivery_id")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO delivery_sessions (
+                    tenant_id, repo_id, delivery_id, updated_at_ms, session_phase, compile_run_id,
+                    release_mode, session_rel_path, events_rel_path, recipient_count,
+                    platforms_json, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, repo_id, delivery_id) DO UPDATE SET
+                    updated_at_ms=excluded.updated_at_ms,
+                    session_phase=excluded.session_phase,
+                    compile_run_id=excluded.compile_run_id,
+                    release_mode=excluded.release_mode,
+                    session_rel_path=excluded.session_rel_path,
+                    events_rel_path=excluded.events_rel_path,
+                    recipient_count=excluded.recipient_count,
+                    platforms_json=excluded.platforms_json,
+                    metrics_json=excluded.metrics_json
+                """,
+                (
+                    tid,
+                    rid,
+                    did,
+                    int(updated_at_ms),
+                    str(session_phase or ""),
+                    compile_run_id,
+                    str(release_mode).strip() if release_mode else None,
+                    str(session_rel_path),
+                    str(events_rel_path),
+                    int(recipient_count),
+                    platforms_json,
+                    metrics_json,
+                ),
+            )
+
+    def list_deliveries(
+        self,
+        *,
+        tenant_id: str,
+        repo_id: str | None = None,
+        since_ms: int | None = None,
+        until_ms: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, JSONValue]]:
+        require_non_empty(tenant_id, name="tenant_id")
+        lim = max(1, min(int(limit), 500))
+        off = max(0, int(offset))
+        clauses: list[str] = ["d.tenant_id = ?"]
+        params: list[object] = [tenant_id.strip()]
+        if repo_id is not None and str(repo_id).strip():
+            clauses.append("d.repo_id = ?")
+            params.append(normalize_repo_id(str(repo_id)))
+        if since_ms is not None:
+            clauses.append("d.updated_at_ms >= ?")
+            params.append(int(since_ms))
+        if until_ms is not None:
+            clauses.append("d.updated_at_ms <= ?")
+            params.append(int(until_ms))
+        where_sql = " AND ".join(clauses)
+        params.extend([lim, off])
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    tenant_id, repo_id, delivery_id, updated_at_ms, session_phase, compile_run_id,
+                    release_mode, session_rel_path, events_rel_path, recipient_count,
+                    platforms_json, metrics_json
+                FROM delivery_sessions d
+                WHERE {where_sql}
+                ORDER BY d.updated_at_ms DESC, d.rowid DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params),
+            ).fetchall()
+        out: list[dict[str, JSONValue]] = []
+        for row in rows:
+            plat_decoded = _decode_json_cell(row[10])
+            metrics_decoded = _decode_json_cell(row[11])
+            out.append(
+                {
+                    "tenant_id": str(row[0]),
+                    "repo_id": str(row[1]),
+                    "delivery_id": str(row[2]),
+                    "updated_at_ms": int(row[3]),
+                    "session_phase": str(row[4]),
+                    "compile_run_id": str(row[5]) if row[5] else None,
+                    "release_mode": str(row[6]) if row[6] else None,
+                    "session_rel_path": str(row[7]),
+                    "events_rel_path": str(row[8]),
+                    "recipient_count": int(row[9]) if row[9] is not None else 0,
+                    "platforms": plat_decoded if isinstance(plat_decoded, list) else plat_decoded,
+                    "metrics": metrics_decoded if isinstance(metrics_decoded, dict) else metrics_decoded,
+                }
+            )
+
+        return out
+
+    def get_delivery(
+        self,
+        *,
+        tenant_id: str,
+        repo_id: str,
+        delivery_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one indexed delivery row or ``None``."""
+
+        require_non_empty(tenant_id, name="tenant_id")
+        rnorm = normalize_repo_id(repo_id)
+        did = str(delivery_id).strip()
+        require_non_empty(did, name="delivery_id")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    tenant_id, repo_id, delivery_id, updated_at_ms, session_phase, compile_run_id,
+                    release_mode, session_rel_path, events_rel_path, recipient_count,
+                    platforms_json, metrics_json
+                FROM delivery_sessions
+                WHERE tenant_id = ? AND repo_id = ? AND delivery_id = ?
+                """,
+                (tenant_id.strip(), rnorm, did),
+            ).fetchone()
+        if row is None:
+            return None
+        plat_decoded = _decode_json_cell(row[10])
+        metrics_decoded = _decode_json_cell(row[11])
+        return {
+            "tenant_id": str(row[0]),
+            "repo_id": str(row[1]),
+            "delivery_id": str(row[2]),
+            "updated_at_ms": int(row[3]),
+            "session_phase": str(row[4]),
+            "compile_run_id": str(row[5]) if row[5] else None,
+            "release_mode": str(row[6]) if row[6] else None,
+            "session_rel_path": str(row[7]),
+            "events_rel_path": str(row[8]),
+            "recipient_count": int(row[9]) if row[9] is not None else 0,
+            "platforms": plat_decoded if isinstance(plat_decoded, list) else plat_decoded,
+            "metrics": metrics_decoded if isinstance(metrics_decoded, dict) else metrics_decoded,
+        }
 
     @staticmethod
     def upsert_from_manifest_path(manifest_path: str | Path, *, outputs_root: Path | None = None) -> None:

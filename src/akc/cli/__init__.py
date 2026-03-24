@@ -506,6 +506,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated tenant ids to accept, or * (default *; or AKC_LIVING_WEBHOOK_TENANT_ALLOWLIST)",
     )
     living_wh.add_argument(
+        "--outputs-root-allowlist",
+        default=None,
+        help=(
+            "Comma-separated directory roots: payload outputs_root must resolve under one of these "
+            "(or AKC_LIVING_WEBHOOK_OUTPUTS_ROOT_ALLOWLIST; default: outputs_root from .akc/project.json)"
+        ),
+    )
+    living_wh.add_argument(
         "--developer-role-profile",
         choices=["classic", "emerging"],
         default=None,
@@ -2090,8 +2098,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pb_write.set_defaults(func=cmd_control_policy_bundle_write)
 
+    from akc.cli.deliver import register_deliver_parsers
     from akc.cli.fleet import register_fleet_parsers
 
+    register_deliver_parsers(sub)
     register_fleet_parsers(sub)
 
     view = sub.add_parser(

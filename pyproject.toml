@@ -68,14 +68,12 @@ vectorstore-pg = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.4",
 ]
-# Offline Ragas ID metrics on deterministic retrieval fixtures (CI: optional extra).
-# Not included in the default pip-audit export (see .github/workflows/ci.yml): the Ragas
-# stack pulls large transitive deps; audit the lockfile separately if you need SBOM parity.
-eval-rag = [
-    "ragas>=0.2",
-    "rapidfuzz>=3.14.3",
-]
 
+# Provider HTTP / signing for ``akc deliver`` (App Store Connect ES256 JWT, Google OAuth).
+delivery-providers = [
+    "PyJWT[crypto]>=2.8.0",
+    "google-auth>=2.29.0",
+]
 [project.scripts]
 akc = "akc.cli:main"
 
