@@ -27,6 +27,15 @@ def _sha256_file(path: Path) -> str | None:
     return _sha256_bytes(path.read_bytes())
 
 
+def _normalize_patch_text(patch_text: str) -> str:
+    """Normalize patch text for consistent ``patch(1)`` behavior across platforms."""
+
+    normalized = str(patch_text).replace("\r\n", "\n").replace("\r", "\n")
+    if normalized and not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized
+
+
 def _rel_path_confined(rel: str, scope_root: Path) -> tuple[bool, str | None]:
     root = scope_root.expanduser().resolve()
     if not root.is_absolute():
@@ -77,10 +86,11 @@ def _run_patch(
     cmd = _patch_base_cmd(patch_bin)
     if dry_run:
         cmd.append("--check")
+    normalized_patch_text = _normalize_patch_text(patch_text)
     return subprocess.run(
         cmd,
         cwd=str(cwd),
-        input=patch_text.encode("utf-8"),
+        input=normalized_patch_text.encode("utf-8"),
         capture_output=True,
         check=False,
     )
@@ -159,6 +169,7 @@ def run_scoped_apply_pipeline(
         ).to_json_obj()
 
     scope_root = Path(root_raw).expanduser().resolve()
+    normalized_patch_text = _normalize_patch_text(patch_text)
     patch_bin = shutil.which("patch")
     if patch_bin is None:
         return ScopedApplyAccounting(
@@ -174,7 +185,7 @@ def run_scoped_apply_pipeline(
             files=(),
         ).to_json_obj()
 
-    ok, reason, parsed = preflight_scoped_apply(patch_text=patch_text, scope_root=scope_root)
+    ok, reason, parsed = preflight_scoped_apply(patch_text=normalized_patch_text, scope_root=scope_root)
     if not ok or parsed is None:
         return ScopedApplyAccounting(
             compile_realization_mode="scoped_apply",
@@ -200,10 +211,11 @@ def run_scoped_apply_pipeline(
             }
         )
 
-    check_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=patch_text, dry_run=True)
+    check_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=normalized_patch_text, dry_run=True)
     if int(check_res.returncode) != 0:
         stderr = (check_res.stderr or b"").decode("utf-8", errors="replace").strip()
-        msg = stderr or f"patch --check exit {check_res.returncode}"
+        stdout = (check_res.stdout or b"").decode("utf-8", errors="replace").strip()
+        msg = stderr or stdout or f"patch --check exit {check_res.returncode}"
         return ScopedApplyAccounting(
             compile_realization_mode="scoped_apply",
             attempted=True,
@@ -217,10 +229,11 @@ def run_scoped_apply_pipeline(
             files=tuple(before_rows),
         ).to_json_obj()
 
-    apply_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=patch_text, dry_run=False)
+    apply_res = _run_patch(patch_bin=patch_bin, cwd=scope_root, patch_text=normalized_patch_text, dry_run=False)
     if int(apply_res.returncode) != 0:
         stderr = (apply_res.stderr or b"").decode("utf-8", errors="replace").strip()
-        msg = stderr or f"patch apply exit {apply_res.returncode}"
+        stdout = (apply_res.stdout or b"").decode("utf-8", errors="replace").strip()
+        msg = stderr or stdout or f"patch apply exit {apply_res.returncode}"
         return ScopedApplyAccounting(
             compile_realization_mode="scoped_apply",
             attempted=True,

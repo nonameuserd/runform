@@ -76,6 +76,30 @@ def test_scoped_apply_applies_minimal_patch(tmp_path: Path) -> None:
     assert r["files"][0]["sha256_after"] is not None
 
 
+def test_scoped_apply_applies_patch_without_trailing_newline(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "src" / "f.txt").write_text("a\n", encoding="utf-8")
+    patch = "\n".join(
+        [
+            "--- a/src/f.txt",
+            "+++ b/src/f.txt",
+            "@@ -1 +1 @@",
+            "-a",
+            "+b",
+        ]
+    )
+    r = run_scoped_apply_pipeline(
+        compile_realization_mode="scoped_apply",
+        apply_scope_root=str(tmp_path.resolve()),
+        patch_text=patch,
+        patch_sha256="deadbeef",
+    )
+    if shutil_which_patch() is None:
+        pytest.skip("patch binary not available")
+    assert r["applied"] is True, r
+    assert (tmp_path / "src" / "f.txt").read_text(encoding="utf-8").strip() == "b"
+
+
 def shutil_which_patch() -> str | None:
     import shutil
 
