@@ -322,22 +322,48 @@ def project_intent_operating_bounds_to_policy_context(
     )
 
     # Effective values:
-    req_max_seconds = json_value_as_float(requested.get("max_seconds"), default=0.0) if requested.get("max_seconds") is not None else None
-    base_max_seconds = json_value_as_float(baseline.get("max_seconds"), default=0.0) if baseline.get("max_seconds") is not None else None
+    req_max_seconds = (
+        json_value_as_float(requested.get("max_seconds"), default=0.0)
+        if requested.get("max_seconds") is not None
+        else None
+    )
+    base_max_seconds = (
+        json_value_as_float(baseline.get("max_seconds"), default=0.0)
+        if baseline.get("max_seconds") is not None
+        else None
+    )
     effective_max_seconds = _min_optional_float(
         requested=req_max_seconds,
         baseline=base_max_seconds,
     )
     base_max_steps = json_value_as_int(baseline.get("max_steps"), default=0)
     req_max_steps = json_value_as_int(requested.get("max_steps"), default=base_max_steps)
-    effective_max_steps = base_max_steps if requested.get("max_steps") is None else min(req_max_steps, base_max_steps)
+    effective_max_steps = (
+        base_max_steps if requested.get("max_steps") is None else min(req_max_steps, base_max_steps)
+    )
     effective_max_input_tokens = _min_optional_int(
-        requested=(json_value_as_int(requested.get("max_input_tokens"), default=0) if requested.get("max_input_tokens") is not None else None),
-        baseline=(json_value_as_int(baseline.get("max_input_tokens"), default=0) if baseline.get("max_input_tokens") is not None else None),
+        requested=(
+            json_value_as_int(requested.get("max_input_tokens"), default=0)
+            if requested.get("max_input_tokens") is not None
+            else None
+        ),
+        baseline=(
+            json_value_as_int(baseline.get("max_input_tokens"), default=0)
+            if baseline.get("max_input_tokens") is not None
+            else None
+        ),
     )
     effective_max_output_tokens = _min_optional_int(
-        requested=(json_value_as_int(requested.get("max_output_tokens"), default=0) if requested.get("max_output_tokens") is not None else None),
-        baseline=(json_value_as_int(baseline.get("max_output_tokens"), default=0) if baseline.get("max_output_tokens") is not None else None),
+        requested=(
+            json_value_as_int(requested.get("max_output_tokens"), default=0)
+            if requested.get("max_output_tokens") is not None
+            else None
+        ),
+        baseline=(
+            json_value_as_int(baseline.get("max_output_tokens"), default=0)
+            if baseline.get("max_output_tokens") is not None
+            else None
+        ),
     )
     effective_allow_network = bool(requested["allow_network"]) and bool(baseline["allow_network"])
 

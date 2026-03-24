@@ -2058,7 +2058,10 @@ class CompileSession:
             if pass_name is None:
                 continue
             rollup = by_pass.setdefault(pass_name, self._new_cost_rollup())
-            rollup["wall_time_ms"] = json_value_as_int(rollup.get("wall_time_ms"), default=0) + self._span_duration_ms(span=span)
+            rollup["wall_time_ms"] = (
+                json_value_as_int(rollup.get("wall_time_ms"), default=0)
+                + self._span_duration_ms(span=span)
+            )
             attrs = span.get("attributes")
             attrs_dict = attrs if isinstance(attrs, dict) else {}
             span_name = str(span.get("name") or "")
@@ -2068,7 +2071,9 @@ class CompileSession:
                 rollup["llm_calls"] = json_value_as_int(rollup.get("llm_calls"), default=0) + 1
                 rollup["input_tokens"] = json_value_as_int(rollup.get("input_tokens"), default=0) + input_tokens
                 rollup["output_tokens"] = json_value_as_int(rollup.get("output_tokens"), default=0) + output_tokens
-                rollup["total_tokens"] = json_value_as_int(rollup.get("total_tokens"), default=0) + input_tokens + output_tokens
+                rollup["total_tokens"] = (
+                    json_value_as_int(rollup.get("total_tokens"), default=0) + input_tokens + output_tokens
+                )
             elif span_name.startswith("compile.executor."):
                 rollup["tool_calls"] = json_value_as_int(rollup.get("tool_calls"), default=0) + 1
             reused = attrs_dict.get("reused_from_replay_manifest")
@@ -2153,9 +2158,9 @@ class CompileSession:
             "wall_time_ms",
         ):
             target[key] = json_value_as_int(target.get(key), default=0) + json_value_as_int(src.get(key), default=0)
-        target["estimated_cost_usd"] = json_value_as_float(target.get("estimated_cost_usd"), default=0.0) + json_value_as_float(
-            src.get("estimated_cost_usd"), default=0.0
-        )
+        target["estimated_cost_usd"] = json_value_as_float(
+            target.get("estimated_cost_usd"), default=0.0
+        ) + json_value_as_float(src.get("estimated_cost_usd"), default=0.0)
 
     def _build_ir_diff_artifact(
         self,

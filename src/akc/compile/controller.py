@@ -77,7 +77,6 @@ from akc.knowledge.persistence import KNOWLEDGE_MEDIATION_RELPATH, write_knowled
 from akc.memory.models import (
     JSONValue,
     PlanStep,
-    json_value_as_float,
     json_value_as_int,
     json_value_as_optional_float,
     json_value_as_optional_int,
