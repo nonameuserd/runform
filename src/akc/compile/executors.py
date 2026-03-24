@@ -107,9 +107,7 @@ def _scope_dir(*, work_root: Path, scope: TenantRepoScope) -> Path:
     return work_root / scope.tenant_id / scope.repo_id
 
 
-_RUN_ID_ALLOWED_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-)
+_RUN_ID_ALLOWED_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 _SAFE_DOCKER_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]*$")
 _SAFE_DOCKER_USER_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$|^[0-9]+$")
 _MAX_DOCKER_ULIMIT_VALUE = 1_048_576
@@ -729,9 +727,7 @@ class DockerExecutor(Executor):
             docker_cmd += ["--security-opt", "no-new-privileges"]
         if seccomp_profile is not None and not _is_default_docker_seccomp_profile(seccomp_profile):
             docker_cmd += ["--security-opt", f"seccomp={seccomp_profile}"]
-        if apparmor_profile is not None and not _is_default_docker_apparmor_profile(
-            apparmor_profile
-        ):
+        if apparmor_profile is not None and not _is_default_docker_apparmor_profile(apparmor_profile):
             docker_cmd += ["--security-opt", f"apparmor={apparmor_profile}"]
         if self.cap_drop_all:
             docker_cmd += ["--cap-drop", "ALL"]

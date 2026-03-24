@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from akc.compile.controller_config import DocDerivedPatternOptions
 from akc.compile.rust_bridge import RustExecConfig
 from akc.ingest.chunking import ChunkingConfig, chunk_documents, normalize_documents
 from akc.ingest.connectors.base import Connector
@@ -29,6 +30,7 @@ from akc.ingest.embedding import Embedder, embed_documents
 from akc.ingest.exceptions import IngestionError
 from akc.ingest.index import InMemoryVectorStore, PgVectorStore, SQLiteVectorStore, VectorStore
 from akc.ingest.rust_port import ingest_docs_via_rust
+from akc.memory.models import normalize_repo_id
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +123,13 @@ def _get_connector(
     if connector == "docs":
         return build_docs_connector(tenant_id=tenant_id, root_path=input_value)
     if connector == "openapi":
-        return build_openapi_connector(tenant_id=tenant_id, spec=input_value)
+        opts_o: dict[str, str] = dict(connector_options or {})
+        emit_soft = opts_o.get("emit_soft_assertion_chunks", "false").lower() in {"1", "true", "yes"}
+        return build_openapi_connector(
+            tenant_id=tenant_id,
+            spec=input_value,
+            emit_soft_assertion_chunks=emit_soft,
+        )
     if connector == "slack":
         opts: dict[str, str] = dict(connector_options or {})
         token = opts.get("token", "")
@@ -249,6 +257,10 @@ def run_ingest(
     use_rust_ingest_docs: bool = False,
     rust_ingest_min_bytes: int | None = None,
     rust_ingest_mode: Literal["cli", "pyo3"] = "cli",
+    assertion_index_scope_root: str | Path | None = None,
+    assertion_index_repo_id: str | None = None,
+    assertion_index_max_per_batch: int = 256,
+    assertion_index_pattern_options: DocDerivedPatternOptions | None = None,
 ) -> IngestResult:
     """Run ingestion end-to-end for one connector + input."""
 
@@ -283,9 +295,7 @@ def run_ingest(
         sources_seen += 1
         fp = _fingerprint_source(connector, source_id)
         key = _state_key(tenant_id=tenant_id, connector_name=connector_name, source_id=source_id)
-        if _should_skip(
-            previous_state=state, key=key, fingerprint=fp, allow_incremental=incremental
-        ):
+        if _should_skip(previous_state=state, key=key, fingerprint=fp, allow_incremental=incremental):
             sources_skipped += 1
             continue
         chunked: list[Any] | None = None
@@ -299,9 +309,7 @@ def run_ingest(
                 try:
                     rust_cfg = RustExecConfig(mode=rust_ingest_mode)
                     max_chunk_chars = (
-                        chunking.chunk_size_chars
-                        if chunking is not None
-                        else ChunkingConfig().chunk_size_chars
+                        chunking.chunk_size_chars if chunking is not None else ChunkingConfig().chunk_size_chars
                     )
                     chunked = ingest_docs_via_rust(
                         tenant_id=tenant_id,
@@ -349,6 +357,20 @@ def run_ingest(
         if vector_store is not None:
             documents_indexed += vector_store.add(tenant_id=tenant_id, documents=embedded)
 
+        if assertion_index_scope_root is not None:
+            from akc.compile.assertion_index_store import merge_documents_into_assertion_index
+
+            repo_for_idx = normalize_repo_id(str(assertion_index_repo_id or "default"))
+            scope = Path(assertion_index_scope_root).expanduser() / tenant_id / repo_for_idx
+            merge_documents_into_assertion_index(
+                scope_root=scope,
+                tenant_id=tenant_id,
+                repo_id=repo_for_idx,
+                documents=embedded,
+                max_assertions_per_batch=int(assertion_index_max_per_batch),
+                pattern_options=assertion_index_pattern_options,
+            )
+
         # Mark state only after the source successfully completed all enabled steps.
         new_state[key] = dict(fp)
 
@@ -368,9 +390,7 @@ def run_ingest(
     return IngestResult(
         connector=str(connector_name),
         tenant_id=tenant_id,
-        index_backend=(
-            None if vector_store is None else (index_backend or vector_store.__class__.__name__)
-        ),
+        index_backend=(None if vector_store is None else (index_backend or vector_store.__class__.__name__)),
         state_path=str(state_store.path) if state_store is not None else None,
         stats=stats,
     )

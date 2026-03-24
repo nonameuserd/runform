@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
 from akc.memory.models import normalize_repo_id, require_non_empty
-from akc.run import PassRecord, RunManifest
+from akc.run import PassRecord, RunManifest, RuntimeEvidenceRecord, replay_runtime_execution
 from akc.run.loader import load_run_manifest
 
 _ALLOWED_EVAL_TASK_PASS_NAMES: tuple[str, ...] = (
@@ -50,6 +52,10 @@ _EVAL_SUITE_SCHEMA_V1: dict[str, Any] = {
                     "intent": {"type": "string"},
                     "step": {"type": "string"},
                     "mode": {"type": "string", "enum": ["quick", "thorough"]},
+                    "benchmark_group": {"type": "string"},
+                    "baseline_duration_hours": {"type": "number", "minimum": 0},
+                    "target_duration_hours": {"type": "number", "minimum": 0},
+                    "confidence_weight": {"type": "number", "minimum": 0},
                     "status_override": {"type": "string", "enum": ["succeeded", "failed"]},
                     "checks": {
                         "type": "object",
@@ -69,6 +75,25 @@ _EVAL_SUITE_SCHEMA_V1: dict[str, Any] = {
                             "max_wall_time_ms": {"type": "integer", "minimum": 0},
                             "require_trace_spans": {"type": "boolean"},
                             "require_unit_tests_passed": {"type": "boolean"},
+                            "require_runtime_replay_determinism": {"type": "boolean"},
+                            "runtime_mode": {"type": "string", "enum": ["simulate", "enforce", "canary"]},
+                            "runtime_reliability_kpis": {
+                                "type": "object",
+                                "additionalProperties": True,
+                                "properties": {
+                                    "max_rollbacks_total": {"type": "integer", "minimum": 0},
+                                    "max_convergence_latency_ms_avg": {"type": "number", "minimum": 0},
+                                    "max_mttr_like_repair_latency_ms_avg": {"type": "number", "minimum": 0},
+                                    "require_terminal_health_in": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {
+                                            "type": "string",
+                                            "enum": ["healthy", "unknown", "degraded", "failed"],
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                     "judge": {
@@ -123,6 +148,10 @@ class EvalTaskResult:
     judge_reason: str | None
     run_manifest_path: str
     metrics: dict[str, float]
+    benchmark_group: str | None = None
+    baseline_duration_hours: float | None = None
+    target_duration_hours: float | None = None
+    confidence_weight: float | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
@@ -136,6 +165,10 @@ class EvalTaskResult:
             "judge_reason": self.judge_reason,
             "run_manifest_path": self.run_manifest_path,
             "metrics": dict(self.metrics),
+            "benchmark_group": self.benchmark_group,
+            "baseline_duration_hours": self.baseline_duration_hours,
+            "target_duration_hours": self.target_duration_hours,
+            "confidence_weight": self.confidence_weight,
         }
 
 
@@ -146,6 +179,7 @@ class EvalReport:
     summary: dict[str, float]
     tasks: tuple[EvalTaskResult, ...]
     gate_violations: tuple[RegressionGateViolation, ...]
+    benchmark_summary: dict[str, Any] | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
@@ -154,6 +188,7 @@ class EvalReport:
             "summary": dict(self.summary),
             "tasks": [t.to_json_obj() for t in self.tasks],
             "gate_violations": [g.to_json_obj() for g in self.gate_violations],
+            "benchmark_summary": dict(self.benchmark_summary) if isinstance(self.benchmark_summary, dict) else None,
         }
 
 
@@ -171,9 +206,7 @@ class _OfflineEvalLLM(LLMBackend):
         # Make the initial "generate" patch verifier-vetoed (path traversal),
         # and the subsequent "repair" patch safe. This exercises the
         # closed-loop repair path in CI deterministically.
-        code_path = (
-            "src/../src/akc_eval_compiled.py" if stage == "generate" else "src/akc_eval_compiled.py"
-        )
+        code_path = "src/../src/akc_eval_compiled.py" if stage == "generate" else "src/akc_eval_compiled.py"
         test_path = "tests/test_akc_eval_compiled.py"
         text = "\n".join(
             [
@@ -226,9 +259,7 @@ def _load_suite_obj(path: Path) -> dict[str, Any]:
         try:
             import yaml
         except ImportError as e:  # pragma: no cover
-            raise RuntimeError(
-                "PyYAML is required for YAML eval suites. Install with: `uv sync --extra dev`."
-            ) from e
+            raise RuntimeError("PyYAML is required for YAML eval suites. Install with: `uv sync --extra dev`.") from e
         raw = yaml.safe_load(text)
     else:
         # Default: JSON.
@@ -244,8 +275,7 @@ def _validate_suite_schema(*, suite: dict[str, Any]) -> None:
         from jsonschema import Draft7Validator
     except ImportError as e:  # pragma: no cover
         raise RuntimeError(
-            "jsonschema is required for eval suite schema validation. "
-            "Install with: `uv sync --extra dev`."
+            "jsonschema is required for eval suite schema validation. Install with: `uv sync --extra dev`."
         ) from e
 
     validator = Draft7Validator(_EVAL_SUITE_SCHEMA_V1)
@@ -264,6 +294,19 @@ def _safe_ratio(n: int, d: int) -> float:
     if d <= 0:
         return 0.0
     return float(n) / float(d)
+
+
+def _percentile(*, values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    if pct <= 0:
+        return float(min(values))
+    if pct >= 100:
+        return float(max(values))
+    ordered = sorted(float(x) for x in values)
+    idx = int(round((float(pct) / 100.0) * float(len(ordered) - 1)))
+    idx = max(0, min(idx, len(ordered) - 1))
+    return float(ordered[idx])
 
 
 def _as_int(value: Any, *, default: int = 0) -> int:
@@ -391,9 +434,7 @@ def _deterministic_check(
     # - A successful unit-test run implies `execute.exit_code == 0`.
     require_unit_tests_passed = bool(checks.get("require_unit_tests_passed", True))
     if require_unit_tests_passed:
-        execute_pass: PassRecord | None = next(
-            (p for p in manifest.passes if p.name == "execute"), None
-        )
+        execute_pass: PassRecord | None = next((p for p in manifest.passes if p.name == "execute"), None)
         if execute_pass is None:
             failures.append("missing execute pass record for unit test gate")
         else:
@@ -414,6 +455,267 @@ def _deterministic_check(
         "trace_spans_count": float(len(manifest.trace_spans)),
     }
     return (len(failures) == 0), tuple(failures), metrics
+
+
+def _resolve_artifact_path_for_scope(
+    *,
+    pointer_path: str,
+    outputs_root: Path,
+    tenant_id: str,
+    repo_id: str,
+    manifest_path: Path,
+) -> Path | None:
+    raw = pointer_path.strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    candidates: list[Path] = []
+    if p.is_absolute():
+        candidates.append(p)
+    scope_root = outputs_root / tenant_id / repo_id
+    candidates.extend(
+        [
+            scope_root / raw,
+            manifest_path.parent / raw,
+            p,
+        ]
+    )
+    for cand in candidates:
+        resolved = cand.resolve()
+        if resolved.exists():
+            return resolved
+    return None
+
+
+def _runtime_metrics_from_evidence(*, evidence: tuple[RuntimeEvidenceRecord, ...]) -> tuple[dict[str, float], str]:
+    rollbacks_total = 0
+    terminal_health_status = "unknown"
+    convergence_latencies: list[float] = []
+    repair_latencies: list[float] = []
+
+    for rec in evidence:
+        if rec.evidence_type == "rollback_chain":
+            rollbacks_total += 1
+        if rec.evidence_type == "terminal_health" and rec.payload.get("aggregate") is True:
+            hs = rec.payload.get("health_status")
+            if isinstance(hs, str) and hs.strip():
+                terminal_health_status = hs.strip().lower()
+        if rec.evidence_type == "convergence_certificate" and rec.payload.get("aggregate") is True:
+            win_ms = rec.payload.get("window_ms")
+            if isinstance(win_ms, (int, float)) and not isinstance(win_ms, bool):
+                latency = float(win_ms)
+                convergence_latencies.append(latency)
+                if rollbacks_total > 0:
+                    repair_latencies.append(latency)
+
+    convergence_latency_ms_avg = (
+        float(sum(convergence_latencies) / float(len(convergence_latencies))) if convergence_latencies else 0.0
+    )
+    mttr_like_repair_latency_ms_avg = (
+        float(sum(repair_latencies) / float(len(repair_latencies))) if repair_latencies else 0.0
+    )
+
+    return (
+        {
+            "runtime_rollbacks_total": float(rollbacks_total),
+            "runtime_convergence_latency_ms_avg": convergence_latency_ms_avg,
+            "runtime_mttr_like_repair_latency_ms_avg": mttr_like_repair_latency_ms_avg,
+            # Preserve historical numeric metric shape for downstream consumers.
+            "runtime_terminal_health_status": 1.0 if terminal_health_status == "healthy" else 0.0,
+        },
+        terminal_health_status,
+    )
+
+
+def _runtime_multi_signal_check(
+    *,
+    task: dict[str, Any],
+    outputs_root: Path,
+    manifest_path: Path,
+    manifest: RunManifest,
+    tenant_id: str,
+    repo_id: str,
+) -> tuple[tuple[str, ...], dict[str, float]]:
+    checks_raw = task.get("checks")
+    checks: dict[str, Any] = checks_raw if isinstance(checks_raw, dict) else {}
+    need_replay = bool(checks.get("require_runtime_replay_determinism", False))
+    kpis_raw = checks.get("runtime_reliability_kpis")
+    kpis: dict[str, Any] = kpis_raw if isinstance(kpis_raw, dict) else {}
+    if not need_replay and not kpis:
+        return (), {}
+
+    bundle_abs: Path | None = None
+    if manifest.runtime_bundle is not None:
+        bundle_abs = _resolve_artifact_path_for_scope(
+            pointer_path=str(manifest.runtime_bundle.path),
+            outputs_root=outputs_root,
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            manifest_path=manifest_path,
+        )
+    if bundle_abs is None:
+        fallback_bundle = (
+            outputs_root / tenant_id / repo_id / ".akc" / "runtime" / f"{manifest.run_id}.runtime_bundle.json"
+        )
+        if fallback_bundle.exists():
+            bundle_abs = fallback_bundle.resolve()
+    if bundle_abs is None:
+        return ("runtime bundle path from manifest could not be resolved on disk",), {}
+
+    from argparse import Namespace
+
+    from akc.cli.runtime import cmd_runtime_start
+
+    before_records = list((outputs_root / tenant_id / repo_id / ".akc" / "runtime").rglob("runtime_run.json"))
+    before_paths = {p.resolve() for p in before_records}
+
+    # Runtime eval signal uses simulate mode by default for deterministic, non-mutating checks.
+    runtime_mode = str(checks.get("runtime_mode", "simulate")).strip() or "simulate"
+    if runtime_mode not in {"simulate", "enforce", "canary"}:
+        runtime_mode = "simulate"
+    try:
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            cmd_runtime_start(
+                Namespace(
+                    bundle=str(bundle_abs),
+                    mode=runtime_mode,
+                    outputs_root=str(outputs_root),
+                    strict_intent_authority=False,
+                    verbose=False,
+                )
+            )
+    except SystemExit as exc:
+        if int(exc.code or 0) != 0:
+            return (f"runtime start for eval exited non-zero: {int(exc.code or 0)}",), {}
+
+    runtime_records = list((outputs_root / tenant_id / repo_id / ".akc" / "runtime").rglob("runtime_run.json"))
+    candidates = [p.resolve() for p in runtime_records if p.resolve() not in before_paths]
+    if not candidates:
+        return ("runtime eval could not find a newly emitted runtime_run.json record",), {}
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    record = json.loads(latest.read_text(encoding="utf-8"))
+
+    events_path = Path(str(record.get("events_path", ""))).expanduser().resolve()
+    evidence_path = Path(str(record.get("runtime_evidence_path", ""))).expanduser().resolve()
+    if not events_path.exists() or not evidence_path.exists():
+        return ("runtime eval missing events/evidence artifacts after runtime start",), {}
+
+    transcript_raw = json.loads(events_path.read_text(encoding="utf-8"))
+    if not isinstance(transcript_raw, list):
+        return ("runtime events transcript must be a JSON array",), {}
+    transcript = [dict(item) for item in transcript_raw if isinstance(item, dict)]
+
+    evidence_raw = json.loads(evidence_path.read_text(encoding="utf-8"))
+    if not isinstance(evidence_raw, list):
+        return ("runtime evidence must be a JSON array",), {}
+    runtime_evidence = tuple(
+        RuntimeEvidenceRecord.from_json_obj(item) for item in evidence_raw if isinstance(item, dict)
+    )
+
+    replay_manifest = RunManifest(
+        run_id=manifest.run_id,
+        tenant_id=manifest.tenant_id,
+        repo_id=manifest.repo_id,
+        ir_sha256=manifest.ir_sha256,
+        replay_mode="runtime_replay",
+        passes=manifest.passes,
+        runtime_bundle=manifest.runtime_bundle,
+        runtime_event_transcript=manifest.runtime_event_transcript,
+        runtime_evidence=runtime_evidence,
+    )
+
+    failures: list[str] = []
+    metrics, terminal_health_status = _runtime_metrics_from_evidence(evidence=runtime_evidence)
+
+    if need_replay:
+        replay1 = replay_runtime_execution(manifest=replay_manifest, transcript=transcript)
+        replay2 = replay_runtime_execution(manifest=replay_manifest, transcript=transcript)
+        payload1 = {
+            "runtime_run_id": replay1.runtime_run_id,
+            "mode": replay1.mode,
+            "transition_count": len(replay1.transitions),
+            "reconcile_decision_count": len(replay1.reconcile_decisions),
+            "terminal_health_status": replay1.terminal_health_status,
+            "transitions": [
+                {
+                    "event_id": item.event.get("event_id"),
+                    "event_type": item.event.get("event_type"),
+                    "transition": dict(item.transition) if item.transition is not None else None,
+                    "action_decision": item.action_decision,
+                    "retry_count": item.retry_count,
+                    "budget_burn": dict(item.budget_burn) if item.budget_burn is not None else None,
+                }
+                for item in replay1.transitions
+            ],
+            "reconcile_decisions": [
+                {
+                    "resource_id": item.resource_id,
+                    "operation_type": item.operation_type,
+                    "applied": item.applied,
+                    "rollback_chain": list(item.rollback_chain),
+                    "health_status": item.health_status,
+                    "payload": dict(item.payload),
+                }
+                for item in replay1.reconcile_decisions
+            ],
+        }
+        payload2 = {
+            "runtime_run_id": replay2.runtime_run_id,
+            "mode": replay2.mode,
+            "transition_count": len(replay2.transitions),
+            "reconcile_decision_count": len(replay2.reconcile_decisions),
+            "terminal_health_status": replay2.terminal_health_status,
+            "transitions": [
+                {
+                    "event_id": item.event.get("event_id"),
+                    "event_type": item.event.get("event_type"),
+                    "transition": dict(item.transition) if item.transition is not None else None,
+                    "action_decision": item.action_decision,
+                    "retry_count": item.retry_count,
+                    "budget_burn": dict(item.budget_burn) if item.budget_burn is not None else None,
+                }
+                for item in replay2.transitions
+            ],
+            "reconcile_decisions": [
+                {
+                    "resource_id": item.resource_id,
+                    "operation_type": item.operation_type,
+                    "applied": item.applied,
+                    "rollback_chain": list(item.rollback_chain),
+                    "health_status": item.health_status,
+                    "payload": dict(item.payload),
+                }
+                for item in replay2.reconcile_decisions
+            ],
+        }
+        deterministic_ok = payload1 == payload2
+        metrics["runtime_replay_determinism"] = 1.0 if deterministic_ok else 0.0
+        if not deterministic_ok:
+            failures.append("runtime replay determinism failed: repeated replay payloads differ")
+
+    max_rollbacks = _as_optional_int(kpis.get("max_rollbacks_total"))
+    if max_rollbacks is not None and int(metrics.get("runtime_rollbacks_total", 0.0)) > max_rollbacks:
+        failures.append(
+            f"runtime_rollbacks_total={int(metrics.get('runtime_rollbacks_total', 0.0))} > max={max_rollbacks}"
+        )
+    max_conv = kpis.get("max_convergence_latency_ms_avg")
+    if isinstance(max_conv, (int, float)) and not isinstance(max_conv, bool):
+        actual_conv = float(metrics.get("runtime_convergence_latency_ms_avg", 0.0))
+        if actual_conv > float(max_conv):
+            failures.append(f"runtime_convergence_latency_ms_avg={actual_conv:.3f} > max={float(max_conv):.3f}")
+    max_mttr = kpis.get("max_mttr_like_repair_latency_ms_avg")
+    if isinstance(max_mttr, (int, float)) and not isinstance(max_mttr, bool):
+        actual_mttr = float(metrics.get("runtime_mttr_like_repair_latency_ms_avg", 0.0))
+        if actual_mttr > float(max_mttr):
+            failures.append(f"runtime_mttr_like_repair_latency_ms_avg={actual_mttr:.3f} > max={float(max_mttr):.3f}")
+    allowed_health_raw = kpis.get("require_terminal_health_in")
+    if isinstance(allowed_health_raw, list) and allowed_health_raw:
+        allowed_health = {str(x).strip().lower() for x in allowed_health_raw if str(x).strip()}
+        actual_health = terminal_health_status
+        if allowed_health and actual_health not in allowed_health:
+            failures.append(f"runtime_terminal_health_status={actual_health!r} not in {sorted(allowed_health)!r}")
+
+    return tuple(failures), metrics
 
 
 def _load_suite(path: Path) -> dict[str, Any]:
@@ -447,9 +749,7 @@ def _run_single_task(
             expected_tenant_id=tenant_id,
             expected_repo_id=repo_id,
         )
-        computed_status = (
-            "failed" if any(p.status == "failed" for p in manifest.passes) else "succeeded"
-        )
+        computed_status = "failed" if any(p.status == "failed" for p in manifest.passes) else "succeeded"
         run_status = str(task.get("status_override", computed_status))
     else:
         base = outputs_root / tenant_id / repo_id
@@ -504,14 +804,36 @@ def _run_single_task(
     deterministic_passed, deterministic_failures, metrics = _deterministic_check(
         task=task, manifest=manifest, run_status=run_status
     )
+    runtime_failures, runtime_metrics = _runtime_multi_signal_check(
+        task=task,
+        outputs_root=outputs_root,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+    )
+    if runtime_failures:
+        deterministic_passed = False
+        deterministic_failures = tuple(list(deterministic_failures) + list(runtime_failures))
+    metrics = {**metrics, **runtime_metrics}
+    if isinstance(manifest.control_plane, dict):
+        tc_raw = manifest.control_plane.get("time_compression_metrics")
+        if isinstance(tc_raw, dict):
+            for key in (
+                "intent_to_healthy_runtime_ms",
+                "compile_to_healthy_runtime_ms",
+                "compression_factor_vs_baseline",
+            ):
+                value = tc_raw.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    metrics[key] = float(value)
     judge_score, judge_reason = _selective_judge_score(task=task, manifest=manifest)
     if judge_score is not None:
         min_judge = float((task.get("judge") or {}).get("min_score", 0.0))
         if float(judge_score) < min_judge:
             deterministic_passed = False
             deterministic_failures = tuple(
-                list(deterministic_failures)
-                + [f"judge_score={judge_score:.3f} below min_score={min_judge:.3f}"]
+                list(deterministic_failures) + [f"judge_score={judge_score:.3f} below min_score={min_judge:.3f}"]
             )
     return EvalTaskResult(
         task_id=task_id,
@@ -524,27 +846,112 @@ def _run_single_task(
         judge_reason=judge_reason,
         run_manifest_path=str(manifest_path),
         metrics=metrics,
+        benchmark_group=(
+            str(task.get("benchmark_group", "")).strip() if str(task.get("benchmark_group", "")).strip() else None
+        ),
+        baseline_duration_hours=(
+            float(baseline_duration_hours_raw)
+            if isinstance((baseline_duration_hours_raw := task.get("baseline_duration_hours")), (int, float))
+            and not isinstance(baseline_duration_hours_raw, bool)
+            else None
+        ),
+        target_duration_hours=(
+            float(target_duration_hours_raw)
+            if isinstance((target_duration_hours_raw := task.get("target_duration_hours")), (int, float))
+            and not isinstance(target_duration_hours_raw, bool)
+            else None
+        ),
+        confidence_weight=(
+            float(confidence_weight_raw)
+            if isinstance((confidence_weight_raw := task.get("confidence_weight")), (int, float))
+            and not isinstance(confidence_weight_raw, bool)
+            else None
+        ),
     )
+
+
+def _benchmark_summary(*, tasks: list[EvalTaskResult]) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        group = str(task.benchmark_group or "").strip()
+        if not group:
+            continue
+        row = groups.setdefault(
+            group,
+            {
+                "task_count": 0,
+                "weights_total": 0.0,
+                "intent_to_healthy_runtime_ms": [],
+                "compile_to_healthy_runtime_ms": [],
+                "compression_factor_vs_baseline": [],
+                "pass_count": 0,
+            },
+        )
+        row["task_count"] = int(row["task_count"]) + 1
+        weight = float(task.confidence_weight) if task.confidence_weight is not None else 1.0
+        row["weights_total"] = float(row["weights_total"]) + weight
+        if task.deterministic_passed:
+            row["pass_count"] = int(row["pass_count"]) + 1
+        for metric_name in (
+            "intent_to_healthy_runtime_ms",
+            "compile_to_healthy_runtime_ms",
+            "compression_factor_vs_baseline",
+        ):
+            metric_value = task.metrics.get(metric_name)
+            if isinstance(metric_value, (int, float)) and not isinstance(metric_value, bool):
+                cast(list[float], row[metric_name]).append(float(metric_value))
+    out_groups: dict[str, Any] = {}
+    for group, row in groups.items():
+        intent_values = cast(list[float], row["intent_to_healthy_runtime_ms"])
+        compile_values = cast(list[float], row["compile_to_healthy_runtime_ms"])
+        compression_values = cast(list[float], row["compression_factor_vs_baseline"])
+        task_count = int(row["task_count"])
+        pass_count = int(row["pass_count"])
+        out_groups[group] = {
+            "task_count": task_count,
+            "sample_count": len(intent_values),
+            "pass_rate": _safe_ratio(pass_count, task_count),
+            "intent_to_healthy_runtime_ms_p50": _percentile(values=intent_values, pct=50),
+            "intent_to_healthy_runtime_ms_p90": _percentile(values=intent_values, pct=90),
+            "compile_to_healthy_runtime_ms_p50": _percentile(values=compile_values, pct=50),
+            "compile_to_healthy_runtime_ms_p90": _percentile(values=compile_values, pct=90),
+            "compression_factor_vs_baseline_avg": (
+                float(sum(compression_values) / float(len(compression_values))) if compression_values else 0.0
+            ),
+        }
+    return {"groups": out_groups}
 
 
 def _compute_summary(*, tasks: list[EvalTaskResult]) -> dict[str, float]:
     n = len(tasks)
     passed_count = sum(1 for t in tasks if t.deterministic_passed)
     failed_count = n - passed_count
-    avg_repair_iterations = (
-        sum(t.metrics.get("repair_iterations", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
-    )
-    avg_wall_time_ms = (
-        sum(t.metrics.get("wall_time_ms", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
-    )
-    avg_total_tokens = (
-        sum(t.metrics.get("total_tokens", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
-    )
+    avg_repair_iterations = sum(t.metrics.get("repair_iterations", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
+    avg_wall_time_ms = sum(t.metrics.get("wall_time_ms", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
+    avg_total_tokens = sum(t.metrics.get("total_tokens", 0.0) for t in tasks) / float(n) if n > 0 else 0.0
     judge_scored = [t.judge_score for t in tasks if t.judge_score is not None]
     avg_judge_score = (
-        sum(float(x) for x in judge_scored if x is not None) / float(len(judge_scored))
-        if judge_scored
-        else 0.0
+        sum(float(x) for x in judge_scored if x is not None) / float(len(judge_scored)) if judge_scored else 0.0
+    )
+    runtime_replay_scored = [
+        t.metrics["runtime_replay_determinism"] for t in tasks if "runtime_replay_determinism" in t.metrics
+    ]
+    runtime_replay_determinism_rate = (
+        sum(runtime_replay_scored) / float(len(runtime_replay_scored)) if runtime_replay_scored else 0.0
+    )
+    runtime_rollbacks_scored = [
+        t.metrics["runtime_rollbacks_total"] for t in tasks if "runtime_rollbacks_total" in t.metrics
+    ]
+    avg_runtime_rollbacks_total = (
+        sum(runtime_rollbacks_scored) / float(len(runtime_rollbacks_scored)) if runtime_rollbacks_scored else 0.0
+    )
+    runtime_convergence_scored = [
+        t.metrics["runtime_convergence_latency_ms_avg"]
+        for t in tasks
+        if "runtime_convergence_latency_ms_avg" in t.metrics
+    ]
+    avg_runtime_convergence_latency_ms = (
+        sum(runtime_convergence_scored) / float(len(runtime_convergence_scored)) if runtime_convergence_scored else 0.0
     )
     return {
         "tasks_total": float(n),
@@ -555,6 +962,9 @@ def _compute_summary(*, tasks: list[EvalTaskResult]) -> dict[str, float]:
         "avg_wall_time_ms": float(avg_wall_time_ms),
         "avg_total_tokens": float(avg_total_tokens),
         "avg_judge_score": float(avg_judge_score),
+        "runtime_replay_determinism_rate": float(runtime_replay_determinism_rate),
+        "avg_runtime_rollbacks_total": float(avg_runtime_rollbacks_total),
+        "avg_runtime_convergence_latency_ms_avg": float(avg_runtime_convergence_latency_ms),
     }
 
 
@@ -589,6 +999,33 @@ def _evaluate_regression_gates(
                 expected=max_avg_repairs,
             )
         )
+
+    min_runtime_replay_determinism_rate = float(thresholds.get("min_runtime_replay_determinism_rate", 0.0))
+    actual_runtime_replay_determinism_rate = float(summary.get("runtime_replay_determinism_rate", 0.0))
+    if actual_runtime_replay_determinism_rate < min_runtime_replay_determinism_rate:
+        violations.append(
+            RegressionGateViolation(
+                gate="min_runtime_replay_determinism_rate",
+                message="runtime replay determinism rate below threshold",
+                actual=actual_runtime_replay_determinism_rate,
+                expected=min_runtime_replay_determinism_rate,
+            )
+        )
+
+    max_avg_runtime_rollbacks_total = thresholds.get("max_avg_runtime_rollbacks_total")
+    if isinstance(max_avg_runtime_rollbacks_total, (int, float)) and not isinstance(
+        max_avg_runtime_rollbacks_total, bool
+    ):
+        actual_avg_runtime_rollbacks_total = float(summary.get("avg_runtime_rollbacks_total", 0.0))
+        if actual_avg_runtime_rollbacks_total > float(max_avg_runtime_rollbacks_total):
+            violations.append(
+                RegressionGateViolation(
+                    gate="max_avg_runtime_rollbacks_total",
+                    message="average runtime rollback count above threshold",
+                    actual=actual_avg_runtime_rollbacks_total,
+                    expected=float(max_avg_runtime_rollbacks_total),
+                )
+            )
 
     if baseline_summary is not None:
         max_success_rate_drop = float(thresholds.get("max_success_rate_drop", 0.02))
@@ -649,9 +1086,7 @@ def run_eval_suite(
             raw = json.loads(base_fp.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and isinstance(raw.get("summary"), dict):
                 baseline_summary = {
-                    str(k): float(v)
-                    for k, v in dict(raw["summary"]).items()
-                    if isinstance(v, (int, float))
+                    str(k): float(v) for k, v in dict(raw["summary"]).items() if isinstance(v, (int, float))
                 }
 
     thresholds = dict(suite.get("regression_thresholds") or {})
@@ -661,10 +1096,12 @@ def run_eval_suite(
         thresholds=thresholds,
     )
     passed = gates_ok and all(t.deterministic_passed for t in task_results)
+    benchmark_summary = _benchmark_summary(tasks=task_results)
     return EvalReport(
         suite_version=str(suite.get("suite_version", "v1")),
         passed=passed,
         summary=summary,
         tasks=tuple(task_results),
         gate_violations=gate_violations,
+        benchmark_summary=benchmark_summary,
     )

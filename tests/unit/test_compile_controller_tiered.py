@@ -281,9 +281,7 @@ def test_controller_escalates_generation_tier_after_failures() -> None:
 
     assert res.status == "succeeded"
     assert res.accounting["tier_history"]
-    tiers = [
-        e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}
-    ]
+    tiers = [e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}]
     # Starts at small and should reach at least medium after failures (given all tiers present).
     assert "small" in tiers
     assert "medium" in tiers or "large" in tiers
@@ -382,9 +380,7 @@ def test_controller_escalation_stops_at_largest_tier() -> None:
     )
 
     assert res.status == "succeeded"
-    tiers = [
-        e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}
-    ]
+    tiers = [e["tier"] for e in res.accounting["tier_history"] if e["stage"] in {"generate", "repair"}]
     assert "large" in tiers
     assert tiers[-1] == "large"
 
@@ -917,9 +913,7 @@ def test_llm_vcr_mode_uses_prompt_keyed_cache_without_llm_calls() -> None:
         repo_id="repo1",
         ir_sha256="e" * 64,
         replay_mode="llm_vcr",
-        passes=(
-            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
-        ),
+        passes=(PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),),
     )
     llm = _NoCallLLM()
     ex = _ScriptedExecutor(exit_codes=[0])
@@ -1262,7 +1256,7 @@ def test_policy_executor_includes_wasm_controls_in_policy_context_and_constraint
     wasm = dict(ctx["wasm"])  # type: ignore[arg-type]
     profile = dict(wasm["platform_capability_profile"])  # type: ignore[arg-type]
     assert ctx["backend"] == "wasm"
-    assert wasm["network_enabled"] is True
+    assert wasm["network_enabled"] is False
     assert wasm["network_exception"] == "ticket-123"
     assert wasm["preopen_dirs"] == ["/safe/workspace"]
     assert wasm["writable_preopen_dirs"] == ["/safe/workspace"]
@@ -1525,7 +1519,7 @@ def test_policy_denied_executor_run_is_persisted_with_scope_and_context() -> Non
     assert deny["reason"] == "policy.prod.docker.non_root_user_required"
     assert deny["context"]["backend"] == "docker"
     assert deny["context"]["docker"]["user_is_non_root"] is False
-    assert deny["context"]["docker"]["network_mode"] == "enabled"
+    assert deny["context"]["docker"]["network_mode"] == "none"
 
     loaded = mem.plan_state.load_plan(
         tenant_id="tenant-a",

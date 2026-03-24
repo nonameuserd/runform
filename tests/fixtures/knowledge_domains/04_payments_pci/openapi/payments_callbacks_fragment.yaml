@@ -1,0 +1,27 @@
+openapi: "3.0.3"
+info:
+  title: Payments Callbacks (fixture)
+  version: "1.0"
+paths:
+  /callbacks/payment-status:
+    post:
+      summary: Payment status callback
+      description: |
+        Callbacks MUST use HTTPS.
+        Callbacks MUST NOT embed personally identifiable information in query strings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payment_id:
+                  type: string
+                customer_email:
+                  type: string
+              required: [payment_id]
+      responses:
+        "200":
+          description: ok
+

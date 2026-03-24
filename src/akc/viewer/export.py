@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from akc.knowledge.observability import build_knowledge_observation_payload
 from akc.memory.models import require_non_empty
 
 from .models import EvidenceRef, ViewerSnapshot
@@ -89,17 +90,33 @@ def export_bundle(
 
     # Write plan snapshot as JSON (schema envelope is already present).
     (data_dir / "plan.json").write_text(
-        json.dumps(snapshot.plan.to_json_obj(), indent=2, sort_keys=True, ensure_ascii=False)
-        + "\n",
+        json.dumps(snapshot.plan.to_json_obj(), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
     if snapshot.manifest is not None:
         (data_dir / "manifest.json").write_text(
-            json.dumps(dict(snapshot.manifest), indent=2, sort_keys=True, ensure_ascii=False)
-            + "\n",
+            json.dumps(dict(snapshot.manifest), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+    kobs_obj = build_knowledge_observation_payload(
+        knowledge_envelope=snapshot.knowledge_envelope,
+        conflict_reports=snapshot.conflict_reports,
+        knowledge_mediation_envelope=snapshot.knowledge_mediation_envelope,
+    )
+    (data_dir / "knowledge_obs.json").write_text(
+        json.dumps(kobs_obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    panels_obj = snapshot.operator_panels
+    if panels_obj is None:
+        panels_obj = {"forensics": None, "playbook": None, "profile_panel": None, "autopilot": None}
+    (data_dir / "operator_panels.json").write_text(
+        json.dumps(panels_obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
     files_dir = (out_dir / "files").resolve()
     _ensure_under(root=out_dir, p=files_dir)
@@ -107,9 +124,13 @@ def export_bundle(
 
     copied = 0
     for r in _iter_evidence(snapshot, include_all=include_all_evidence):
-        copied += _safe_copy(
-            src_root=snapshot.scoped_outputs_dir, relpath=r.relpath, dst_root=files_dir
-        )
+        copied += _safe_copy(src_root=snapshot.scoped_outputs_dir, relpath=r.relpath, dst_root=files_dir)
+    for rel in (
+        ".akc/knowledge/snapshot.json",
+        ".akc/knowledge/snapshot.fingerprint.json",
+        ".akc/knowledge/mediation.json",
+    ):
+        copied += _safe_copy(src_root=snapshot.scoped_outputs_dir, relpath=rel, dst_root=files_dir)
 
     zip_path: Path | None = None
     if make_zip:

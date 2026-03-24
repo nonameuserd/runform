@@ -1,0 +1,149 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "presence",
+    "signals": [],
+    "expected_evidence_types": [
+      "reconcile_outcome"
+    ],
+    "otel_metric_signals": [
+      {
+        "metric_name": "other"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_outcome",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "operation_type": "apply",
+        "applied": true
+      }
+    },
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true,
+        "health_status": "healthy"
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    }
+  ],
+  "otel_records": null,
+  "otel_contract": null,
+  "otel_metric_records": [
+    {
+      "akc_metric_export_version": 1,
+      "source": "runtime.metric_point",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "metric": {
+        "name": "requests_total",
+        "kind": "sum",
+        "as_int": 3,
+        "attributes": {
+          "handler": "ping"
+        }
+      }
+    }
+  ],
+  "success_criterion_id": "sc",
+  "expected": {
+    "inputs_sha256": "642fe9a57fd490c04a5e5a3e9806a31e32c9738c397d0ef300cb1743c53afeb2",
+    "verdict_sha256": "97bfcdf0a4cc6f79e967b62921efbc822bf0bac2d96ba193cdb0474a6265d0cf",
+    "combined_sha256": "ee015331f1cb2ea24828cada2c12d20715122b0382e1d47be7e8cfd80805b50d",
+    "step_output": {
+      "passed": false,
+      "failures": [
+        "sc (otel_metric_signal:0:other): no metric points matched selector"
+      ],
+      "evaluated_success_criteria": 5,
+      "checks": [
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": [
+              "failed",
+              "degraded",
+              "unknown",
+              "healthy"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_outcome_applied",
+          "passed": true,
+          "evidence": {
+            "reconcile_outcome_count": 1,
+            "not_applied_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:reconcile_outcome",
+          "passed": true,
+          "evidence": {
+            "observed_evidence_types": [
+              "reconcile_outcome",
+              "reconcile_resource_status",
+              "terminal_health"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "otel_metric_signal:0:other",
+          "passed": false,
+          "evidence": {
+            "metric_name": "other",
+            "matched_points": 0,
+            "selector_attributes": {}
+          },
+          "message": "no metric points matched selector"
+        }
+      ]
+    }
+  },
+  "otel_metric_parse_rejected_reason": null
+}

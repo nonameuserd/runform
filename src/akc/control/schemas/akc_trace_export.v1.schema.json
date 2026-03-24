@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:trace_export:v1",
+  "title": "AKC trace export record (single JSON line)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["akc_trace_export_version", "source", "resource", "span"],
+  "properties": {
+    "akc_trace_export_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "compile.trace_span",
+        "runtime.trace_span",
+        "runtime.coordination_audit",
+        "runtime.autopilot_scope"
+      ]
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["attributes"],
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "service.name",
+            "akc.tenant_id",
+            "akc.repo_id",
+            "akc.run_id"
+          ],
+          "properties": {
+            "service.name": { "type": "string", "minLength": 1 },
+            "akc.tenant_id": { "type": "string", "minLength": 1 },
+            "akc.repo_id": { "type": "string", "minLength": 1 },
+            "akc.run_id": { "type": "string", "minLength": 1 },
+            "akc.stable_intent_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "akc.runtime_run_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "trace_id",
+        "span_id",
+        "name",
+        "kind",
+        "start_time_unix_nano",
+        "end_time_unix_nano",
+        "status"
+      ],
+      "properties": {
+        "trace_id": { "type": "string", "minLength": 1 },
+        "span_id": { "type": "string", "minLength": 1 },
+        "parent_span_id": { "type": ["string", "null"] },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "start_time_unix_nano": { "type": "integer", "minimum": 0 },
+        "end_time_unix_nano": { "type": "integer", "minimum": 0 },
+        "attributes": { "type": ["object", "null"], "additionalProperties": true },
+        "status": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

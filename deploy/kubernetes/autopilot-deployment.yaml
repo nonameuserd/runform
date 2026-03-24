@@ -1,0 +1,149 @@
+# Reference Kubernetes Deployment: replicas=1 for single-writer by default.
+# For cluster-wide leadership with >1 Pod (not recommended without coordination), use
+# --lease-backend k8s --lease-namespace <ns> and RBAC below.
+#
+# Apply (namespace, RBAC, workload, PVC, placeholder secret):
+#   kubectl apply -f deploy/kubernetes/autopilot-deployment.yaml
+#
+# Liveness: process check (replace with HTTP probe if you add a metrics sidecar).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: akc-autopilot
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akc-autopilot-env
+  namespace: akc-autopilot
+data:
+  AKC_LIVING_AUTOMATION_PROFILE: "living_loop_unattended_v1"
+  AKC_AUTOPILOT_LEASE_BACKEND: "k8s"
+  AKC_AUTOPILOT_LEASE_NAMESPACE: "akc-autopilot"
+  AKC_AUTOPILOT_EXPECT_REPLICAS: "1"
+  # Paths inside the container — mount volumes accordingly
+  AKC_OUTPUTS_ROOT: "/data/outputs"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: akc-autopilot
+  namespace: akc-autopilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: akc-autopilot-lease
+  namespace: akc-autopilot
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: akc-autopilot-lease
+  namespace: akc-autopilot
+subjects:
+  - kind: ServiceAccount
+    name: akc-autopilot
+    namespace: akc-autopilot
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: akc-autopilot-lease
+---
+# Placeholders — replace with real PVC/Secret in your cluster.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: akc-outputs
+  namespace: akc-autopilot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: akc-ingest-state
+  namespace: akc-autopilot
+type: Opaque
+stringData:
+  ingest_state.json: "{}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akc-runtime-autopilot
+  namespace: akc-autopilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: akc-runtime-autopilot
+  template:
+    metadata:
+      labels:
+        app: akc-runtime-autopilot
+    spec:
+      serviceAccountName: akc-autopilot
+      containers:
+        - name: autopilot
+          image: akc-runtime-autopilot:local
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              exec akc runtime autopilot \
+                --outputs-root /data/outputs \
+                --ingest-state-path /data/state/ingest_state.json \
+                --living-automation-profile living_loop_unattended_v1 \
+                --unattended-defaults \
+                --env-profile prod \
+                --lease-backend k8s \
+                --lease-namespace akc-autopilot \
+                --controller-id "${POD_NAME}"
+          envFrom:
+            - configMapRef:
+                name: akc-autopilot-env
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: outputs
+              mountPath: /data/outputs
+            - name: ingest-state
+              mountPath: /data/state
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pgrep -f 'akc.*runtime.*autopilot' >/dev/null || exit 1
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: akc-outputs
+        - name: ingest-state
+          secret:
+            secretName: akc-ingest-state

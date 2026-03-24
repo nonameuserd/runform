@@ -12,109 +12,152 @@ from __future__ import annotations
 
 import sys
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, cast
 
-from akc.compile.controller_config import ControllerConfig, TierConfig
-from akc.compile.executors import StageRunResult, run_stage
+from akc.compile.controller_budget_loop import run_budgeted_generate_execute_repair_loop
+from akc.compile.controller_config import ControllerConfig
+from akc.compile.controller_patch_utils import (
+    _derive_full_test_command,
+    _estimate_cost_usd,
+)
+from akc.compile.controller_plan_helpers import (
+    _replayed_retrieval_context,
+    _set_step_outputs,
+    _set_step_status,
+)
+from akc.compile.controller_policy_runtime import setup_policy_runtime
+from akc.compile.controller_types import Candidate, ControllerResult
 from akc.compile.interfaces import (
-    ExecutionResult,
     Executor,
     LLMBackend,
     TenantRepoScope,
 )
 from akc.compile.ir_builder import build_ir_document_from_plan
-from akc.compile.ir_passes import DefaultIRGeneratePromptPass, DefaultIRRepairPromptPass
-from akc.compile.patch_emitter import (
-    ModelCallNeeded,
-    ResolvedPatch,
-    StageName,
-    candidate_from_patch_text,
-    patch_sha256_hex,
-    resolve_patch_candidate_from_prompt,
+from akc.compile.ir_prompt_context import (
+    build_reference_intent_contract_for_retrieval,
+    effective_intent_contract_shape_for_compile_prompts,
+    intent_prompt_context_from_ir_and_resolve,
 )
-from akc.compile.planner import advance_plan
-from akc.compile.provenance_mapper import build_retrieval_documents_item_ids_and_provenance
-from akc.compile.repair import parse_execution_failure
-from akc.compile.retriever import retrieve_context
+from akc.compile.knowledge_extractor import (
+    build_intent_constraint_ids_by_assertion,
+    extract_knowledge_snapshot,
+)
+from akc.compile.planner import (
+    advance_plan,
+    annotate_constraint_hints_for_verifier,
+    inject_knowledge_into_plan_step_inputs,
+    prior_knowledge_snapshot_from_plan,
+)
+from akc.compile.provenance_mapper import (
+    build_doc_id_to_provenance_map,
+    build_retrieval_documents_item_ids_and_provenance,
+)
+from akc.compile.retriever import boost_retrieved_documents_for_knowledge_evidence, retrieve_context
 from akc.compile.rust_bridge import RustExecConfig
-from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
+from akc.compile.why_graph_writer import upsert_knowledge_snapshot_into_why_graph
 from akc.control.policy import (
-    CapabilityAttenuator,
-    CapabilityIssuer,
-    DefaultDenyPolicyEngine,
     PolicyEngine,
-    PolicyWrappedExecutor,
-    PolicyWrappedLLMBackend,
-    SubprocessOpaEvaluator,
-    ToolAuthorizationError,
-    ToolAuthorizationPolicy,
 )
 from akc.control.tracing import TraceSpan, new_span_id, new_trace_id, now_unix_nano
-from akc.memory.code_memory import make_item
+from akc.execute.strong import create_strong_underlying_executor
+from akc.intent import (
+    compile_intent_spec,
+    compute_intent_fingerprint,
+    project_intent_operating_bounds_to_policy_context,
+    project_stage_timeout_s,
+)
+from akc.intent.models import ConstraintLink, IntentSpec, SuccessCriterionLink
+from akc.intent.plan_step_intent import build_plan_step_intent_ref
+from akc.intent.resolve import resolve_compile_intent_context
+from akc.intent.store import IntentStore
+from akc.knowledge import knowledge_provenance_fingerprint, knowledge_semantic_fingerprint
+from akc.knowledge.persistence import KNOWLEDGE_MEDIATION_RELPATH, write_knowledge_mediation_report_artifact
 from akc.memory.models import (
     JSONValue,
-    PlanState,
     PlanStep,
-    PlanStepStatus,
+    json_value_as_float,
+    json_value_as_int,
+    json_value_as_optional_float,
+    json_value_as_optional_int,
     now_ms,
     require_non_empty,
 )
 from akc.memory.plan_state import PlanStateStore
+from akc.memory.why_conflicts import enrich_conflict_reports_from_mediation
+from akc.memory.why_graph import ConflictDetector
+from akc.promotion import intent_declares_deployable_objective
+from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_success_criteria
 from akc.run.manifest import ReplayMode, RunManifest
-from akc.run.replay import decide_replay_for_pass
-
-RunStatus = Literal["succeeded", "failed", "budget_exhausted"]
 
 
-@dataclass(frozen=True, slots=True)
-class Candidate:
-    """A single generate→execute attempt."""
+def _hard_allow_network_from_executor(*, executor: Executor) -> bool:
+    """Infer the hard executor/network allow setting.
 
-    tier: str
-    stage: str
-    llm_text: str
-    touched_paths: tuple[str, ...]
-    test_paths: tuple[str, ...]
-    execution: ExecutionResult | None
-    execution_stage: str | None
-    execution_command: list[str] | None
-    score: int
-    attempt_idx: int
-    created_at_ms: int
+    This is used to intersect intent `allow_network` requests with the
+    configured sandbox/network hard defaults.
+    """
 
-    def to_json_obj(self) -> dict[str, Any]:
-        exe = None
-        if self.execution is not None:
-            exe = {
-                "stage": self.execution_stage,
-                "command": list(self.execution_command or []),
-                "exit_code": int(self.execution.exit_code),
-                "stdout": self.execution.stdout,
-                "stderr": self.execution.stderr,
-                "duration_ms": self.execution.duration_ms,
-            }
-        return {
-            "tier": self.tier,
-            "stage": self.stage,
-            "llm_text": self.llm_text,
-            "touched_paths": list(self.touched_paths),
-            "test_paths": list(self.test_paths),
-            "has_test_changes": bool(self.test_paths),
-            "execution": exe,
-            "score": int(self.score),
-            "attempt_idx": int(self.attempt_idx),
-            "created_at_ms": int(self.created_at_ms),
-        }
+    # Strong wrapper: cfg.allow_network indicates the hard allowed state.
+    cfg = getattr(executor, "cfg", None)
+    if cfg is not None and hasattr(cfg, "allow_network"):
+        try:
+            return bool(cfg.allow_network)
+        except Exception:
+            pass
+
+    rust_cfg = getattr(executor, "rust_cfg", None)
+    if rust_cfg is not None and hasattr(rust_cfg, "allow_network"):
+        try:
+            return bool(rust_cfg.allow_network)
+        except Exception:
+            pass
+
+    disable_network = getattr(executor, "disable_network", None)
+    if disable_network is not None:
+        return not bool(disable_network)
+
+    # Fail-closed: if we can't infer, assume "network denied".
+    return False
 
 
-@dataclass(frozen=True, slots=True)
-class ControllerResult:
-    status: RunStatus
-    plan: PlanState
-    best_candidate: Candidate | None
-    accounting: dict[str, Any]
+def _apply_effective_allow_network_to_executor(*, executor: Executor, allow_network: bool) -> Executor:
+    """Return an executor with network tightened to `allow_network`.
+
+    Defense-in-depth: intent bounds should never widen network authority beyond
+    the hard sandbox/executor defaults.
+    """
+
+    hard_allow = _hard_allow_network_from_executor(executor=executor)
+    if bool(hard_allow) == bool(allow_network):
+        return executor
+
+    cfg = getattr(executor, "cfg", None)
+    if cfg is not None and hasattr(cfg, "allow_network") and hasattr(executor, "underlying"):
+        # Strong sandbox wrapper: rebuild underlying so the tightened network
+        # policy is enforced at runtime.
+        new_cfg = replace(cfg, allow_network=bool(allow_network))
+        new_underlying = create_strong_underlying_executor(cfg=new_cfg)
+        return cast(Executor, replace(cast(Any, executor), cfg=new_cfg, underlying=new_underlying))
+
+    if cfg is not None and hasattr(cfg, "allow_network"):
+        # Dev sandbox wrapper: underlying is created per-run based on cfg.
+        new_cfg = replace(cfg, allow_network=bool(allow_network))
+        return cast(Executor, replace(cast(Any, executor), cfg=new_cfg))
+
+    rust_cfg = getattr(executor, "rust_cfg", None)
+    if rust_cfg is not None and hasattr(rust_cfg, "allow_network"):
+        new_rust_cfg = replace(rust_cfg, allow_network=bool(allow_network))
+        return cast(Executor, replace(cast(Any, executor), rust_cfg=new_rust_cfg))
+
+    if hasattr(executor, "disable_network"):
+        disable_network = not bool(allow_network)
+        return cast(Executor, replace(cast(Any, executor), disable_network=disable_network))
+
+    # Unknown executor: can't tighten at runtime.
+    # Authorization will still be narrowed via policy context.
+    return executor
 
 
 def _platform_label() -> str:
@@ -134,11 +177,7 @@ def _docker_apparmor_available() -> bool:
         from pathlib import Path
 
         return (
-            Path("/sys/module/apparmor/parameters/enabled")
-            .read_text(encoding="utf-8")
-            .strip()
-            .lower()
-            .startswith("y")
+            Path("/sys/module/apparmor/parameters/enabled").read_text(encoding="utf-8").strip().lower().startswith("y")
         )
     except OSError:
         return False
@@ -181,9 +220,7 @@ def _wasm_policy_context(
     strict_profile = policy_mode == "enforce" or bool(rust_cfg.wasm_normalization_strict)
     writable_preopen_dirs = list(rust_cfg.allowed_write_paths)
     writable_preopen_dir_set = set(writable_preopen_dirs)
-    read_only_preopen_dirs = [
-        path for path in rust_cfg.preopen_dirs if path not in writable_preopen_dir_set
-    ]
+    read_only_preopen_dirs = [path for path in rust_cfg.preopen_dirs if path not in writable_preopen_dir_set]
 
     required_controls = [
         name
@@ -258,9 +295,7 @@ def _docker_policy_context(
     network_enabled = not bool(getattr(effective, "disable_network", False))
     apparmor_available = _docker_apparmor_available()
     effective_seccomp_profile = seccomp_profile or "runtime/default"
-    effective_apparmor_profile = apparmor_profile or (
-        "docker-default" if apparmor_available else ""
-    )
+    effective_apparmor_profile = apparmor_profile or ("docker-default" if apparmor_available else "")
     return {
         "network_enabled": network_enabled,
         "network_mode": "enabled" if network_enabled else "none",
@@ -321,376 +356,6 @@ def _build_executor_policy_context(
     return ctx
 
 
-def _tier_order(name: str) -> int:
-    if name == "small":
-        return 0
-    if name == "medium":
-        return 1
-    if name == "large":
-        return 2
-    return 99
-
-
-def _escalate_tier(*, current: TierConfig, config: ControllerConfig) -> TierConfig:
-    """Escalate tier conservatively: small→medium→large (if available)."""
-
-    tiers = sorted(config.tiers.values(), key=lambda t: _tier_order(t.name))
-    for idx, t in enumerate(tiers):
-        if t.name == current.name:
-            if idx + 1 < len(tiers):
-                return tiers[idx + 1]
-            return current
-    return current
-
-
-def _best_of(a: Candidate | None, b: Candidate) -> Candidate:
-    if a is None:
-        return b
-    # Higher score wins; tie-break deterministically on attempt_idx.
-    if b.score > a.score:
-        return b
-    if b.score < a.score:
-        return a
-    return b if b.attempt_idx >= a.attempt_idx else a
-
-
-def _extract_patch_paths(patch_text: str) -> list[str]:
-    """Extract touched file paths from a unified diff.
-
-    Best-effort and deterministic: returns stable sorted unique paths.
-    """
-    paths: set[str] = set()
-    for raw in (patch_text or "").splitlines():
-        line = raw.strip()
-        # Common forms:
-        # --- a/foo.py
-        # +++ b/foo.py
-        if line.startswith("+++ "):
-            p = line[4:].strip()
-            if p.startswith("b/"):
-                p = p[2:]
-            if p and p != "/dev/null":
-                paths.add(p)
-        elif line.startswith("--- "):
-            p = line[4:].strip()
-            if p.startswith("a/"):
-                p = p[2:]
-            if p and p != "/dev/null":
-                paths.add(p)
-    return sorted(paths)
-
-
-def _is_test_path(p: str) -> bool:
-    p2 = str(p or "").replace("\\", "/")
-    parts = [seg for seg in p2.split("/") if seg]
-    if not parts:
-        return False
-    if parts[0] in {"test", "tests"}:
-        return True
-    leaf = parts[-1]
-    if leaf.startswith("test_") and leaf.endswith(".py"):
-        return True
-    return bool(leaf.endswith("_test.py"))
-
-
-def _policy_requires_tests(
-    *,
-    touched_paths: list[str],
-    require_tests_for_non_test_changes: bool,
-) -> tuple[bool, dict[str, Any]]:
-    """Return (ok, evidence) for the tests-generated-by-default heuristic."""
-
-    tests = [p for p in touched_paths if _is_test_path(p)]
-    non_tests = [p for p in touched_paths if not _is_test_path(p)]
-    if not require_tests_for_non_test_changes:
-        return True, {
-            "touched_paths": touched_paths,
-            "test_paths": tests,
-            "non_test_paths": non_tests,
-        }
-    # Only require tests if the patch touches at least one non-test path.
-    if non_tests and not tests:
-        return False, {
-            "touched_paths": touched_paths,
-            "test_paths": tests,
-            "non_test_paths": non_tests,
-        }
-    return True, {
-        "touched_paths": touched_paths,
-        "test_paths": tests,
-        "non_test_paths": non_tests,
-    }
-
-
-def _score_execution(result: ExecutionResult | None) -> int:
-    if result is None:
-        return 0
-    # Simple monotone scoring: pass >> fail. Keep it stable for tests.
-    return 1000 if int(result.exit_code) == 0 else 10
-
-
-def _score_candidate(
-    *,
-    execution: ExecutionResult | None,
-    ok_tests_policy: bool,
-    promotable: bool,
-    verifier_passed: bool | None,
-) -> int:
-    """Deterministic scoring for monotonic repair progress.
-
-    We intentionally incorporate policy + verifier outcomes so that a repair
-    candidate can be considered "improving" even when the test exit code
-    stays the same (e.g. verifier vetoes due to patch safety issues).
-    """
-
-    base = _score_execution(execution)
-    if base != 1000:
-        return base
-
-    # Differentiate smoke-only pass vs full promotable pass.
-    if not promotable:
-        return 950
-
-    if not ok_tests_policy:
-        return 900
-
-    # verifier_passed is only meaningful when promotable and ok_tests_policy.
-    if verifier_passed is False:
-        return 800
-
-    return 1000
-
-
-def _estimate_token_count(text: str) -> int:
-    # Deterministic heuristic fallback when provider usage isn't available.
-    s = str(text or "")
-    if not s:
-        return 0
-    return max(1, len(s) // 4)
-
-
-def _estimate_cost_usd(
-    *,
-    input_tokens: int,
-    output_tokens: int,
-    tool_calls: int,
-    input_per_1k_tokens_usd: float,
-    output_per_1k_tokens_usd: float,
-    tool_call_usd: float,
-) -> float:
-    """Estimate run cost from explicit rate configuration."""
-
-    return (
-        (float(max(0, int(input_tokens))) / 1000.0) * float(input_per_1k_tokens_usd)
-        + (float(max(0, int(output_tokens))) / 1000.0) * float(output_per_1k_tokens_usd)
-        + float(max(0, int(tool_calls))) * float(tool_call_usd)
-    )
-
-
-def _derive_full_test_command(smoke_command: list[str]) -> list[str]:
-    """Derive a 'full' test command from a smoke command deterministically.
-
-    Policy:
-    - If '-q' is present, drop it (common 'smoke' speed + noiseless mode).
-    - Otherwise keep the command as-is.
-    """
-
-    if not smoke_command:
-        raise ValueError("smoke_command must be non-empty")
-    return [c for c in smoke_command if c != "-q"]
-
-
-def _update_step(
-    *,
-    plan: PlanState,
-    step_id: str,
-    mutate: Callable[[PlanStep], PlanStep],
-) -> PlanState:
-    require_non_empty(step_id, name="step_id")
-    steps2: list[PlanStep] = []
-    found = False
-    for s in plan.steps:
-        if s.id != step_id:
-            steps2.append(s)
-            continue
-        steps2.append(mutate(s))
-        found = True
-    if not found:
-        raise ValueError("step not found")
-    return replace(plan, steps=tuple(steps2), updated_at_ms=now_ms())
-
-
-def _set_step_outputs(
-    *,
-    plan: PlanState,
-    step_id: str,
-    outputs_patch: dict[str, Any],
-) -> PlanState:
-    def _mutate(s: PlanStep) -> PlanStep:
-        out = dict(s.outputs or {})
-        out.update(dict(outputs_patch))
-        return replace(s, outputs=out)
-
-    return _update_step(plan=plan, step_id=step_id, mutate=_mutate)
-
-
-def _set_step_status(
-    *,
-    plan: PlanState,
-    step_id: str,
-    status: PlanStepStatus,
-    notes: str | None = None,
-) -> PlanState:
-    t = now_ms()
-
-    def _mutate(s: PlanStep) -> PlanStep:
-        started = s.started_at_ms
-        finished = s.finished_at_ms
-        if status == "in_progress" and started is None:
-            started = t
-        if status in {"done", "failed", "skipped"} and finished is None:
-            finished = t
-        return PlanStep(
-            id=s.id,
-            title=s.title,
-            status=status,
-            order_idx=s.order_idx,
-            started_at_ms=started,
-            finished_at_ms=finished,
-            notes=notes if notes is not None else s.notes,
-            inputs=s.inputs,
-            outputs=s.outputs,
-        )
-
-    return _update_step(plan=plan, step_id=step_id, mutate=_mutate)
-
-
-def _manifest_pass_metadata(
-    *, replay_manifest: RunManifest | None, pass_name: str
-) -> dict[str, Any] | None:
-    if replay_manifest is None:
-        return None
-    for rec in replay_manifest.passes:
-        if rec.name == pass_name and isinstance(rec.metadata, dict):
-            return dict(rec.metadata)
-    return None
-
-
-def _cached_execution_stage(
-    *, plan: PlanState, step_id: str
-) -> tuple[str, ExecutionResult, list[str]] | None:
-    step = next((s for s in plan.steps if s.id == step_id), None)
-    if step is None:
-        return None
-    outputs = dict(step.outputs or {})
-    for key in ("last_tests_full", "last_tests_smoke"):
-        raw = outputs.get(key)
-        if not isinstance(raw, dict):
-            continue
-        stage = str(raw.get("stage") or "")
-        command_raw = raw.get("command")
-        command = [str(x) for x in command_raw] if isinstance(command_raw, list) else []
-        try:
-            exit_code_raw = raw.get("exit_code")
-            if exit_code_raw is None:
-                continue
-            duration_raw = raw.get("duration_ms")
-            result = ExecutionResult(
-                exit_code=int(exit_code_raw),
-                stdout=str(raw.get("stdout") or ""),
-                stderr=str(raw.get("stderr") or ""),
-                duration_ms=(int(duration_raw) if duration_raw is not None else None),
-            )
-        except Exception:
-            continue
-        return stage, result, command
-    return None
-
-
-def _replayed_execution_stage(
-    *, plan: PlanState, step_id: str, replay_manifest: RunManifest | None
-) -> tuple[str, ExecutionResult, list[str]] | None:
-    cached = _cached_execution_stage(plan=plan, step_id=step_id)
-    if cached is not None:
-        return cached
-    md = _manifest_pass_metadata(replay_manifest=replay_manifest, pass_name="execute")
-    if md is None:
-        return None
-    stage = str(md.get("stage") or "tests_full")
-    cmd_raw = md.get("command")
-    command = [str(x) for x in cmd_raw] if isinstance(cmd_raw, list) else []
-    try:
-        exit_code_raw = md.get("exit_code")
-        if exit_code_raw is None:
-            return None
-        duration_raw = md.get("duration_ms")
-        result = ExecutionResult(
-            exit_code=int(exit_code_raw),
-            stdout=str(md.get("stdout") or ""),
-            stderr=str(md.get("stderr") or ""),
-            duration_ms=(int(duration_raw) if duration_raw is not None else None),
-        )
-    except Exception:
-        return None
-    return stage, result, command
-
-
-def _replayed_retrieval_context(
-    *,
-    replay_manifest: RunManifest | None,
-    goal: str,
-) -> dict[str, Any] | None:
-    if replay_manifest is None:
-        return None
-    snapshots = tuple(replay_manifest.retrieval_snapshots or ())
-    if not snapshots:
-        return None
-
-    documents: list[dict[str, Any]] = []
-    item_ids: list[str] = []
-    for idx, snap in enumerate(snapshots):
-        snap_item_ids = [str(x).strip() for x in snap.item_ids if str(x).strip()]
-        item_ids.extend(snap_item_ids)
-        for rank, item_id in enumerate(snap_item_ids):
-            documents.append(
-                {
-                    "doc_id": item_id,
-                    "title": f"replayed:{snap.source}:{idx}:{rank}",
-                    # Keep replay prompt construction manifest-self-contained.
-                    "content": (
-                        f"replayed retrieval snapshot source={snap.source} "
-                        f"query={snap.query} rank={rank}"
-                    ),
-                    "score": float(max(int(snap.top_k) - rank, 0)),
-                    "metadata": {
-                        "source_type": "retrieval_snapshot",
-                        "source": snap.source,
-                        "query": snap.query,
-                        "rank": rank,
-                        "replay": True,
-                    },
-                }
-            )
-
-    return {
-        "code_memory_items": [
-            {
-                "item_id": item_id,
-                "kind": "retrieval_snapshot",
-                "artifact_id": replay_manifest.run_id,
-                "payload": {"goal": goal, "replay_mode": replay_manifest.replay_mode},
-            }
-            for item_id in item_ids
-        ],
-        "documents": documents,
-        "why_graph": {
-            "replayed_from_manifest": True,
-            "run_id": replay_manifest.run_id,
-            "query_count": len(snapshots),
-        },
-    }
-
-
 def run_compile_loop(
     *,
     tenant_id: str,
@@ -706,19 +371,90 @@ def run_compile_loop(
     replay_mode: ReplayMode = "live",
     replay_manifest: RunManifest | None = None,
     policy_engine: PolicyEngine | None = None,
+    intent_spec: IntentSpec | None = None,
+    intent_file: str | Path | None = None,
+    intent_store: IntentStore | None = None,
+    knowledge_artifact_root: str | Path | None = None,
 ) -> ControllerResult:
     """Run the Phase 3 compile loop for the active plan step.
 
-    This is intentionally conservative and dependency-free: it does not apply patches
-    to a working tree yet; instead it treats the LLM output as the artifact and uses
-    the executor to validate it (tests, linters, etc.) based on the provided config.
+    By default ``ControllerConfig.compile_realization_mode`` is ``scoped_apply``: after a
+    passing candidate, a policy-gated fail-closed apply path may mutate files under
+    ``apply_scope_root`` (see :mod:`akc.compile.scoped_apply`). Set
+    ``compile_realization_mode`` to ``artifact_only`` to skip working-tree apply and
+    treat LLM output as artifacts only; the executor still validates candidates (tests,
+    linters, etc.).
     """
 
     require_non_empty(tenant_id, name="tenant_id")
     require_non_empty(repo_id, name="repo_id")
     require_non_empty(goal, name="goal")
     require_non_empty(replay_mode, name="replay_mode")
+
+    # Phase 2 normalization:
+    # - For explicit intent-backed runs, session may pass a precompiled intent.
+    # - For goal-only compatibility, compile from goal text.
+    if intent_spec is None:
+        if intent_file is not None:
+            intent_spec = compile_intent_spec(
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                intent_file=intent_file,
+                controller_budget=config.budget,
+            )
+        else:
+            intent_spec = compile_intent_spec(
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                goal_statement=goal,
+                controller_budget=config.budget,
+            )
+    intent_fingerprint = compute_intent_fingerprint(intent=intent_spec)
+    if intent_store is not None:
+        persisted = intent_spec.normalized()
+        intent_store.save_intent(tenant_id=tenant_id, repo_id=repo_id, intent=persisted)
+        intent_store.set_active_intent(tenant_id=tenant_id, repo_id=repo_id, intent_id=persisted.intent_id)
+    plan_step_intent_ref: dict[str, Any] | None = None
+    if intent_store is not None:
+        plan_step_intent_ref = build_plan_step_intent_ref(
+            intent=intent_spec,
+            semantic_fingerprint=intent_fingerprint.semantic,
+            goal_text_fingerprint=intent_fingerprint.goal_text,
+        )
+    goal_statement = (
+        intent_spec.goal_statement
+        if intent_spec.goal_statement is not None
+        else (intent_spec.objectives[0].statement if intent_spec.objectives else goal)
+    )
+    # Ensure all downstream planning and retrieval uses the normalized goal.
+    goal = goal_statement
     scope = TenantRepoScope(tenant_id=tenant_id, repo_id=repo_id)
+
+    # Phase 4: Policy/runtime projection.
+    #
+    # Project intent operating bounds into an authorization-ready policy context
+    # (and record every narrowing decision for auditability). Also tighten
+    # executor network authority when needed so intent cannot widen runtime
+    # network access beyond hard sandbox defaults.
+    hard_allow_network = _hard_allow_network_from_executor(executor=executor)
+    bounds_projection = project_intent_operating_bounds_to_policy_context(
+        intent_bounds=intent_spec.operating_bounds,
+        controller_budget=config.budget,
+        hard_allow_network=hard_allow_network,
+    )
+    executor = _apply_effective_allow_network_to_executor(
+        executor=executor,
+        allow_network=bool(bounds_projection.effective.get("allow_network")),
+    )
+    effective_max_wall_time_s = json_value_as_optional_float(bounds_projection.effective.get("max_seconds"))
+    effective_max_steps = json_value_as_int(bounds_projection.effective.get("max_steps"), default=0)
+    effective_max_input_tokens = json_value_as_optional_int(bounds_projection.effective.get("max_input_tokens"))
+    effective_max_output_tokens = json_value_as_optional_int(bounds_projection.effective.get("max_output_tokens"))
+    intent_policy_context = bounds_projection.to_policy_context()
+    # Provide intent policy refs to the policy engine as structured context.
+    # Enforcement is still owned by the policy engine (allowlist/OPA).
+    if intent_spec.policies:
+        intent_policy_context["intent_policies"] = [p.to_json_obj() for p in intent_spec.policies]
 
     plan = advance_plan(
         tenant_id=tenant_id,
@@ -729,9 +465,103 @@ def run_compile_loop(
         feedback=None,
     )
 
+    intent_id = intent_spec.intent_id
+    active_objectives_for_steps = [o.to_summary_obj() for o in intent_spec.objectives]
+    linked_constraints_for_steps = [
+        ConstraintLink.from_constraint(constraint=c).to_json_obj() for c in intent_spec.constraints
+    ]
+    active_success_criteria_for_steps = [
+        SuccessCriterionLink.from_success_criterion(sc=sc).to_json_obj() for sc in intent_spec.success_criteria
+    ]
+    steps2: list[PlanStep] = []
+    for s in plan.steps:
+        inputs = dict(s.inputs or {})
+        inputs["intent_id"] = intent_id
+        if plan_step_intent_ref is not None:
+            inputs["intent_ref"] = dict(plan_step_intent_ref)
+            for _legacy in ("active_objectives", "linked_constraints", "active_success_criteria"):
+                inputs.pop(_legacy, None)
+        else:
+            inputs["active_objectives"] = list(active_objectives_for_steps)
+            inputs["linked_constraints"] = list(linked_constraints_for_steps)
+            inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
+        steps2.append(replace(s, inputs=inputs))
+    plan = replace(plan, steps=tuple(steps2))
+
+    first_step_inputs: dict[str, Any] = dict(plan.steps[0].inputs or {}) if plan.steps else {}
+    resolved_intent = resolve_compile_intent_context(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        inputs=first_step_inputs,
+        intent_store=intent_store,
+        controller_intent_spec=intent_spec,
+        fallback_goal_statement=goal,
+        warn_legacy_step_blobs_without_intent_ref_under_outputs_root=bool(intent_store is not None),
+    )
+    intent_contract_shape = effective_intent_contract_shape_for_compile_prompts(
+        policy=config.compile_prompt_intent_contract_policy,
+        intent_store=intent_store,
+        first_step_inputs=first_step_inputs,
+    )
+
     step_id = plan.next_step_id
     if step_id is None:
-        return ControllerResult(status="succeeded", plan=plan, best_candidate=None, accounting={})
+        md = dict(config.metadata or {})
+        profile_mode = str(md.get("developer_role_profile", "classic")).strip().lower()
+        auto_seed_deployable = bool(md.get("developer_profile_auto_seed_step", False))
+        require_deployable_steps = bool(md.get("require_deployable_steps", False))
+        deployable_intent = intent_declares_deployable_objective(intent=intent_spec)
+        if auto_seed_deployable and profile_mode == "emerging" and deployable_intent:
+            seeded_step_id = "step_emerging_bootstrap"
+            seeded_inputs: dict[str, Any] = {"intent_id": intent_id}
+            if plan_step_intent_ref is not None:
+                seeded_inputs["intent_ref"] = dict(plan_step_intent_ref)
+            else:
+                seeded_inputs["active_objectives"] = list(active_objectives_for_steps)
+                seeded_inputs["linked_constraints"] = list(linked_constraints_for_steps)
+                seeded_inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
+            seeded_step = PlanStep(
+                id=seeded_step_id,
+                title="Implement intent",
+                status="pending",
+                order_idx=len(plan.steps),
+                inputs=seeded_inputs,
+                outputs={},
+            )
+            plan = replace(
+                plan,
+                steps=tuple(list(plan.steps) + [seeded_step]),
+                next_step_id=seeded_step_id,
+                updated_at_ms=now_ms(),
+            )
+            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+            step_id = seeded_step_id
+        else:
+            if require_deployable_steps and deployable_intent:
+                fail_accounting: dict[str, Any] = {
+                    "empty_plan_fail_closed": True,
+                    "empty_plan_reason": (
+                        "deployable intent produced no actionable compile steps; "
+                        "set objective_class=analysis_only to allow artifact-only analysis success"
+                    ),
+                    "policy_mode": config.policy_mode,
+                }
+                return ControllerResult(
+                    status="failed",
+                    plan=plan,
+                    best_candidate=None,
+                    accounting=fail_accounting,
+                    compile_succeeded=False,
+                    intent_satisfied=False,
+                )
+            return ControllerResult(
+                status="succeeded",
+                plan=plan,
+                best_candidate=None,
+                accounting={},
+                compile_succeeded=True,
+                intent_satisfied=True,
+            )
 
     plan = _set_step_status(plan=plan, step_id=step_id, status="in_progress")
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
@@ -752,11 +582,17 @@ def run_compile_loop(
         "estimated_cost_usd": 0.0,
         "policy_mode": config.policy_mode,
         "policy_decisions": [],
+        "policy_operating_bounds_projection": bounds_projection.to_audit_artifact(),
         "trace_spans": [],
     }
     trace_id = new_trace_id()
     run_span_id = new_span_id()
     step_span_id = new_span_id()
+    accounting["trace_id"] = trace_id
+    accounting["run_span_id"] = run_span_id
+    accounting["step_span_id"] = step_span_id
+    if config.accounting_overlay:
+        accounting.update(dict(config.accounting_overlay))
     run_started_ns = now_unix_nano()
     step_started_ns = now_unix_nano()
 
@@ -788,95 +624,59 @@ def run_compile_loop(
         accounting["trace_spans"].append(span.to_json_obj())
 
     best: Candidate | None = None
-    verifier = DeterministicVerifier()
-    effective_policy_engine = policy_engine or DefaultDenyPolicyEngine(
-        issuer=CapabilityIssuer(),
-        policy=ToolAuthorizationPolicy(
-            mode=config.policy_mode,
-            allow_actions=tuple(config.tool_allowlist),
-            opa=(
-                SubprocessOpaEvaluator(
-                    policy_path=config.opa_policy_path,
-                    decision_path=config.opa_decision_path,
-                )
-                if config.opa_policy_path is not None
-                else None
-            ),
-        ),
-    )
+    compile_succeeded_seen = False
+    intent_satisfied = False
 
-    def _observe_policy_decision(
-        action: str,
-        token: Any,
-        decision: Any,
-        context: dict[str, Any] | None,
-    ) -> None:
-        # Persist a stable, manifest-friendly decision shape for auditing.
-        accounting["policy_decisions"].append(
-            {
-                "action": action,
-                "scope": {
-                    "tenant_id": scope.tenant_id,
-                    "repo_id": scope.repo_id,
-                },
-                "token_id": str(getattr(token, "token_id", "")),
-                "constraints": dict(getattr(token, "constraints", {}) or {}),
-                "context": dict(context or {}),
-                "allowed": bool(getattr(decision, "allowed", False)),
-                "reason": str(getattr(decision, "reason", "")),
-                "source": str(getattr(decision, "source", "")),
-                "mode": str(getattr(decision, "mode", "")),
-                "block": bool(getattr(decision, "block", False)),
-            }
-        )
-
-    def _record_policy_failure(
-        *,
-        action: str,
-        reason: str,
-        stage_name: str,
-        context: dict[str, Any] | None,
-    ) -> PlanState:
-        plan2 = _set_step_outputs(
-            plan=plan,
-            step_id=step_id,
-            outputs_patch={
-                "policy_decisions": list(accounting["policy_decisions"]),
-                "last_policy_failure": {
-                    "code": "policy.authorization_denied",
-                    "action": action,
-                    "stage": stage_name,
-                    "message": f"policy authorization denied for {action}: {reason}",
-                    "reason": reason,
-                    "context": dict(context or {}),
-                    "scope": {
-                        "tenant_id": tenant_id,
-                        "repo_id": repo_id,
-                    },
-                },
-            },
-        )
-        plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan2)
-        return plan2
-
-    policy_llm = PolicyWrappedLLMBackend(
-        backend=llm,
-        policy_engine=effective_policy_engine,
-        issuer=effective_policy_engine.issuer,
-        decision_observer=_observe_policy_decision,
-    )
-    attenuator = CapabilityAttenuator()
-    exec_base_capability = effective_policy_engine.issuer.issue(
-        scope=scope,
-        action="executor.run",
-        constraints={"plan_id": plan.id, "step_id": step_id},
-    )
-    policy_executor = PolicyWrappedExecutor(
+    verifier, policy_llm, policy_executor, exec_base_capability, effective_policy_engine = setup_policy_runtime(
+        config=config,
+        llm=llm,
         executor=executor,
-        policy_engine=effective_policy_engine,
-        issuer=effective_policy_engine.issuer,
-        attenuator=attenuator,
-        decision_observer=_observe_policy_decision,
+        policy_engine=policy_engine,
+        scope=scope,
+        plan_id=plan.id,
+        step_id=step_id,
+        accounting=accounting,
+    )
+
+    # Structured intent for IR + retrieval (IR-first spine; PlanState stays execution state).
+    if intent_contract_shape == "reference_first":
+        intent_contract = build_reference_intent_contract_for_retrieval(
+            intent_spec=intent_spec,
+            resolved=resolved_intent,
+            intent_semantic_fingerprint=intent_fingerprint.semantic,
+            intent_goal_text_fingerprint=intent_fingerprint.goal_text,
+            operating_bounds_effective=dict(bounds_projection.effective),
+            first_step_inputs=first_step_inputs,
+        )
+    else:
+        intent_contract = {
+            "intent_contract_shape": "full",
+            "intent_id": intent_spec.intent_id,
+            "spec_version": int(intent_spec.spec_version),
+            "goal_statement": intent_spec.goal_statement,
+            "active_objectives": [o.to_summary_obj() for o in intent_spec.objectives],
+            "linked_constraints": [
+                ConstraintLink.from_constraint(constraint=c).to_json_obj() for c in intent_spec.constraints
+            ],
+            "active_success_criteria": [
+                SuccessCriterionLink.from_success_criterion(sc=sc).to_json_obj() for sc in intent_spec.success_criteria
+            ],
+            "operating_bounds_requested": (
+                intent_spec.operating_bounds.to_json_obj() if intent_spec.operating_bounds is not None else None
+            ),
+            "operating_bounds": dict(bounds_projection.effective),
+        }
+    intent_node_properties_for_ir: dict[str, Any] = dict(intent_contract)
+    intent_node_properties_for_ir["intent_semantic_fingerprint"] = intent_fingerprint.semantic
+    intent_node_properties_for_ir["intent_goal_text_fingerprint"] = intent_fingerprint.goal_text
+    ir_doc_for_knowledge = build_ir_document_from_plan(
+        plan=plan,
+        intent_node_properties=intent_node_properties_for_ir,
+        intent_store=intent_store,
+        controller_intent_spec=intent_spec,
+        resolved_intent_context=resolved_intent,
+        warn_legacy_step_blobs_without_intent_ref_under_outputs_root=bool(intent_store is not None),
+        intent_contract_shape=intent_contract_shape,
     )
 
     # Retrieve once per step for now (keeps budgeting simple). In replay modes,
@@ -884,6 +684,7 @@ def run_compile_loop(
     retrieve_span_id = new_span_id()
     retrieve_start_ns = now_unix_nano()
     replayed_ctx = _replayed_retrieval_context(replay_manifest=replay_manifest, goal=goal)
+    prior_knowledge = prior_knowledge_snapshot_from_plan(plan, current_step_id=step_id)
     if replayed_ctx is not None:
         ctx = replayed_ctx
     else:
@@ -895,7 +696,13 @@ def run_compile_loop(
             why_graph=why_graph,
             index=index,
             limit=20,
+            ir_document=ir_doc_for_knowledge,
+            knowledge_snapshot_for_query=prior_knowledge,
+            knowledge_query_budget_chars=800,
         )
+
+    ctx = dict(ctx)
+    ctx["intent_contract"] = intent_contract
     _append_span(
         span_id=retrieve_span_id,
         parent_span_id=step_span_id,
@@ -909,10 +716,139 @@ def run_compile_loop(
             "replayed_from_manifest": replayed_ctx is not None,
         },
     )
+    # Phase 3 knowledge layer: unify intent constraints with retrieved evidence.
+    # This runs before the generate/repair loop so later stages can treat
+    # knowledge semantics as first-class.
+    documents_for_evidence = ctx.get("documents") or []
+    doc_id_to_provenance = build_doc_id_to_provenance_map(tenant_id=tenant_id, documents=documents_for_evidence)
+    use_llm_knowledge = config.knowledge_extraction_mode in ("llm", "hybrid") and policy_llm is not None
+    knowledge_mediation_report: dict[str, Any] = {}
+    knowledge_snapshot = extract_knowledge_snapshot(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        intent_spec=intent_spec,
+        retrieved_context=ctx,
+        retrieval_provenance_by_doc_id=doc_id_to_provenance,
+        llm=policy_llm,
+        use_llm=use_llm_knowledge,
+        ir_document=ir_doc_for_knowledge,
+        doc_derived_assertions_mode=config.doc_derived_assertions_mode,
+        doc_derived_max_assertions=int(config.doc_derived_max_assertions),
+        doc_derived_patterns=config.doc_derived_patterns,
+        knowledge_evidence_weighting=config.knowledge_evidence_weighting,
+        knowledge_unresolved_conflict_policy=config.knowledge_unresolved_conflict_policy,
+        compile_now_ms=int(time.time() * 1000),
+        mediation_report_out=knowledge_mediation_report,
+        knowledge_artifact_root=knowledge_artifact_root,
+        knowledge_conflict_normalization=config.knowledge_conflict_normalization,
+        knowledge_embedding_clustering_enabled=bool(config.knowledge_embedding_clustering_enabled),
+        knowledge_embedding_clustering_threshold=float(config.knowledge_embedding_clustering_threshold),
+        stored_assertion_index_mode=config.stored_assertion_index_mode,
+        stored_assertion_index_max_rows=int(config.stored_assertion_index_max_rows),
+        apply_operator_knowledge_decisions=bool(config.apply_operator_knowledge_decisions),
+    )
+
+    if replayed_ctx is None:
+        ctx["documents"] = boost_retrieved_documents_for_knowledge_evidence(
+            ctx.get("documents"),
+            snapshot=knowledge_snapshot,
+        )
     retrieval_item_ids, retrieval_provenance = build_retrieval_documents_item_ids_and_provenance(
         tenant_id=tenant_id,
         documents=ctx.get("documents") or [],
     )
+
+    plan = inject_knowledge_into_plan_step_inputs(plan=plan, snapshot=knowledge_snapshot)
+    plan = annotate_constraint_hints_for_verifier(plan=plan, snapshot=knowledge_snapshot)
+    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+
+    ir_doc_for_compile_prompts = build_ir_document_from_plan(
+        plan=plan,
+        intent_node_properties=intent_node_properties_for_ir,
+        intent_store=intent_store,
+        controller_intent_spec=intent_spec,
+        resolved_intent_context=resolved_intent,
+        warn_legacy_step_blobs_without_intent_ref_under_outputs_root=bool(intent_store is not None),
+        intent_contract_shape=intent_contract_shape,
+    )
+    ipc0 = intent_prompt_context_from_ir_and_resolve(
+        ir_doc=ir_doc_for_compile_prompts,
+        resolved=resolved_intent,
+        reference_first=(intent_contract_shape == "reference_first"),
+    )
+    active_objectives = list(ipc0.active_objectives)
+    linked_constraints = list(ipc0.linked_constraints)
+    active_success_criteria = list(ipc0.active_success_criteria)
+
+    intent_assertion_map = build_intent_constraint_ids_by_assertion(
+        intent_spec=intent_spec,
+        repo_id=repo_id,
+        documents=documents_for_evidence,
+    )
+    knowledge_mediation_fingerprint: str | None = None
+    if knowledge_artifact_root is not None and knowledge_mediation_report:
+        knowledge_mediation_fingerprint = write_knowledge_mediation_report_artifact(
+            knowledge_artifact_root,
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            mediation_report=knowledge_mediation_report,
+        )
+
+    # Knowledge-layer fingerprints are replay invalidation triggers.
+    # Slice to match manifest fingerprint width (16-char hex).
+    knowledge_semantic_fp_full = knowledge_semantic_fingerprint(snapshot=knowledge_snapshot)
+    knowledge_provenance_fp_full = knowledge_provenance_fingerprint(snapshot=knowledge_snapshot)
+    knowledge_semantic_fingerprint_16 = knowledge_semantic_fp_full[:16]
+    knowledge_provenance_fingerprint_16 = knowledge_provenance_fp_full[:16]
+
+    # Persist canonical constraint/decision assertions into the why-graph.
+    # This provides provenance-bearing nodes/edges for later contradiction surfacing.
+    if why_graph is not None:
+        upsert_knowledge_snapshot_into_why_graph(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            why_graph=why_graph,
+            snapshot=knowledge_snapshot,
+            plan_goal=goal,
+            intent_id=intent_id,
+            knowledge_unresolved_conflict_policy=config.knowledge_unresolved_conflict_policy,
+            knowledge_conflict_normalization=config.knowledge_conflict_normalization,
+            knowledge_embedding_clustering_enabled=bool(config.knowledge_embedding_clustering_enabled),
+            knowledge_embedding_clustering_threshold=float(config.knowledge_embedding_clustering_threshold),
+            documents=documents_for_evidence,
+            intent_constraint_ids_by_assertion=intent_assertion_map,
+        )
+
+        # Phase 2.5: surface and persist contradiction reports with provenance
+        # evidence from the conflicting constraint nodes' payloads.
+        new_constraint_ids = {str(c.assertion_id) for c in knowledge_snapshot.canonical_constraints}
+        constraint_nodes: list[Any] = []
+        for cid in new_constraint_ids:
+            node = why_graph.get_node(
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                node_id=cid,
+            )
+            if node is not None and getattr(node, "type", None) == "constraint":
+                constraint_nodes.append(node)
+        detector = ConflictDetector()
+        reports = detector.detect_constraint_contradictions(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            nodes=constraint_nodes,
+            plan_id=plan.id,
+        )
+        reports = enrich_conflict_reports_from_mediation(
+            reports,
+            mediation_report=knowledge_mediation_report,
+        )
+        detector.store_reports(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            plan_id=plan.id,
+            reports=reports,
+            code_memory=code_memory,
+        )
     for item in ctx.get("code_memory_items") or []:
         if isinstance(item, dict):
             item_id = item.get("item_id")
@@ -929,7 +865,16 @@ def run_compile_loop(
                 "item_ids": sorted(set(retrieval_item_ids)),
                 "provenance": list(retrieval_provenance),
                 "replayed_from_manifest": replayed_ctx is not None,
-            }
+            },
+            "knowledge_snapshot": knowledge_snapshot.to_json_obj(),
+            "knowledge_intent_assertion_ids": sorted(intent_assertion_map.keys()),
+            "knowledge_mediation_report": dict(knowledge_mediation_report),
+            "knowledge_mediation_artifact_relpath": KNOWLEDGE_MEDIATION_RELPATH
+            if knowledge_mediation_fingerprint is not None
+            else None,
+            "knowledge_mediation_fingerprint": knowledge_mediation_fingerprint,
+            "knowledge_semantic_fingerprint": knowledge_semantic_fingerprint_16,
+            "knowledge_provenance_fingerprint": knowledge_provenance_fingerprint_16,
         },
     )
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
@@ -943,9 +888,7 @@ def run_compile_loop(
         else (config.metadata or {}).get("execute_command") or ["python", "-m", "pytest", "-q"]
     )
     smoke_timeout_s_raw = (
-        config.test_timeout_s
-        if config.test_timeout_s is not None
-        else (config.metadata or {}).get("execute_timeout_s")
+        config.test_timeout_s if config.test_timeout_s is not None else (config.metadata or {}).get("execute_timeout_s")
     )
     smoke_timeout_s_f = float(smoke_timeout_s_raw) if smoke_timeout_s_raw is not None else None
 
@@ -956,27 +899,72 @@ def run_compile_loop(
         else _derive_full_test_command(smoke_command)
     )
     full_timeout_s_raw = (config.metadata or {}).get("full_test_timeout_s")
-    full_timeout_s_f = (
-        float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
-    )
+    full_timeout_s_f = float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
 
     smoke_stage_name = "tests_smoke"
     full_stage_name = "tests_full"
     policy_metadata = dict(config.metadata or {})
 
+    smoke_timeout_s_effective, smoke_stage_decision = project_stage_timeout_s(
+        stage_timeout_s=smoke_timeout_s_f,
+        intent_max_seconds=effective_max_wall_time_s,
+    )
+    full_timeout_s_effective, full_stage_decision = project_stage_timeout_s(
+        stage_timeout_s=full_timeout_s_f,
+        intent_max_seconds=effective_max_wall_time_s,
+    )
+
+    stage_timeout_decisions: list[dict[str, Any]] = []
+    if smoke_stage_decision is not None:
+        d = dict(smoke_stage_decision)
+        d["stage"] = smoke_stage_name
+        stage_timeout_decisions.append(d)
+    if full_stage_decision is not None:
+        d = dict(full_stage_decision)
+        d["stage"] = full_stage_name
+        stage_timeout_decisions.append(d)
+    if stage_timeout_decisions:
+        proj = accounting.get("policy_operating_bounds_projection")
+        if isinstance(proj, dict):
+            proj["stage_timeout_decisions"] = stage_timeout_decisions
+
+    smoke_policy_context = dict(
+        _build_executor_policy_context(
+            executor=executor,
+            stage=smoke_stage_name,
+            command=list(smoke_command),
+            timeout_s=smoke_timeout_s_effective,
+            replay_mode=replay_mode,
+            policy_mode=config.policy_mode,
+            metadata=policy_metadata,
+        ),
+        **intent_policy_context,
+    )
+    full_policy_context = dict(
+        _build_executor_policy_context(
+            executor=executor,
+            stage=full_stage_name,
+            command=list(full_command),
+            timeout_s=full_timeout_s_effective,
+            replay_mode=replay_mode,
+            policy_mode=config.policy_mode,
+            metadata=policy_metadata,
+        ),
+        **intent_policy_context,
+    )
+
     def _wall_budget_ok() -> bool:
-        if budget.max_wall_time_s is None:
+        if effective_max_wall_time_s is None:
             return True
-        return (time.monotonic() - start) <= float(budget.max_wall_time_s)
+        return (time.monotonic() - start) <= float(effective_max_wall_time_s)
 
     def _token_budget_ok() -> bool:
-        if budget.max_input_tokens is not None and int(accounting["input_tokens"]) >= int(
-            budget.max_input_tokens
-        ):
+        if effective_max_input_tokens is not None and int(accounting["input_tokens"]) >= effective_max_input_tokens:
+            return False
+        if effective_max_output_tokens is not None and int(accounting["output_tokens"]) >= effective_max_output_tokens:
             return False
         return not (
-            budget.max_total_tokens is not None
-            and int(accounting["total_tokens"]) >= int(budget.max_total_tokens)
+            budget.max_total_tokens is not None and int(accounting["total_tokens"]) >= int(budget.max_total_tokens)
         )
 
     def _tool_budget_ok() -> bool:
@@ -1012,722 +1000,66 @@ def run_compile_loop(
             return True
         return float(accounting["estimated_cost_usd"]) <= float(budget.max_cost_usd)
 
-    # Generate → Execute loop with bounded repairs.
-    current_tier = gen_tier
-    stage: StageName = "generate"
-    last_exec: ExecutionResult | None = None
-    max_repairs = int(budget.effective_max_repairs_per_step())
-    max_iters_total = int(budget.max_iterations_total)
-    repairs_used = 0
-
-    # IR-first prompt passes (compiler pass contract).
-    generate_prompt_pass = DefaultIRGeneratePromptPass()
-    repair_prompt_pass = DefaultIRRepairPromptPass()
-
-    while True:
-        if accounting["iterations_total"] >= max_iters_total:
-            break
-        if (
-            accounting["llm_calls"] >= int(budget.max_llm_calls)
-            or not _wall_budget_ok()
-            or not _token_budget_ok()
-            or not _cost_budget_ok()
-        ):
-            break
-
-        # ARCS-style: use a single tier knob for both generate and repair, escalating on failures.
-        tier_cfg = current_tier
-        accounting["tier_history"].append({"stage": stage, "tier": tier_cfg.name})
-
-        max_out = budget.max_output_tokens
-        if max_out is None:
-            max_out = tier_cfg.default_max_output_tokens
-
-        # Build IR for the current plan state so passes can consume IR.
-        ir_doc = build_ir_document_from_plan(plan=plan)
-
-        test_policy: dict[str, Any] | None = None
-        step_title: str | None = None
-        failure: Any | None = None
-        verifier_fb: dict[str, Any] | None = None
-
-        if stage == "generate":
-            test_policy = {
-                "tests_generated_by_default": bool(config.generate_tests_by_default),
-                "require_tests_for_non_test_changes": bool(
-                    config.require_tests_for_non_test_changes
-                ),
-                "smoke_test_command": list(smoke_command),
-                "full_test_command": list(full_command),
-            }
-        else:
-            # Repair stage: parse failure and build a more structured prompt.
-            step = next(s for s in plan.steps if s.id == step_id)
-            assert last_exec is not None
-            failure = parse_execution_failure(result=last_exec)
-            # If the previous iteration was vetoed by the verifier, the controller
-            # stores its structured result in step outputs. Thread it into repair context.
-            verifier_fb = None
-            try:
-                step_outputs = dict(step.outputs or {})
-                last_ver = step_outputs.get("last_verification")
-                if isinstance(last_ver, dict):
-                    verifier_fb = last_ver
-            except Exception:
-                verifier_fb = None
-            step_title = step.title
-
-        effective_replay_manifest = replay_manifest or RunManifest(
-            run_id=plan.id,
-            tenant_id=tenant_id,
-            repo_id=repo_id,
-            ir_sha256="0" * 64,
-            replay_mode=replay_mode,  # validated by RunManifest
-        )
-        pass_decision = decide_replay_for_pass(manifest=effective_replay_manifest, pass_name=stage)
-
-        last_generation_text = best.llm_text if best is not None else ""
-
-        patch_resolution: ModelCallNeeded | ResolvedPatch | None = (
-            resolve_patch_candidate_from_prompt(
-                stage=stage,
-                plan=plan,
-                ir_doc=ir_doc,
-                step_id=step_id,
-                tier_name=tier_cfg.name,
-                tier_model=tier_cfg.llm_model,
-                temperature=float(tier_cfg.temperature),
-                max_output_tokens=int(max_out) if max_out is not None else None,
-                goal=goal,
-                retrieved_context=ctx,
-                test_policy=test_policy,
-                step_title=step_title,
-                last_generation_text=last_generation_text,
-                failure=failure,
-                verifier_feedback=verifier_fb,
-                replay_mode=replay_mode,
-                replay_manifest=effective_replay_manifest,
-                should_call_model=pass_decision.should_call_model,
-                generate_prompt_pass=generate_prompt_pass,
-                repair_prompt_pass=repair_prompt_pass,
-            )
-        )
-
-        if patch_resolution is None:
-            break
-
-        prompt_key = patch_resolution.prompt_key
-        patch_text: str
-        patch_sha256: str
-        if isinstance(patch_resolution, ModelCallNeeded):
-            try:
-                resp = policy_llm.complete(
-                    scope=scope,
-                    stage=patch_resolution.llm_stage,
-                    request=patch_resolution.llm_request,
-                    token_constraints={
-                        "plan_id": plan.id,
-                        "step_id": step_id,
-                        "tier": tier_cfg.name,
-                        "replay_mode": replay_mode,
-                    },
-                )
-            except ToolAuthorizationError as exc:
-                plan = _record_policy_failure(
-                    action="llm.complete",
-                    reason=exc.decision.reason,
-                    stage_name=patch_resolution.llm_stage,
-                    context={"stage": patch_resolution.llm_stage},
-                )
-                break
-            accounting["llm_calls"] += 1
-            usage = dict(resp.usage or {})
-            in_tok = (
-                int(usage.get("input_tokens", 0))
-                if "input_tokens" in usage
-                else _estimate_token_count(patch_resolution.user_prompt)
-            )
-            out_tok = (
-                int(usage.get("output_tokens", 0))
-                if "output_tokens" in usage
-                else _estimate_token_count(resp.text)
-            )
-            accounting["input_tokens"] += in_tok
-            accounting["output_tokens"] += out_tok
-            accounting["total_tokens"] += in_tok + out_tok
-            _refresh_estimated_cost()
-            _append_span(
-                span_id=new_span_id(),
-                parent_span_id=step_span_id,
-                name="compile.llm.complete",
-                kind="client",
-                start_ns=now_unix_nano() - 1,
-                end_ns=now_unix_nano(),
-                attributes={
-                    "stage": stage,
-                    "tier": tier_cfg.name,
-                    "input_tokens": in_tok,
-                    "output_tokens": out_tok,
-                    "prompt_key": prompt_key,
-                },
-            )
-            patch_text = resp.text
-            touched_paths = list(candidate_from_patch_text(patch_text=patch_text).touched_paths)
-            patch_sha256 = patch_sha256_hex(patch_text=patch_text)
-        else:
-            patch_text = patch_resolution.candidate.patch_text
-            touched_paths = list(patch_resolution.candidate.touched_paths)
-            patch_sha256 = patch_resolution.patch_sha256
-
-        accounting["iterations_total"] += 1
-        ok_tests_policy, policy_evidence = _policy_requires_tests(
-            touched_paths=touched_paths,
-            require_tests_for_non_test_changes=bool(config.require_tests_for_non_test_changes),
-        )
-
-        # Execute the produced artifact (executor decides what it means).
-        # Tests-by-default:
-        # - full mode: run one test command per iteration
-        # - smoke mode: run smoke each iteration, and only run full on smoke pass ("promotion gate")
-        if pass_decision.should_call_tools:
-            if not _tool_budget_ok():
-                break
-            try:
-                smoke_res = run_stage(
-                    executor=policy_executor,
-                    scope=scope,
-                    stage=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
-                    command=list(smoke_command if config.test_mode == "smoke" else full_command),
-                    timeout_s=smoke_timeout_s_f
-                    if config.test_mode == "smoke"
-                    else full_timeout_s_f,
-                    run_id=plan.id,
-                    policy_context=_build_executor_policy_context(
-                        executor=executor,
-                        stage=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
-                        command=list(
-                            smoke_command if config.test_mode == "smoke" else full_command
-                        ),
-                        timeout_s=(
-                            smoke_timeout_s_f if config.test_mode == "smoke" else full_timeout_s_f
-                        ),
-                        replay_mode=replay_mode,
-                        policy_mode=config.policy_mode,
-                        metadata=policy_metadata,
-                    ),
-                    policy_base_capability=exec_base_capability,
-                )
-            except ToolAuthorizationError as exc:
-                smoke_policy_ctx = _build_executor_policy_context(
-                    executor=executor,
-                    stage=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
-                    command=list(smoke_command if config.test_mode == "smoke" else full_command),
-                    timeout_s=(
-                        smoke_timeout_s_f if config.test_mode == "smoke" else full_timeout_s_f
-                    ),
-                    replay_mode=replay_mode,
-                    policy_mode=config.policy_mode,
-                    metadata=policy_metadata,
-                )
-                plan = _record_policy_failure(
-                    action="executor.run",
-                    reason=exc.decision.reason,
-                    stage_name=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
-                    context=smoke_policy_ctx,
-                )
-                break
-            accounting["tool_calls"] += 1
-            _refresh_estimated_cost()
-            exec_result = smoke_res.result
-            last_exec = exec_result
-            smoke_end_ns = now_unix_nano()
-            smoke_start_ns = smoke_end_ns - max(1, int(exec_result.duration_ms or 0) * 1_000_000)
-            _append_span(
-                span_id=new_span_id(),
-                parent_span_id=step_span_id,
-                name=f"compile.executor.{smoke_res.stage}",
-                kind="client",
-                start_ns=smoke_start_ns,
-                end_ns=smoke_end_ns,
-                attributes={
-                    "command": list(smoke_res.command),
-                    "exit_code": int(exec_result.exit_code),
-                    "duration_ms": exec_result.duration_ms,
-                },
-                status="ok" if int(exec_result.exit_code) == 0 else "error",
-            )
-        else:
-            cached_exec = _replayed_execution_stage(
-                plan=plan, step_id=step_id, replay_manifest=effective_replay_manifest
-            )
-            if cached_exec is None:
-                break
-            cached_stage, cached_result, cached_command = cached_exec
-            smoke_res = StageRunResult(
-                stage=cached_stage,
-                command=list(cached_command),
-                result=cached_result,
-            )
-            exec_result = cached_result
-            last_exec = exec_result
-
-        full_res = None
-        should_run_full = False
-        if (
-            pass_decision.should_call_tools
-            and config.test_mode == "smoke"
-            and int(exec_result.exit_code) == 0
-        ):
-            n = config.full_test_every_n_iterations
-            if n is None:
-                should_run_full = True
-            else:
-                it = int(accounting["iterations_total"])
-                # Run full periodically and on the last allowed iteration so we don't
-                # exit without a final full-gate signal.
-                should_run_full = (it % int(n) == 0) or (it >= max_iters_total)
-        if should_run_full:
-            if not _tool_budget_ok():
-                break
-            try:
-                full_res = run_stage(
-                    executor=policy_executor,
-                    scope=scope,
-                    stage=full_stage_name,
-                    command=list(full_command),
-                    timeout_s=full_timeout_s_f,
-                    run_id=plan.id,
-                    policy_context=_build_executor_policy_context(
-                        executor=executor,
-                        stage=full_stage_name,
-                        command=list(full_command),
-                        timeout_s=full_timeout_s_f,
-                        replay_mode=replay_mode,
-                        policy_mode=config.policy_mode,
-                        metadata=policy_metadata,
-                    ),
-                    policy_base_capability=exec_base_capability,
-                )
-            except ToolAuthorizationError as exc:
-                full_policy_ctx = _build_executor_policy_context(
-                    executor=executor,
-                    stage=full_stage_name,
-                    command=list(full_command),
-                    timeout_s=full_timeout_s_f,
-                    replay_mode=replay_mode,
-                    policy_mode=config.policy_mode,
-                    metadata=policy_metadata,
-                )
-                plan = _record_policy_failure(
-                    action="executor.run",
-                    reason=exc.decision.reason,
-                    stage_name=full_stage_name,
-                    context=full_policy_ctx,
-                )
-                break
-            accounting["tool_calls"] += 1
-            _refresh_estimated_cost()
-            exec_result = full_res.result
-            last_exec = exec_result
-            full_end_ns = now_unix_nano()
-            full_start_ns = full_end_ns - max(1, int(exec_result.duration_ms or 0) * 1_000_000)
-            _append_span(
-                span_id=new_span_id(),
-                parent_span_id=step_span_id,
-                name=f"compile.executor.{full_res.stage}",
-                kind="client",
-                start_ns=full_start_ns,
-                end_ns=full_end_ns,
-                attributes={
-                    "command": list(full_res.command),
-                    "exit_code": int(exec_result.exit_code),
-                    "duration_ms": exec_result.duration_ms,
-                },
-                status="ok" if int(exec_result.exit_code) == 0 else "error",
-            )
-
-        promotable = int(exec_result.exit_code) == 0 and (
-            config.test_mode != "smoke" or full_res is not None
-        )
-
-        # Compute verifier result early so monotonic "improvement" can take it
-        # into account. We only persist the verification output if we reach the
-        # promotion gate (i.e. not vetoed earlier by monotonic/policy).
-        verifier_result = None
-        if promotable and ok_tests_policy:
-            verifier_policy = VerifierPolicy(
-                enabled=bool(config.verifier_enabled),
-                strict=bool(config.verifier_strict),
-            )
-            verifier_result = verifier.verify(
-                scope=scope,
-                plan_id=plan.id,
-                step_id=step_id,
-                candidate_patch=patch_text,
-                execution=exec_result,
-                accounting=accounting,
-                budget=config.budget,
-                policy=verifier_policy,
-            )
-
-        previous_best = best
-        cand = Candidate(
-            tier=str(tier_cfg.name),
-            stage=stage,
-            llm_text=patch_text,
-            touched_paths=tuple(touched_paths),
-            test_paths=tuple([p for p in touched_paths if _is_test_path(p)]),
-            execution=exec_result,
-            execution_stage=(full_res.stage if full_res is not None else smoke_res.stage),
-            execution_command=list(full_res.command if full_res is not None else smoke_res.command),
-            score=_score_candidate(
-                execution=exec_result,
-                ok_tests_policy=ok_tests_policy,
-                promotable=promotable,
-                verifier_passed=(verifier_result.passed if verifier_result is not None else None),
-            ),
-            attempt_idx=int(accounting["iterations_total"]),
-            created_at_ms=now_ms(),
-        )
-        best = _best_of(best, cand)
-        accounting["best_score"] = int(best.score)
-        # ARCS-style monotonicity: repair candidates must strictly improve score.
-        improved = previous_best is None or cand.score > int(previous_best.score)
-
-        # Persist "best so far" into plan step outputs (monotonic).
-        failure_json = None
-        if int(exec_result.exit_code) != 0:
-            failure_json = parse_execution_failure(result=exec_result).to_json_obj()
-        plan = _set_step_outputs(
-            plan=plan,
-            step_id=step_id,
-            outputs_patch={
-                "best_candidate": best.to_json_obj(),
-                "last_tests_smoke": smoke_res.to_json_obj(),
-                "last_tests_full": full_res.to_json_obj() if full_res is not None else None,
-                "accounting": dict(accounting),
-                "policy": {
-                    "mode": config.policy_mode,
-                    "allowlist": list(config.tool_allowlist),
-                },
-                "policy_decisions": list(accounting["policy_decisions"]),
-                "last_prompt_key": prompt_key,
-                "last_patch_sha256": patch_sha256,
-                "last_failure": failure_json,
-            },
-        )
-        plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-
-        if promotable and not improved and stage == "repair":
-            monotonic_msg = (
-                "monotonic improvement violated: repair candidate did not improve candidate score"
-            )
-            monotonic_exec = ExecutionResult(
-                exit_code=3, stdout="", stderr=monotonic_msg, duration_ms=0
-            )
-            last_exec = monotonic_exec
-            plan = _set_step_outputs(
-                plan=plan,
-                step_id=step_id,
-                outputs_patch={
-                    "last_monotonic_failure": {
-                        "code": "repair.non_improving",
-                        "message": monotonic_msg,
-                        "best_score": int(previous_best.score)
-                        if previous_best is not None
-                        else None,
-                        "candidate_score": int(cand.score),
-                    }
-                },
-            )
-            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-            if repairs_used >= max_repairs:
-                break
-            repairs_used += 1
-            accounting["repair_iterations"] = repairs_used
-            stage = "repair"
-            current_tier = _escalate_tier(current=current_tier, config=config)
-            continue
-        if promotable and not ok_tests_policy:
-            # Treat as a policy failure eligible for repair; store evidence on the step.
-            policy_msg = (
-                "policy violation: patch changes non-test code but does not add/update tests; "
-                "include relevant tests in the patch (tests generated by default)"
-            )
-            policy_exec = ExecutionResult(exit_code=2, stdout="", stderr=policy_msg, duration_ms=0)
-            last_exec = policy_exec
-            plan = _set_step_outputs(
-                plan=plan,
-                step_id=step_id,
-                outputs_patch={
-                    "last_policy_failure": {
-                        "code": "policy.missing_tests",
-                        "message": policy_msg,
-                        "evidence": policy_evidence,
-                    }
-                },
-            )
-            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-            if repairs_used >= max_repairs:
-                break
-            repairs_used += 1
-            accounting["repair_iterations"] = repairs_used
-            stage = "repair"
-            current_tier = _escalate_tier(current=current_tier, config=config)
-            continue
-        if promotable:
-            # Phase 5 verifier gate: can veto promotion even after tests pass.
-            assert verifier_result is not None  # ok_tests_policy ensured above
-            vres = verifier_result
-            plan = _set_step_outputs(
-                plan=plan,
-                step_id=step_id,
-                outputs_patch={"last_verification": vres.to_json_obj()},
-            )
-            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-            _append_span(
-                span_id=new_span_id(),
-                parent_span_id=step_span_id,
-                name="compile.verify",
-                kind="internal",
-                start_ns=now_unix_nano() - 1,
-                end_ns=now_unix_nano(),
-                attributes={
-                    "passed": bool(vres.passed),
-                    "strict": bool(config.verifier_strict),
-                },
-                status="ok" if bool(vres.passed) else "error",
-            )
-            if not vres.passed:
-                # Treat verifier veto as a failure eligible for repair (budgeted).
-                last_exec = exec_result
-                if repairs_used >= max_repairs:
-                    break
-                repairs_used += 1
-                accounting["repair_iterations"] = repairs_used
-                stage = "repair"
-                current_tier = _escalate_tier(current=current_tier, config=config)
-                continue
-
-            # Success: persist artifacts into code memory and mark step done.
-            tms = now_ms()
-            patch_paths = touched_paths
-            patch_item_id = f"{plan.id}:{step_id}:patch"
-            test_item_id = f"{plan.id}:{step_id}:test_result"
-            smoke_item_id = f"{plan.id}:{step_id}:test_smoke_result"
-            full_item_id = f"{plan.id}:{step_id}:test_full_result"
-            code_memory.upsert_items(
-                tenant_id=tenant_id,
-                repo_id=repo_id,
-                artifact_id=plan.id,
-                items=[
-                    make_item(
-                        tenant_id=tenant_id,
-                        repo_id=repo_id,
-                        artifact_id=plan.id,
-                        item_id=patch_item_id,
-                        kind="patch",
-                        content=patch_text,
-                        metadata={
-                            "plan_id": plan.id,
-                            "step_id": step_id,
-                            "tier": tier_cfg.name,
-                            "stage": str(stage),
-                            "paths": patch_paths,
-                        },
-                        created_at_ms=tms,
-                        updated_at_ms=tms,
-                    ),
-                    make_item(
-                        tenant_id=tenant_id,
-                        repo_id=repo_id,
-                        artifact_id=plan.id,
-                        item_id=smoke_item_id,
-                        kind="test_result",
-                        content=smoke_res.result.stdout
-                        + ("\n" + smoke_res.result.stderr if smoke_res.result.stderr else ""),
-                        metadata={
-                            "plan_id": plan.id,
-                            "step_id": step_id,
-                            "stage": smoke_res.stage,
-                            "exit_code": int(smoke_res.result.exit_code),
-                            "duration_ms": smoke_res.result.duration_ms,
-                            "command": list(smoke_res.command),
-                            "paths": patch_paths,
-                        },
-                        created_at_ms=tms,
-                        updated_at_ms=tms,
-                    ),
-                    make_item(
-                        tenant_id=tenant_id,
-                        repo_id=repo_id,
-                        artifact_id=plan.id,
-                        item_id=full_item_id,
-                        kind="test_full_result",
-                        content=exec_result.stdout
-                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
-                        metadata={
-                            "plan_id": plan.id,
-                            "step_id": step_id,
-                            "stage": (full_res.stage if full_res is not None else smoke_res.stage),
-                            "exit_code": int(exec_result.exit_code),
-                            "duration_ms": exec_result.duration_ms,
-                            "command": list(
-                                full_res.command if full_res is not None else smoke_res.command
-                            ),
-                            "paths": patch_paths,
-                        },
-                        created_at_ms=tms,
-                        updated_at_ms=tms,
-                    ),
-                    make_item(
-                        tenant_id=tenant_id,
-                        repo_id=repo_id,
-                        artifact_id=plan.id,
-                        item_id=test_item_id,
-                        kind="test_result",
-                        content=exec_result.stdout
-                        + ("\n" + exec_result.stderr if exec_result.stderr else ""),
-                        metadata={
-                            "plan_id": plan.id,
-                            "step_id": step_id,
-                            "stage": (full_res.stage if full_res is not None else smoke_res.stage),
-                            "exit_code": int(exec_result.exit_code),
-                            "duration_ms": exec_result.duration_ms,
-                            "command": list(
-                                full_res.command if full_res is not None else smoke_res.command
-                            ),
-                            "paths": patch_paths,
-                        },
-                        created_at_ms=tms,
-                        updated_at_ms=tms,
-                    ),
-                ],
-            )
-
-            plan = _set_step_status(plan=plan, step_id=step_id, status="done")
-            plan = _set_step_outputs(
-                plan=plan,
-                step_id=step_id,
-                outputs_patch={
-                    "code_memory_item_ids": [patch_item_id, test_item_id],
-                    "code_memory_test_item_ids": [smoke_item_id, full_item_id],
-                },
-            )
-            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-            plan = advance_plan(
-                tenant_id=tenant_id,
-                repo_id=repo_id,
-                plan_id=plan.id,
-                plan_store=plan_store,
-                feedback={"status": "passed", "step_id": step_id},
-            )
-            accounting["finished_at_ms"] = now_ms()
-            accounting["wall_time_ms"] = int((time.monotonic() - start) * 1000.0)
-            run_end_ns = now_unix_nano()
-            _append_span(
-                span_id=step_span_id,
-                parent_span_id=run_span_id,
-                name="compile.step",
-                kind="internal",
-                start_ns=step_started_ns,
-                end_ns=run_end_ns,
-                attributes={"step_id": step_id, "status": "succeeded"},
-            )
-            _append_span(
-                span_id=run_span_id,
-                parent_span_id=None,
-                name="compile.run",
-                kind="internal",
-                start_ns=run_started_ns,
-                end_ns=run_end_ns,
-                attributes={
-                    "tenant_id": tenant_id,
-                    "repo_id": repo_id,
-                    "plan_id": plan.id,
-                    "status": "succeeded",
-                },
-            )
-            return ControllerResult(
-                status="succeeded",
-                plan=plan,
-                best_candidate=best,
-                accounting=accounting,
-            )
-
-        # Smoke-only pass without a full gate:
-        # keep iterating without consuming a repair.
-        if (
-            config.test_mode == "smoke"
-            and int(smoke_res.result.exit_code) == 0
-            and full_res is None
-        ):
-            stage = "generate"
-            continue
-
-        # Failure: iterate repair if budget allows.
-        if repairs_used >= max_repairs:
-            break
-        repairs_used += 1
-        accounting["repair_iterations"] = repairs_used
-        stage = "repair"
-        # ARCS-style: escalate generation tier after a failed execute.
-        current_tier = _escalate_tier(current=current_tier, config=config)
-
-    # If we reach here we did not succeed.
-    status: RunStatus = "budget_exhausted"
-    if (
-        accounting["llm_calls"] < int(budget.max_llm_calls)
-        and _wall_budget_ok()
-        and _cost_budget_ok()
-    ):
-        status = "failed"
-
-    plan = _set_step_status(
-        plan=plan,
-        step_id=step_id,
-        status="failed",
-        notes="compile loop did not produce a passing candidate within budget",
+    intent_mandatory_partial_replay_passes = mandatory_partial_replay_passes_for_success_criteria(
+        success_criteria=resolved_intent.spec.success_criteria
     )
-    plan = replace(
-        plan,
-        last_feedback={"status": str(status), "step_id": step_id},
-        updated_at_ms=now_ms(),
-    )
-    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-    plan = advance_plan(
+    current_stable_intent_sha256 = resolved_intent.stable_intent_sha256
+
+    return run_budgeted_generate_execute_repair_loop(
         tenant_id=tenant_id,
         repo_id=repo_id,
-        plan_id=plan.id,
         plan_store=plan_store,
-        feedback={"status": str(status), "step_id": step_id},
+        scope=scope,
+        plan=plan,
+        step_id=step_id,
+        code_memory=code_memory,
+        config=config,
+        ctx=ctx,
+        intent_spec=intent_spec,
+        intent_id=intent_id,
+        intent_contract=intent_contract,
+        intent_fingerprint=intent_fingerprint,
+        bounds_projection=bounds_projection,
+        goal=goal,
+        active_objectives=active_objectives,
+        linked_constraints=linked_constraints,
+        active_success_criteria=active_success_criteria,
+        knowledge_semantic_fingerprint=knowledge_semantic_fingerprint_16,
+        knowledge_provenance_fingerprint=knowledge_provenance_fingerprint_16,
+        policy_llm=policy_llm,
+        policy_executor=policy_executor,
+        exec_base_capability=exec_base_capability,
+        policy_engine=effective_policy_engine,
+        replay_mode=replay_mode,
+        replay_manifest=replay_manifest,
+        intent_mandatory_partial_replay_passes=intent_mandatory_partial_replay_passes,
+        current_stable_intent_sha256=current_stable_intent_sha256,
+        verifier=verifier,
+        gen_tier=gen_tier,
+        smoke_command=smoke_command,
+        full_command=full_command,
+        smoke_stage_name=smoke_stage_name,
+        full_stage_name=full_stage_name,
+        smoke_timeout_s_effective=smoke_timeout_s_effective,
+        full_timeout_s_effective=full_timeout_s_effective,
+        smoke_policy_context=smoke_policy_context,
+        full_policy_context=full_policy_context,
+        effective_max_wall_time_s=effective_max_wall_time_s,
+        effective_max_steps=effective_max_steps,
+        effective_max_input_tokens=effective_max_input_tokens,
+        effective_max_output_tokens=effective_max_output_tokens,
+        budget=budget,
+        start=start,
+        accounting=accounting,
+        append_span=_append_span,
+        best_initial=best,
+        compile_succeeded_seen_initial=compile_succeeded_seen,
+        intent_satisfied_initial=intent_satisfied,
+        step_span_id=step_span_id,
+        run_span_id=run_span_id,
+        step_started_ns=step_started_ns,
+        run_started_ns=run_started_ns,
+        resolved_intent_context=resolved_intent,
+        intent_store=intent_store,
+        intent_contract_shape=intent_contract_shape,
     )
-    accounting["finished_at_ms"] = now_ms()
-    accounting["wall_time_ms"] = int((time.monotonic() - start) * 1000.0)
-    run_end_ns = now_unix_nano()
-    _append_span(
-        span_id=step_span_id,
-        parent_span_id=run_span_id,
-        name="compile.step",
-        kind="internal",
-        start_ns=step_started_ns,
-        end_ns=run_end_ns,
-        attributes={"step_id": step_id, "status": str(status)},
-        status="error",
-    )
-    _append_span(
-        span_id=run_span_id,
-        parent_span_id=None,
-        name="compile.run",
-        kind="internal",
-        start_ns=run_started_ns,
-        end_ns=run_end_ns,
-        attributes={
-            "tenant_id": tenant_id,
-            "repo_id": repo_id,
-            "plan_id": plan.id,
-            "status": str(status),
-        },
-        status="error",
-    )
-    return ControllerResult(status=status, plan=plan, best_candidate=best, accounting=accounting)

@@ -1,0 +1,135 @@
+{
+  "cases": [
+    {
+      "case_id": "egress_tls_prefers_highest_overlap",
+      "constraint_text": "all egress traffic must use tls and mTLS certificates",
+      "top_k": 3,
+      "documents": [
+        {
+          "doc_id": "doc-z",
+          "title": "Egress policy",
+          "content": "Egress traffic must use TLS with certificate pinning."
+        },
+        {
+          "doc_id": "doc-a",
+          "title": "mTLS requirement",
+          "content": "All egress traffic must use mTLS certificates for service identity."
+        },
+        {
+          "doc_id": "doc-m",
+          "title": "Unrelated",
+          "content": "Team lunch and onboarding notes."
+        }
+      ],
+      "expected_doc_ids": [
+        "doc-a",
+        "doc-z"
+      ]
+    },
+    {
+      "case_id": "equal_overlap_uses_lexicographic_doc_id",
+      "constraint_text": "service must authenticate requests with token verification",
+      "top_k": 2,
+      "documents": [
+        {
+          "doc_id": "doc-b",
+          "title": "Auth",
+          "content": "Service authenticate requests token verification."
+        },
+        {
+          "doc_id": "doc-a",
+          "title": "Auth duplicate",
+          "content": "Service authenticate requests token verification."
+        }
+      ],
+      "expected_doc_ids": [
+        "doc-a",
+        "doc-b"
+      ]
+    },
+    {
+      "case_id": "invalid_doc_ids_filtered_and_top_k_applied",
+      "constraint_text": "rotate signing keys every 30 days",
+      "top_k": 2,
+      "documents": [
+        {
+          "doc_id": "  ",
+          "title": "invalid",
+          "content": "rotate signing keys every 30 days"
+        },
+        {
+          "doc_id": "doc-2",
+          "title": "crypto policy",
+          "content": "rotate signing keys every 30 days and archive old keys"
+        },
+        {
+          "doc_id": "doc-1",
+          "title": "minimum policy",
+          "content": "rotate signing keys every 30 days"
+        },
+        {
+          "doc_id": "doc-3",
+          "title": "partial policy",
+          "content": "rotate keys quarterly"
+        }
+      ],
+      "expected_doc_ids": [
+        "doc-1",
+        "doc-2"
+      ]
+    },
+    {
+      "case_id": "knowledge_domain_openapi_excerpt_alignment",
+      "constraint_text": "callbacks must use https and must not embed personally identifiable information in query strings",
+      "top_k": 3,
+      "documents": [
+        {
+          "doc_id": "kd-sec-net-openapi-callbacks",
+          "title": "External callback surface",
+          "content": "Callbacks MUST use HTTPS. Integrations MUST NOT embed personally identifiable information in query strings."
+        },
+        {
+          "doc_id": "kd-doc-derived-controls",
+          "title": "Security controls catalog",
+          "content": "Applications MUST use TLS 1.2 or higher for HTTPS connections. Clients SHOULD NOT send secrets in URLs."
+        },
+        {
+          "doc_id": "kd-sec-net-docs-firewall",
+          "title": "Firewall and egress policy",
+          "content": "All outbound HTTPS traffic MUST traverse the corporate egress proxy."
+        }
+      ],
+      "expected_doc_ids": [
+        "kd-sec-net-openapi-callbacks",
+        "kd-doc-derived-controls",
+        "kd-sec-net-docs-firewall"
+      ]
+    },
+    {
+      "case_id": "knowledge_domain_conflict_retention_excerpt_alignment",
+      "constraint_text": "customer billing records must be deleted after thirty days in cold storage",
+      "top_k": 2,
+      "documents": [
+        {
+          "doc_id": "kd-conflict-retention-v1",
+          "title": "Retention policy v1",
+          "content": "The platform MUST retain customer billing records for seven years to satisfy audit requirements."
+        },
+        {
+          "doc_id": "kd-conflict-retention-v2",
+          "title": "Retention policy v2",
+          "content": "Archived customer billing records MUST be deleted after thirty days in cold storage to minimize PII exposure."
+        },
+        {
+          "doc_id": "kd-sec-net-msg-incident",
+          "title": "Slack-style incident thread",
+          "content": "Security team notes blocked egress attempts and certificate rotation."
+        }
+      ],
+      "expected_doc_ids": [
+        "kd-conflict-retention-v2",
+        "kd-conflict-retention-v1"
+      ]
+    }
+  ]
+}

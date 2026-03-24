@@ -1,0 +1,174 @@
+{
+  "params": {
+    "spec_version": 1,
+    "window": "single_run",
+    "predicate_kind": "presence",
+    "signals": [],
+    "expected_evidence_types": [
+      "reconcile_outcome"
+    ],
+    "composite_predicates": [
+      {
+        "kind": "metric_counter_ratio",
+        "comparator": "lte",
+        "target": 0.05,
+        "numerator": {
+          "metric_name": "errors_total"
+        },
+        "denominator": {
+          "metric_name": "requests_total"
+        },
+        "max_metric_points": 100,
+        "max_metric_series": 32
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_type": "reconcile_outcome",
+      "timestamp": 1,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "operation_type": "apply",
+        "applied": true
+      }
+    },
+    {
+      "evidence_type": "reconcile_resource_status",
+      "timestamp": 2,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "res1",
+        "converged": true,
+        "health_status": "healthy"
+      }
+    },
+    {
+      "evidence_type": "terminal_health",
+      "timestamp": 3,
+      "runtime_run_id": "r1",
+      "payload": {
+        "resource_id": "__runtime_aggregate__",
+        "health_status": "healthy",
+        "aggregate": true
+      }
+    }
+  ],
+  "otel_records": null,
+  "otel_contract": null,
+  "otel_metric_records": [
+    {
+      "akc_metric_export_version": 1,
+      "source": "runtime.metric_point",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "metric": {
+        "name": "errors_total",
+        "kind": "sum",
+        "as_int": 1
+      }
+    },
+    {
+      "akc_metric_export_version": 1,
+      "source": "runtime.metric_point",
+      "resource": {
+        "attributes": {
+          "service.name": "akc",
+          "akc.tenant_id": "t",
+          "akc.repo_id": "r",
+          "akc.run_id": "run"
+        }
+      },
+      "metric": {
+        "name": "requests_total",
+        "kind": "sum",
+        "as_int": 100
+      }
+    }
+  ],
+  "success_criterion_id": "sc",
+  "expected": {
+    "inputs_sha256": "2654d77261f38a965de6b9ec74cb88185cf4ce8a397df7a9975320b46c4c71ef",
+    "verdict_sha256": "ec6a816a5ae34ac5b131fba2b8afad7c62780e1dd65b96a1b4d5f7b161d4b14d",
+    "combined_sha256": "c9702ab19ac3eb0fb063a199a63f7a9b7a61496fceb986245fb3b2bc7642a196",
+    "step_output": {
+      "passed": true,
+      "failures": [],
+      "evaluated_success_criteria": 5,
+      "checks": [
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "aggregate_terminal_health",
+          "passed": true,
+          "evidence": {
+            "health_status": "healthy",
+            "health_rank": 1,
+            "worst_of_order": [
+              "failed",
+              "degraded",
+              "unknown",
+              "healthy"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_convergence",
+          "passed": true,
+          "evidence": {
+            "resource_status_count": 1,
+            "non_converged_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "reconcile_outcome_applied",
+          "passed": true,
+          "evidence": {
+            "reconcile_outcome_count": 1,
+            "not_applied_resource_ids": []
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "presence_evidence_type:reconcile_outcome",
+          "passed": true,
+          "evidence": {
+            "observed_evidence_types": [
+              "reconcile_outcome",
+              "reconcile_resource_status",
+              "terminal_health"
+            ]
+          }
+        },
+        {
+          "success_criterion_id": "sc",
+          "evaluation_mode": "operational_spec",
+          "check_name": "composite_metric_counter_ratio:0",
+          "passed": true,
+          "evidence": {
+            "numerator_sum": 1.0,
+            "denominator_sum": 100.0,
+            "ratio": 0.01,
+            "target": 0.05,
+            "comparator": "lte",
+            "points_considered": 2,
+            "series_distinct": 2
+          }
+        }
+      ]
+    }
+  },
+  "otel_metric_parse_rejected_reason": null
+}

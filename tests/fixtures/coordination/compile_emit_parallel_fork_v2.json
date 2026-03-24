@@ -1,0 +1,35 @@
+{
+  "spec_version": 2,
+  "run_id": "compile-emit-parallel-fork",
+  "tenant_id": "t_fixture",
+  "repo_id": "r_fixture",
+  "agent_roles": [{ "name": "planner" }],
+  "orchestration_bindings": [
+    {
+      "role_name": "planner",
+      "agent_name": "compile_controller",
+      "orchestration_step_ids": ["workflow_000", "workflow_001", "workflow_002"]
+    }
+  ],
+  "coordination_graph": {
+    "nodes": [
+      { "node_id": "workflow_000", "kind": "step", "label": "fork_from" },
+      { "node_id": "workflow_001", "kind": "step", "label": "branch_a" },
+      { "node_id": "workflow_002", "kind": "step", "label": "branch_b" }
+    ],
+    "edges": [
+      {
+        "edge_id": "edge_0001",
+        "kind": "parallel",
+        "src_step_id": "workflow_000",
+        "dst_step_id": "workflow_001"
+      },
+      {
+        "edge_id": "edge_0002",
+        "kind": "parallel",
+        "src_step_id": "workflow_000",
+        "dst_step_id": "workflow_002"
+      }
+    ]
+  }
+}

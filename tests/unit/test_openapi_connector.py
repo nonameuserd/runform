@@ -28,20 +28,14 @@ def test_openapi_connector_emits_index_and_operation_documents(tmp_path: Path) -
                     "servers": [{"url": "https://write.api.example.com"}],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/UserCreate"}
-                            }
-                        },
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserCreate"}}},
                     },
                     "responses": {"201": {"description": "created"}},
                 },
             }
         },
         "components": {
-            "securitySchemes": {
-                "ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
-            },
+            "securitySchemes": {"ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"}},
             "schemas": {
                 "UserCreate": {
                     "type": "object",
@@ -73,13 +67,11 @@ def test_openapi_connector_emits_index_and_operation_documents(tmp_path: Path) -
     assert any("POST /users" in d.content for d in op_docs)
     # Operation-level servers override path-item/top-level; path-item overrides top-level.
     assert any(
-        d.metadata["openapi_method"] == "GET"
-        and "servers:\n  - https://users.api.example.com" in d.content
+        d.metadata["openapi_method"] == "GET" and "servers:\n  - https://users.api.example.com" in d.content
         for d in op_docs
     )
     assert any(
-        d.metadata["openapi_method"] == "POST"
-        and "servers:\n  - https://write.api.example.com" in d.content
+        d.metadata["openapi_method"] == "POST" and "servers:\n  - https://write.api.example.com" in d.content
         for d in op_docs
     )
     assert any("auth:\n  - ApiKeyAuth: apiKey (header)" in d.content for d in op_docs)
@@ -107,3 +99,31 @@ def test_openapi_connector_rejects_unknown_source_id(tmp_path: Path) -> None:
     conn = OpenAPIConnector(tenant_id="t", config=OpenAPIConnectorConfig(spec=str(p)))
     with pytest.raises(ConnectorError, match=r"unknown source_id"):
         list(conn.fetch(str(tmp_path / "other.json")))
+
+
+def test_openapi_emit_soft_assertion_chunks(tmp_path: Path) -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Example API", "version": "1.0.0"},
+        "servers": [{"url": "https://api.example.com", "description": "prod"}],
+        "paths": {"/x": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        "components": {
+            "securitySchemes": {"ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "X"}},
+            "schemas": {
+                "User": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+            },
+        },
+    }
+    p = tmp_path / "openapi.json"
+    p.write_text(json.dumps(spec), encoding="utf-8")
+    conn = OpenAPIConnector(
+        tenant_id="tenant-1",
+        config=OpenAPIConnectorConfig(spec=str(p), emit_soft_assertion_chunks=True),
+    )
+    docs = list(conn.fetch(str(p)))
+    soft = [d for d in docs if d.metadata.get("openapi_soft_kind")]
+    kinds = {d.metadata.get("openapi_soft_kind") for d in soft}
+    assert "server" in kinds
+    assert "security_scheme" in kinds
+    assert "schema_required" in kinds
+    assert all(d.metadata.get("ingest_source_kind") == "openapi" for d in soft)

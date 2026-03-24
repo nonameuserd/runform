@@ -14,9 +14,7 @@ def test_manifest_schema_regression_v1_snapshot(tmp_path: Path) -> None:
         scope=scope,
         name="compile_session",
         artifacts=(
-            OutputArtifact.from_text(
-                path=".akc/patches/p1_s1.diff", text="--- a/x\n+++ b/x\n@@\n+ok\n"
-            ),
+            OutputArtifact.from_text(path=".akc/patches/p1_s1.diff", text="--- a/x\n+++ b/x\n@@\n+ok\n"),
             OutputArtifact.from_json(
                 path=".akc/tests/p1_s1.smoke.json",
                 obj={

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:convergence_certificate:v1",
+  "title": "AKC convergence certificate (runtime evidence payload)",
+  "description": "Versioned payload carried under runtime_evidence_stream items with evidence_type=convergence_certificate. Per-resource rows include resource_id; aggregate rows use resource_id=__runtime_aggregate__ and aggregate=true.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "certificate_schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "resource_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aggregate": {
+      "type": "boolean"
+    },
+    "desired_hash": {
+      "type": "string"
+    },
+    "observed_hash": {
+      "type": "string"
+    },
+    "health": {
+      "type": "string",
+      "enum": ["healthy", "degraded", "unknown", "failed"]
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "window_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "converged": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "certificate_schema_version",
+    "resource_id",
+    "desired_hash",
+    "observed_hash",
+    "health",
+    "attempts",
+    "window_ms",
+    "provider_id",
+    "policy_mode",
+    "converged"
+  ]
+}

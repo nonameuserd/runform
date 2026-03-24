@@ -146,12 +146,8 @@ class AgentBudget:
     def to_json_obj(self) -> dict[str, JSONValue]:
         obj: dict[str, JSONValue] = {
             "max_steps": int(self.max_steps) if self.max_steps is not None else None,
-            "max_input_tokens": int(self.max_input_tokens)
-            if self.max_input_tokens is not None
-            else None,
-            "max_output_tokens": int(self.max_output_tokens)
-            if self.max_output_tokens is not None
-            else None,
+            "max_input_tokens": int(self.max_input_tokens) if self.max_input_tokens is not None else None,
+            "max_output_tokens": int(self.max_output_tokens) if self.max_output_tokens is not None else None,
             "max_seconds": float(self.max_seconds) if self.max_seconds is not None else None,
         }
         # Drop nulls for compactness / readability.

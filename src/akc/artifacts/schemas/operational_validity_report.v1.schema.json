@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:operational_validity_report:v1",
+  "title": "AKC operational validity report",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:operational_validity_report:v1"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_run_id": {
+      "type": ["string", "null"]
+    },
+    "evaluated_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "operational_spec_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "success_criterion_id": {
+      "type": ["string", "null"]
+    },
+    "intent_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "intent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stable_intent_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "semantic_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "goal_text_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        }
+      },
+      "required": [
+        "intent_id",
+        "stable_intent_sha256",
+        "semantic_fingerprint",
+        "goal_text_fingerprint"
+      ]
+    },
+    "runtime_bundle_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["path", "sha256"]
+    },
+    "runtime_evidence_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": ["path", "sha256"]
+    },
+    "predicate_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "predicate_kind": {
+            "type": "string",
+            "enum": ["threshold", "presence"]
+          },
+          "signal_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "observed_value": {
+            "type": ["number", "null"]
+          },
+          "details": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
+        },
+        "required": ["predicate_kind", "passed"]
+      }
+    },
+    "expected_evidence_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notes": {
+      "type": ["string", "null"]
+    }
+  },
+  "required": [
+    "tenant_id",
+    "repo_id",
+    "run_id",
+    "evaluated_at_ms",
+    "passed",
+    "operational_spec_version"
+  ]
+}

@@ -4,6 +4,13 @@ regression_thresholds:
   max_avg_repair_iterations: 2.0
   max_success_rate_drop: 0.05
   max_avg_wall_time_regression_pct: 50.0
+  min_runtime_replay_determinism_rate: 1.0
+  max_avg_runtime_rollbacks_total: 0.0
+living_recompile_policy:
+  granular_acceptance_triggers: true
+  operational_validity_failed_trigger_severity: block
+runtime_canary_thresholds:
+  max_total_impacts: 10
 tasks:
   - id: golden-sample-manifest
     tenant_id: eval-tenant
@@ -36,6 +43,13 @@ tasks:
       max_wall_time_ms: 30000
       require_unit_tests_passed: true
       require_trace_spans: true
+      require_runtime_replay_determinism: true
+      runtime_mode: simulate
+      runtime_reliability_kpis:
+        max_rollbacks_total: 0
+        max_convergence_latency_ms_avg: 60000
+        max_mttr_like_repair_latency_ms_avg: 60000
+        require_terminal_health_in: [healthy, unknown, degraded]
     judge:
       enabled: true
       expected_keywords:

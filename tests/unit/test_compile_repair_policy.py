@@ -38,9 +38,14 @@ FAILED tests/test_x.py::test_addition - boom
     failure = parse_execution_failure(result=ExecutionResult(exit_code=1, stdout=out, stderr=""))
     prompt = build_repair_prompt(
         goal="Fix failing test",
-        plan_json={"id": "p1"},
+        ir_context={"schema_kind": "akc.ir", "nodes": []},
+        plan_trace={"steps": [], "next_step_id": None},
         step_id="s1",
         step_title="Step",
+        intent_id="intent-1",
+        active_objectives=[],
+        linked_constraints=[],
+        active_success_criteria=[],
         retrieved_context={"documents": [], "code_memory_items": []},
         last_generation_text="diff --git a/x b/x",
         failure=failure,
@@ -48,3 +53,6 @@ FAILED tests/test_x.py::test_addition - boom
     assert "Execution failure summary (parsed)" in prompt
     assert "max" not in prompt  # prompt builder itself does not enforce budgets
     assert "Return ONLY a unified diff" in prompt
+    assert "Plan JSON" not in prompt
+    assert "IR (compact structural graph)" in prompt
+    assert "Plan execution trace" in prompt

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/akc_incident_bundle_summary.v1.schema.json",
+  "title": "AKC incident bundle summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_kind",
+    "version",
+    "tenant_id",
+    "repo_id",
+    "run_id",
+    "scope_root",
+    "included",
+    "omitted",
+    "redaction_applied",
+    "export_metadata"
+  ],
+  "properties": {
+    "schema_kind": { "type": "string", "const": "akc_incident_bundle_summary" },
+    "version": { "type": "integer", "const": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "repo_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "scope_root": { "type": "string", "minLength": 1 },
+    "included": { "type": "object", "additionalProperties": true },
+    "omitted": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "heavy_artifacts_not_copied": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "knowledge_governance": { "type": "object", "additionalProperties": true },
+    "redaction_applied": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["policy_version", "total_redactions", "entries"],
+      "properties": {
+        "policy_version": { "type": "string", "minLength": 1 },
+        "total_redactions": { "type": "integer", "minimum": 0 },
+        "entries": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+      }
+    },
+    "export_metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_kind", "version", "generated_at_ms", "hash_manifest", "policy_refs"],
+      "properties": {
+        "schema_kind": { "type": "string", "const": "akc_bundle_export_metadata" },
+        "version": { "type": "integer", "const": 1 },
+        "generated_at_ms": { "type": "integer", "minimum": 0 },
+        "hash_manifest": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "policy_refs": { "type": "object", "additionalProperties": true },
+        "signature": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    }
+  }
+}

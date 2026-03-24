@@ -5,8 +5,12 @@ from dataclasses import dataclass
 import pytest
 
 from akc.compile.interfaces import Index, IndexDocument, IndexQuery, TenantRepoScope
-from akc.compile.retriever import retrieve_context
+from akc.compile.ir_builder import build_ir_document_from_plan
+from akc.compile.retriever import boost_retrieved_documents_for_knowledge_evidence, retrieve_context
+from akc.ir import IRDocument
+from akc.knowledge.models import CanonicalConstraint, CanonicalDecision, EvidenceMapping, KnowledgeSnapshot
 from akc.memory.facade import build_memory
+from akc.memory.models import PlanState, PlanStep, now_ms
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,136 @@ def test_retrieve_context_includes_scored_documents_when_index_provided() -> Non
             "metadata": {"repo_id": "repo1"},
         }
     ]
+
+
+def test_retrieve_context_ir_document_augmented_query_text() -> None:
+    mem = build_memory(backend="memory")
+    t = now_ms()
+    plan = PlanState(
+        id="plan_ir",
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal text",
+        status="active",
+        created_at_ms=t,
+        updated_at_ms=t,
+        steps=(
+            PlanStep(
+                id="s1",
+                title="step one",
+                status="pending",
+                order_idx=0,
+                inputs={"intent_id": "i1"},
+            ),
+        ),
+        next_step_id="s1",
+    )
+    ir = build_ir_document_from_plan(plan=plan, intent_node_properties=None)
+    idx = _SpyIndex(docs=[])
+    retrieve_context(
+        tenant_id="t1",
+        repo_id="repo1",
+        plan=plan,
+        code_memory=mem.code_memory,
+        index=idx,
+        limit=5,
+        ir_document=ir,
+    )
+    assert idx.last_query is not None
+    assert "IR structure:" in idx.last_query.text
+    assert "intent:" in idx.last_query.text
+
+
+def test_retrieve_context_rejects_ir_tenant_mismatch() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Do the thing",
+        initial_steps=["first"],
+    )
+    bad_ir = IRDocument(tenant_id="other", repo_id="repo1", nodes=())
+    with pytest.raises(ValueError, match="tenant_id must match"):
+        retrieve_context(
+            tenant_id="t1",
+            repo_id="repo1",
+            plan=plan,
+            code_memory=mem.code_memory,
+            index=None,
+            limit=5,
+            ir_document=bad_ir,
+        )
+
+
+def test_boost_retrieved_documents_prefers_evidence_doc_ids() -> None:
+    c = CanonicalConstraint(
+        subject="s",
+        predicate="forbidden",
+        object=None,
+        polarity=1,
+        scope="repo",
+        kind="hard",
+        summary="x",
+    )
+    d = CanonicalDecision(assertion_id=c.assertion_id, selected=True, resolved=True)
+    ev = EvidenceMapping(evidence_doc_ids=("cite-me",), resolved_provenance_pointers=())
+    snap = KnowledgeSnapshot(
+        canonical_constraints=(c,),
+        canonical_decisions=(d,),
+        evidence_by_assertion={c.assertion_id: ev},
+    )
+    docs = [
+        {"doc_id": "other", "title": "o", "content": "", "score": 0.9},
+        {"doc_id": "cite-me", "title": "c", "content": "", "score": 0.5},
+    ]
+    boosted = boost_retrieved_documents_for_knowledge_evidence(docs, snapshot=snap, boost_delta=0.5)
+    assert boosted[0]["doc_id"] == "cite-me"
+    assert float(boosted[0]["score"]) >= float(boosted[1]["score"])
+
+
+def test_retrieve_context_prior_knowledge_suffix_in_query() -> None:
+    mem = build_memory(backend="memory")
+    t = now_ms()
+    c = CanonicalConstraint(
+        subject="policy",
+        predicate="forbidden",
+        object=None,
+        polarity=1,
+        scope="repo",
+        kind="hard",
+        summary="no outbound calls",
+    )
+    d = CanonicalDecision(assertion_id=c.assertion_id, selected=True, resolved=True)
+    ev = EvidenceMapping(evidence_doc_ids=(), resolved_provenance_pointers=())
+    prior = KnowledgeSnapshot(
+        canonical_constraints=(c,),
+        canonical_decisions=(d,),
+        evidence_by_assertion={c.assertion_id: ev},
+    )
+    plan = PlanState(
+        id="pk",
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        status="active",
+        created_at_ms=t,
+        updated_at_ms=t,
+        steps=(PlanStep(id="s1", title="one", status="pending", order_idx=0, inputs={}),),
+        next_step_id="s1",
+    )
+    idx = _SpyIndex(docs=[])
+    retrieve_context(
+        tenant_id="t1",
+        repo_id="repo1",
+        plan=plan,
+        code_memory=mem.code_memory,
+        index=idx,
+        limit=5,
+        knowledge_snapshot_for_query=prior,
+    )
+    assert idx.last_query is not None
+    assert "Knowledge constraints" in idx.last_query.text
+    assert "no outbound" in idx.last_query.text
 
 
 def test_retrieve_context_rejects_plan_scope_mismatch() -> None:

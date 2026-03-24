@@ -137,9 +137,7 @@ def test_sqlite_code_memory_persists_and_filters(tmp_path) -> None:  # type: ign
     all_ids = [i.id for i in s2.list_items(tenant_id="t", repo_id="repo", limit=10)]
     assert set(all_ids) == {"i1", "i2", "i3"}
 
-    a1_ids = [
-        i.id for i in s2.list_items(tenant_id="t", repo_id="repo", artifact_id="a1", limit=10)
-    ]
+    a1_ids = [i.id for i in s2.list_items(tenant_id="t", repo_id="repo", artifact_id="a1", limit=10)]
     assert set(a1_ids) == {"i1", "i2"}
 
     kind_ids = [

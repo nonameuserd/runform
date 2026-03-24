@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://akc.dev/schemas/fleet_config.v1.schema.json",
+  "title": "AKC fleet control plane config (v1)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "shards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "outputs_root"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "outputs_root": { "type": "string", "minLength": 1 },
+          "tenant_allowlist": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If omitted or empty, all tenants on this shard are visible."
+          }
+        }
+      }
+    },
+    "api_tokens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["token", "role"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "token": { "type": "string", "minLength": 8 },
+          "role": { "type": "string", "enum": ["viewer", "operator"] },
+          "tenant_allowlist": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Tenant ids this token may read; use [\"*\"] for all tenants on allowed shards."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["runs:read", "runs:label", "audit:read"]
+            },
+            "minItems": 1,
+            "description": "OAuth-style capability scopes. If omitted, viewer maps to [runs:read] and operator to [runs:read, runs:label]."
+          }
+        }
+      }
+    },
+    "allow_anonymous_read": {
+      "type": "boolean",
+      "description": "If true, GET /v1/* is allowed without Authorization (localhost deployments only)."
+    },
+    "webhooks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "url", "secret", "events"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "minLength": 8 },
+          "secret": { "type": "string", "minLength": 8 },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["recompile_triggers", "living_drift", "operator_playbook_completed"]
+            },
+            "minItems": 1
+          },
+          "tenant_allowlist": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "page_size": { "type": "integer", "minimum": 1, "maximum": 500 }
+        }
+      }
+    },
+    "webhook_state_path": {
+      "type": "string",
+      "description": "Optional JSON file for webhook delivery watermarks (created if missing)."
+    }
+  }
+}

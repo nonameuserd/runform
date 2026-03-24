@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,15 +17,43 @@ from akc.compile import (
     TierConfig,
 )
 from akc.compile.controller import ControllerResult
-from akc.compile.interfaces import Executor, LLMBackend, TenantRepoScope
+from akc.compile.interfaces import Executor, Index, LLMBackend, TenantRepoScope
+from akc.compile.knowledge_extractor import extract_knowledge_snapshot
+from akc.compile.provenance_mapper import build_doc_id_to_provenance_map
+from akc.control.policy import (
+    CapabilityIssuer,
+    DefaultDenyPolicyEngine,
+    SubprocessOpaEvaluator,
+    ToolAuthorizationPolicy,
+)
 from akc.evals import run_eval_suite
+from akc.intent import compile_intent_spec, compute_intent_fingerprint
+from akc.intent.models import stable_intent_sha256
 from akc.ir import IRDocument
+from akc.knowledge import knowledge_provenance_fingerprint, knowledge_semantic_fingerprint
+from akc.living.automation_profile import LivingAutomationProfile, resolve_living_automation_profile
 from akc.memory.models import PlanState, normalize_repo_id, require_non_empty
-from akc.outputs.drift import drift_report, write_baseline
+from akc.outputs.drift import DriftFinding, drift_report, extend_drift_report, write_baseline, write_drift_artifacts
 from akc.outputs.fingerprints import IngestStateFingerprint, stable_json_fingerprint
-from akc.run.loader import find_latest_run_manifest
+from akc.run.loader import find_latest_run_manifest, load_run_manifest
+from akc.run.recompile_triggers import (
+    evaluate_recompile_triggers,
+    normalized_success_criterion_ids_from_runtime_payload,
+)
+from akc.runtime.models import RuntimeEvent
+from akc.runtime.policy import RuntimePolicyRuntime
 
 _TenantKeySep = "::"
+RuntimeImpactClass = Literal["service_degradation", "agent_degradation", "workflow_degradation"]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeImpact:
+    event: RuntimeEvent
+    impact_class: RuntimeImpactClass
+    severity: Literal["med", "high"]
+    impacted_step_ids: tuple[str, ...]
+    resource_id: str | None = None
 
 
 def _read_json_object(path: Path, *, what: str) -> dict[str, Any]:
@@ -32,6 +62,246 @@ def _read_json_object(path: Path, *, what: str) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"{what} must be a JSON object: {path}")
     return loaded
+
+
+def _payload_str(payload: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _coerce_runtime_event(raw: RuntimeEvent | Mapping[str, Any]) -> RuntimeEvent:
+    if isinstance(raw, RuntimeEvent):
+        return raw
+    if isinstance(raw, Mapping):
+        return RuntimeEvent.from_json_obj(raw)
+    raise ValueError("runtime event must be RuntimeEvent or JSON object")
+
+
+def _is_operational_validity_attestation_failure(event: RuntimeEvent) -> bool:
+    """True when the runtime recorded a failed post-runtime operational validity attestation."""
+
+    if event.event_type.strip() != "runtime.operational_validity.attested":
+        return False
+    return event.payload.get("passed") is False
+
+
+def _operational_validity_drift_findings_from_impacts(
+    impacts: tuple[RuntimeImpact, ...],
+) -> tuple[DriftFinding, ...]:
+    """Drift rows for authorized operational attestation failures (policy-gated upstream)."""
+
+    seen: set[str] = set()
+    out: list[DriftFinding] = []
+    for imp in impacts:
+        if not _is_operational_validity_attestation_failure(imp.event):
+            continue
+        eid = imp.event.event_id
+        if eid in seen:
+            continue
+        seen.add(eid)
+        details: dict[str, Any] = {
+            "event_id": eid,
+            "event_type": imp.event.event_type,
+            "runtime_run_id": imp.event.context.runtime_run_id,
+        }
+        sc_ids = normalized_success_criterion_ids_from_runtime_payload(dict(imp.event.payload))
+        if sc_ids:
+            details["success_criterion_ids"] = list(sc_ids)
+            if len(sc_ids) == 1:
+                details["success_criterion_id"] = sc_ids[0]
+        out.append(
+            DriftFinding(
+                kind="operational_validity_failed",
+                severity="high",
+                details=details,
+            )
+        )
+    return tuple(out)
+
+
+def _collect_operational_validity_success_criterion_ids_from_impacts(
+    impacts: tuple[RuntimeImpact, ...],
+) -> tuple[str, ...]:
+    """Union of success criterion ids from failed operational attestation events (deterministic order)."""
+
+    collected: set[str] = set()
+    for imp in impacts:
+        if not _is_operational_validity_attestation_failure(imp.event):
+            continue
+        for cid in normalized_success_criterion_ids_from_runtime_payload(dict(imp.event.payload)):
+            collected.add(cid)
+    return tuple(sorted(collected))
+
+
+def _is_runtime_health_or_reconcile_failure(event: RuntimeEvent) -> bool:
+    if _is_operational_validity_attestation_failure(event):
+        return True
+    payload = event.payload
+    health_status = _payload_str(payload, "health_status")
+    if health_status in {"degraded", "failed"}:
+        return True
+    event_type = event.event_type.strip().lower()
+    if event_type.endswith(".failed") or ".failure" in event_type:
+        return True
+    if "reconcile" not in event_type:
+        return False
+    if payload.get("converged") is False:
+        return True
+    if isinstance(payload.get("rollback_triggered"), bool) and bool(payload.get("rollback_triggered")):
+        return True
+    error = _payload_str(payload, "error", "reason", "last_error")
+    return error is not None and error.lower() not in {
+        "simulate",
+        "simulation",
+        "dry-run",
+        "dry_run",
+    }
+
+
+def _runtime_impact_class(event: RuntimeEvent) -> RuntimeImpactClass:
+    payload = event.payload
+    kind_hint = (
+        _payload_str(payload, "resource_class", "node_kind", "kind") or event.event_type.strip().lower()
+    ).lower()
+    if "service" in kind_hint or "reconcile" in event.event_type.strip().lower():
+        return "service_degradation"
+    if "agent" in kind_hint:
+        return "agent_degradation"
+    return "workflow_degradation"
+
+
+def _runtime_impact_severity(event: RuntimeEvent) -> Literal["med", "high"]:
+    if _is_operational_validity_attestation_failure(event):
+        return "high"
+    health_status = (_payload_str(event.payload, "health_status") or event.event_type.strip().lower()).lower()
+    if "failed" in health_status or "rollback" in health_status:
+        return "high"
+    return "med"
+
+
+def _runtime_impacted_step_ids(*, ir: IRDocument | None, event: RuntimeEvent) -> tuple[str, ...]:
+    if ir is None:
+        return ()
+    resource_id = _payload_str(event.payload, "resource_id", "node_id", "target")
+    if resource_id is None:
+        return ()
+    step_ids: set[str] = set()
+    for node in ir.nodes:
+        if resource_id not in {
+            node.id,
+            node.name,
+            str(node.properties.get("resource_id", "")).strip(),
+            str(node.properties.get("deployment_target", "")).strip(),
+        }:
+            continue
+        step_id = node.properties.get("step_id")
+        if isinstance(step_id, str) and step_id.strip():
+            step_ids.add(step_id.strip())
+    return tuple(sorted(step_ids))
+
+
+def _mk_runtime_policy_runtime(
+    *,
+    event: RuntimeEvent,
+    policy_mode: Literal["audit_only", "enforce"],
+    opa_policy_path: str | None,
+    opa_decision_path: str,
+) -> RuntimePolicyRuntime:
+    engine = DefaultDenyPolicyEngine(
+        issuer=CapabilityIssuer(),
+        policy=ToolAuthorizationPolicy(
+            mode=policy_mode,
+            allow_actions=("runtime.event.consume",),
+            opa=(
+                SubprocessOpaEvaluator(
+                    policy_path=opa_policy_path,
+                    decision_path=opa_decision_path,
+                )
+                if opa_policy_path is not None
+                else None
+            ),
+        ),
+    )
+    return RuntimePolicyRuntime(
+        context=event.context,
+        policy_engine=engine,
+        issuer=engine.issuer,
+        decision_log=[],
+    )
+
+
+def _collect_runtime_impacts(
+    *,
+    runtime_events: tuple[RuntimeEvent | Mapping[str, Any], ...] | None,
+    ir: IRDocument | None,
+    policy_mode: Literal["audit_only", "enforce"],
+    opa_policy_path: str | None,
+    opa_decision_path: str,
+    runtime_policy_runtime: RuntimePolicyRuntime | None,
+) -> tuple[RuntimeImpact, ...]:
+    if not runtime_events:
+        return ()
+    impacts: list[RuntimeImpact] = []
+    for raw_event in runtime_events:
+        event = _coerce_runtime_event(raw_event)
+        if not _is_runtime_health_or_reconcile_failure(event):
+            continue
+        policy_runtime = runtime_policy_runtime or _mk_runtime_policy_runtime(
+            event=event,
+            policy_mode=policy_mode,
+            opa_policy_path=opa_policy_path,
+            opa_decision_path=opa_decision_path,
+        )
+        decision = policy_runtime.authorize(
+            action="runtime.event.consume",
+            context=event.context,
+            extra_context={
+                "event_id": event.event_id,
+                "event_type": event.event_type,
+                "health_status": _payload_str(event.payload, "health_status") or "unknown",
+                "resource_id": _payload_str(event.payload, "resource_id", "node_id", "target") or "",
+                "impact_class": _runtime_impact_class(event),
+            },
+        )
+        if not decision.allowed and decision.block:
+            continue
+        impacts.append(
+            RuntimeImpact(
+                event=event,
+                impact_class=_runtime_impact_class(event),
+                severity=_runtime_impact_severity(event),
+                impacted_step_ids=_runtime_impacted_step_ids(ir=ir, event=event),
+                resource_id=_payload_str(event.payload, "resource_id", "node_id", "target"),
+            )
+        )
+    return tuple(impacts)
+
+
+def _runtime_canary_thresholds_allow(
+    *,
+    impacts: tuple[RuntimeImpact, ...],
+    thresholds: Mapping[str, Any] | None,
+) -> bool:
+    if not impacts:
+        return True
+    limits = dict(thresholds or {})
+    if not limits:
+        return True
+    total = len(impacts)
+    failed = sum(1 for impact in impacts if impact.severity == "high")
+    degraded = total - failed
+
+    max_total = limits.get("max_total_impacts")
+    if isinstance(max_total, (int, float)) and total > int(max_total):
+        return False
+    max_failed = limits.get("max_failed_impacts")
+    if isinstance(max_failed, (int, float)) and failed > int(max_failed):
+        return False
+    max_degraded = limits.get("max_degraded_impacts")
+    return not (isinstance(max_degraded, (int, float)) and degraded > int(max_degraded))
 
 
 def parse_ingest_state_key(
@@ -154,9 +424,7 @@ def _latest_ir_document_path(
     if not ir_dir.exists():
         return None
     candidates = [
-        p
-        for p in ir_dir.glob("*.json")
-        if p.is_file() and not p.name.endswith(".diff.json") and p.name != "diff.json"
+        p for p in ir_dir.glob("*.json") if p.is_file() and not p.name.endswith(".diff.json") and p.name != "diff.json"
     ]
     if not candidates:
         return None
@@ -172,9 +440,7 @@ def _reset_steps_for_recompile(
     impacted_step_ids: set[str],
     skip_other_pending: bool,
 ) -> None:
-    plan: PlanState | None = plan_store.load_plan(
-        tenant_id=tenant_id, repo_id=repo_id, plan_id=plan_id
-    )
+    plan: PlanState | None = plan_store.load_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan_id)
     if plan is None:
         raise ValueError("active plan not found for recompile")
 
@@ -265,9 +531,11 @@ def _mk_compile_config(
     mode: Literal["quick", "thorough"],
     test_mode: Literal["smoke", "full"],
     policy_mode: Literal["audit_only", "enforce"],
+    promotion_mode: Literal["artifact_only", "staged_apply", "live_apply"] | None = None,
     opa_policy_path: str | None = None,
     opa_decision_path: str = "data.akc.allow",
     cost_rates: CostRates | None = None,
+    living_automation_profile: LivingAutomationProfile | None = None,
 ) -> ControllerConfig:
     from akc.compile.controller_config import ControllerConfig as CC
 
@@ -284,6 +552,18 @@ def _mk_compile_config(
         budget = Budget(max_llm_calls=4, max_repairs_per_step=2, max_iterations_total=4)
         full_every = 2
 
+    meta: dict[str, Any] = {
+        "mode": mode,
+        **({"promotion_mode": promotion_mode} if promotion_mode is not None else {}),
+    }
+    if living_automation_profile is not None and living_automation_profile.id in (
+        "living_loop_v1",
+        "living_loop_unattended_v1",
+    ):
+        meta["living_automation_profile_id"] = living_automation_profile.id
+        if living_automation_profile.baseline_duration_hours is not None:
+            meta["baseline_duration_hours"] = float(living_automation_profile.baseline_duration_hours)
+
     return CC(
         tiers=tiers,
         stage_tiers={"generate": "small", "repair": "small"},
@@ -295,7 +575,9 @@ def _mk_compile_config(
         opa_policy_path=opa_policy_path,
         opa_decision_path=opa_decision_path,
         cost_rates=cost_rates or CostRates(),
-        metadata={"mode": mode},
+        # `promotion_mode` drives whether compile emits a signed promotion packet
+        # that runtime is allowed to consume for actual live mutation.
+        metadata=meta,
     )
 
 
@@ -314,10 +596,18 @@ def safe_recompile_on_drift(
     canary_test_mode: Literal["smoke", "full"] = "smoke",
     allow_network: bool = False,
     llm_backend: LLMBackend | None = None,
+    index: Index | None = None,
     update_baseline_on_accept: bool = True,
     skip_other_pending: bool = True,
     opa_policy_path: str | None = None,
     opa_decision_path: str = "data.akc.allow",
+    runtime_events: tuple[RuntimeEvent | Mapping[str, Any], ...] | None = None,
+    runtime_canary_thresholds: Mapping[str, Any] | None = None,
+    runtime_policy_runtime: RuntimePolicyRuntime | None = None,
+    granular_acceptance_recompile_triggers: bool | None = None,
+    operational_validity_failed_trigger_severity: Literal["block", "advisory"] | None = None,
+    living_automation_profile: LivingAutomationProfile | None = None,
+    project_living_automation_profile: str | None = None,
 ) -> int:
     """Living systems safe recompile entrypoint.
 
@@ -327,10 +617,23 @@ def safe_recompile_on_drift(
     - If canary passes, accept changes by running full compile for impacted steps.
     - Uses a caller-provided LLM backend when supplied, otherwise falls back to
       a deterministic offline backend.
+
+    ``living_automation_profile`` (or env ``AKC_LIVING_AUTOMATION_PROFILE`` / project file) selects
+    Phase E defaults: ``living_loop_v1`` / ``living_loop_unattended_v1`` enable granular
+    acceptance triggers by default and record time-compression baselines on emitted manifests.
     """
 
     tenant_id = str(tenant_id).strip()
     require_non_empty(tenant_id, name="tenant_id")
+    profile = (
+        living_automation_profile
+        if living_automation_profile is not None
+        else resolve_living_automation_profile(
+            cli_value=None,
+            env=os.environ,
+            project_value=project_living_automation_profile,
+        )
+    )
     repo_id = normalize_repo_id(str(repo_id))
     outputs_root_p = Path(outputs_root).expanduser().resolve()
     ingest_state_p = Path(ingest_state_path).expanduser().resolve()
@@ -345,6 +648,7 @@ def safe_recompile_on_drift(
 
     baseline_exists = baseline_path_p.exists()
     baseline_sources_by_key: Mapping[str, Any] | None = None
+    baseline_loaded: dict[str, Any] = {}
     if baseline_exists:
         try:
             baseline_loaded = _read_json_object(baseline_path_p, what="baseline")
@@ -352,6 +656,7 @@ def safe_recompile_on_drift(
             baseline_sources_by_key = maybe if isinstance(maybe, dict) else None
         except Exception:
             baseline_sources_by_key = None
+            baseline_loaded = {}
 
     # Load current ingestion state and filter to tenant.
     current_state = _read_json_object(ingest_state_p, what="ingest_state")
@@ -362,21 +667,194 @@ def safe_recompile_on_drift(
             current_tenant_by_key[k] = v
 
     scope = TenantRepoScope(tenant_id=tenant_id, repo_id=repo_id)
+    latest_manifest_path = find_latest_run_manifest(
+        outputs_root=outputs_root_p,
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+    )
+    living_check_id = "latest"
+    if latest_manifest_path is not None:
+        try:
+            living_check_id = load_run_manifest(
+                path=latest_manifest_path,
+                expected_tenant_id=tenant_id,
+                expected_repo_id=repo_id,
+            ).run_id
+        except Exception:
+            living_check_id = "latest"
     ingest_fp = IngestStateFingerprint(
         tenant_id=tenant_id,
         state_path=str(ingest_state_p),
         sha256=stable_json_fingerprint(current_tenant_by_key),
         keys_included=len(current_tenant_by_key),
     )
-    drift = drift_report(
+
+    regression_thresholds: dict[str, Any] = {}
+    runtime_thresholds_effective: Mapping[str, Any] | None = runtime_canary_thresholds
+    granular_triggers_effective = profile.granular_acceptance_default
+    if granular_acceptance_recompile_triggers is not None:
+        granular_triggers_effective = bool(granular_acceptance_recompile_triggers)
+    operational_validity_trigger_severity_effective: Literal["block", "advisory"] = (
+        operational_validity_failed_trigger_severity
+        if operational_validity_failed_trigger_severity in {"block", "advisory"}
+        else profile.operational_validity_failed_trigger_severity_default
+    )
+    try:
+        eval_suite_obj = _read_json_object(
+            Path(eval_suite_path).expanduser().resolve(),
+            what="eval_suite",
+        )
+        maybe = eval_suite_obj.get("regression_thresholds")
+        if isinstance(maybe, dict):
+            regression_thresholds = maybe
+        if runtime_thresholds_effective is None:
+            maybe_runtime_thresholds = eval_suite_obj.get("runtime_canary_thresholds")
+            if isinstance(maybe_runtime_thresholds, dict):
+                runtime_thresholds_effective = maybe_runtime_thresholds
+        if granular_acceptance_recompile_triggers is None:
+            pol = eval_suite_obj.get("living_recompile_policy")
+            if isinstance(pol, dict):
+                if "granular_acceptance_triggers" in pol:
+                    granular_triggers_effective = bool(pol.get("granular_acceptance_triggers", False))
+                sev_raw = str(pol.get("operational_validity_failed_trigger_severity", "")).strip().lower()
+                if operational_validity_failed_trigger_severity is None and sev_raw in {"block", "advisory"}:
+                    operational_validity_trigger_severity_effective = sev_raw  # type: ignore[assignment]
+    except Exception:
+        regression_thresholds = {}
+        runtime_thresholds_effective = runtime_canary_thresholds
+
+    # Phase 6: intent fingerprint is part of the living recompile contract.
+    # Use the acceptance budget because that is what ultimately gets emitted.
+    accept_config = _mk_compile_config(
+        mode=accept_mode,
+        test_mode="full",
+        policy_mode=policy_mode,
+        promotion_mode="live_apply",
+        opa_policy_path=opa_policy_path,
+        opa_decision_path=opa_decision_path,
+        living_automation_profile=profile,
+    )
+    intent_spec = compile_intent_spec(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        goal_statement=goal,
+        controller_budget=accept_config.budget,
+    )
+    intent_fingerprint = compute_intent_fingerprint(intent=intent_spec)
+    current_stable_intent_sha256 = stable_intent_sha256(intent=intent_spec.normalized())
+
+    # Phase 6 knowledge-layer fingerprints (evidence-aware when `index` is supplied).
+    # This uses the same retrieval context shape the controller's knowledge extraction expects.
+    session = CompileSession.from_sqlite(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        sqlite_path=str(memory_db),
+        index=index,
+    )
+    plan = session.plan(goal=goal)
+    session.memory.plan_state.set_active_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
+    loaded_plan = session.memory.plan_state.load_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
+    if loaded_plan is None:
+        raise ValueError("active plan missing after planning")
+
+    retrieved_context_for_fp = session.retrieve(plan=plan, limit=20)
+    retrieved_documents = retrieved_context_for_fp.get("documents") or []
+    doc_id_to_provenance = build_doc_id_to_provenance_map(tenant_id=tenant_id, documents=retrieved_documents)
+    knowledge_snapshot = extract_knowledge_snapshot(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        intent_spec=intent_spec,
+        retrieved_context=retrieved_context_for_fp,
+        retrieval_provenance_by_doc_id=doc_id_to_provenance,
+        llm=None,
+        use_llm=False,
+        knowledge_artifact_root=standard_base,
+        stored_assertion_index_mode=accept_config.stored_assertion_index_mode,
+        stored_assertion_index_max_rows=int(accept_config.stored_assertion_index_max_rows),
+        apply_operator_knowledge_decisions=bool(accept_config.apply_operator_knowledge_decisions),
+    )
+    knowledge_semantic_fp_full = knowledge_semantic_fingerprint(snapshot=knowledge_snapshot)
+    knowledge_provenance_fp_full = knowledge_provenance_fingerprint(snapshot=knowledge_snapshot)
+    knowledge_semantic_fp_16 = knowledge_semantic_fp_full[:16]
+    knowledge_provenance_fp_16 = knowledge_provenance_fp_full[:16]
+
+    # Find latest accepted IR doc to compute an impacted workflow subgraph + map runtime events.
+    latest_ir_path = _latest_ir_document_path(outputs_root=outputs_root_p, tenant_id=tenant_id, repo_id=repo_id)
+    latest_ir: IRDocument | None = None
+    if latest_ir_path is not None:
+        latest_ir = IRDocument.from_json_obj(_read_json_object(latest_ir_path, what="ir"))
+
+    runtime_impacts = _collect_runtime_impacts(
+        runtime_events=runtime_events,
+        ir=latest_ir,
+        policy_mode=policy_mode,
+        opa_policy_path=opa_policy_path,
+        opa_decision_path=opa_decision_path,
+        runtime_policy_runtime=runtime_policy_runtime,
+    )
+    operational_validity_extra = _operational_validity_drift_findings_from_impacts(runtime_impacts)
+    operational_validity_failed_for_triggers = bool(operational_validity_extra)
+    operational_validity_sc_ids = _collect_operational_validity_success_criterion_ids_from_impacts(runtime_impacts)
+
+    drift = extend_drift_report(
+        drift_report(
+            scope=scope,
+            outputs_root=outputs_root_p,
+            ingest_fingerprint=ingest_fp,
+            baseline_path=baseline_path_p if baseline_exists else None,
+            intent_semantic_fingerprint=intent_fingerprint.semantic,
+            intent_goal_text_fingerprint=intent_fingerprint.goal_text,
+            knowledge_semantic_fingerprint=knowledge_semantic_fp_16,
+            knowledge_provenance_fingerprint=knowledge_provenance_fp_16,
+        ),
+        operational_validity_extra,
+    )
+    trigger_records = [
+        trigger.to_json_obj()
+        for trigger in evaluate_recompile_triggers(
+            manifest_intent_semantic_fingerprint=(
+                str(baseline_loaded.get("intent_semantic_fingerprint")).strip().lower()
+                if baseline_loaded.get("intent_semantic_fingerprint")
+                else None
+            ),
+            current_intent_semantic_fingerprint=intent_fingerprint.semantic,
+            manifest_knowledge_semantic_fingerprint=(
+                str(baseline_loaded.get("knowledge_semantic_fingerprint")).strip().lower()
+                if baseline_loaded.get("knowledge_semantic_fingerprint")
+                else None
+            ),
+            current_knowledge_semantic_fingerprint=knowledge_semantic_fp_16,
+            manifest_knowledge_provenance_fingerprint=(
+                str(baseline_loaded.get("knowledge_provenance_fingerprint")).strip().lower()
+                if baseline_loaded.get("knowledge_provenance_fingerprint")
+                else None
+            ),
+            current_knowledge_provenance_fingerprint=knowledge_provenance_fp_16,
+            manifest_stable_intent_sha256=(
+                str(baseline_loaded.get("stable_intent_sha256")).strip().lower()
+                if baseline_loaded.get("stable_intent_sha256")
+                else None
+            ),
+            current_stable_intent_sha256=current_stable_intent_sha256,
+            operational_validity_failed=operational_validity_failed_for_triggers,
+            operational_validity_failed_trigger_severity=operational_validity_trigger_severity_effective,
+            operational_validity_success_criterion_ids=operational_validity_sc_ids or None,
+            enable_granular_acceptance_triggers=granular_triggers_effective,
+        )
+    ]
+    write_drift_artifacts(
         scope=scope,
         outputs_root=outputs_root_p,
-        ingest_fingerprint=ingest_fp,
+        report=drift,
+        check_id=living_check_id,
+        triggers=trigger_records,
         baseline_path=baseline_path_p if baseline_exists else None,
+        source="drift_check",
     )
+
     # Fast-path: when we have an existing baseline contract and it matches
     # current sources+outputs, no safe action is required.
-    if baseline_exists and not drift.has_drift():
+    if baseline_exists and not drift.has_drift() and not runtime_impacts:
         return 0
 
     # If baseline_sources_by_key is present we can compute a precise changed
@@ -389,31 +867,37 @@ def safe_recompile_on_drift(
             current_state_by_key=current_tenant_by_key,
         )
 
-    # Find latest accepted IR doc to compute an impacted workflow subgraph.
-    latest_ir_path = _latest_ir_document_path(
-        outputs_root=outputs_root_p, tenant_id=tenant_id, repo_id=repo_id
-    )
-    latest_ir: IRDocument | None = None
-    if latest_ir_path is not None:
-        latest_ir = IRDocument.from_json_obj(_read_json_object(latest_ir_path, what="ir"))
-
-    plan_step_ids_to_reset: set[str] = set()
+    source_plan_step_ids_to_reset: set[str] = set()
     if latest_ir is not None and changed_source_ids:
-        plan_step_ids_to_reset = compute_impacted_workflow_step_ids(
+        source_plan_step_ids_to_reset = compute_impacted_workflow_step_ids(
             ir=latest_ir, changed_source_ids=changed_source_ids
         )
+    plan_step_ids_to_reset = set(source_plan_step_ids_to_reset)
+    runtime_plan_step_ids = {step_id for impact in runtime_impacts for step_id in impact.impacted_step_ids}
+    plan_step_ids_to_reset |= runtime_plan_step_ids
 
     # Decide how conservative we need to be when mapping changed sources into
     # a recompile subgraph. When provenance mapping is missing/unreliable, we
     # recompile all steps (not just non-done) to restore safe output state.
     sources_drifted = any(f.kind == "changed_sources" for f in drift.findings)
     outputs_drifted = any(f.kind in {"missing_manifest", "changed_outputs"} for f in drift.findings)
-    provenance_failed_to_map = (
-        bool(changed_source_ids) and latest_ir is not None and not plan_step_ids_to_reset
-    )
+    intent_drifted = any(f.kind == "changed_intent" for f in drift.findings)
+    knowledge_semantic_drifted = any(f.kind == "changed_knowledge_semantic" for f in drift.findings)
+    knowledge_provenance_drifted = any(f.kind == "changed_knowledge_provenance" for f in drift.findings)
+    knowledge_drifted = knowledge_semantic_drifted or knowledge_provenance_drifted
+    runtime_drifted = bool(runtime_impacts)
+    provenance_failed_to_map = bool(changed_source_ids) and latest_ir is not None and not source_plan_step_ids_to_reset
+    runtime_failed_to_map = runtime_drifted and not runtime_plan_step_ids
 
     # If we don't have a baseline, we can't safely narrow to impacted outputs.
-    need_all_steps = (not baseline_exists) or outputs_drifted or provenance_failed_to_map
+    need_all_steps = (
+        (not baseline_exists)
+        or outputs_drifted
+        or provenance_failed_to_map
+        or intent_drifted
+        or knowledge_drifted
+        or runtime_failed_to_map
+    )
     no_ir_mapping = sources_drifted and bool(changed_source_ids) and latest_ir is None
     if no_ir_mapping:
         need_all_steps = True
@@ -421,20 +905,15 @@ def safe_recompile_on_drift(
         need_all_steps = True
     if sources_drifted and baseline_sources_by_key is not None and not changed_source_ids:
         need_all_steps = True
-
-    session = CompileSession.from_sqlite(
-        tenant_id=tenant_id,
-        repo_id=repo_id,
-        sqlite_path=str(memory_db),
-        index=None,
-    )
-    plan = session.plan(goal=goal)
-    session.memory.plan_state.set_active_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
-    loaded_plan = session.memory.plan_state.load_plan(
-        tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id
-    )
-    if loaded_plan is None:
-        raise ValueError("active plan missing after planning")
+    if (
+        runtime_drifted
+        and not _runtime_canary_thresholds_allow(
+            impacts=runtime_impacts,
+            thresholds=runtime_thresholds_effective,
+        )
+        and not drift.has_drift()
+    ):
+        return 0
 
     if not plan_step_ids_to_reset:
         if need_all_steps:
@@ -468,8 +947,10 @@ def safe_recompile_on_drift(
         mode=canary_mode,
         test_mode=canary_test_mode,
         policy_mode=policy_mode,
+        promotion_mode="artifact_only",
         opa_policy_path=opa_policy_path,
         opa_decision_path=opa_decision_path,
+        living_automation_profile=profile,
     )
 
     canary_outputs_root = outputs_root_p / ".akc" / "living" / "canary"
@@ -477,14 +958,10 @@ def safe_recompile_on_drift(
 
     # Canary compile: iteratively run compile loop until impacted steps are done.
     while True:
-        active = session.memory.plan_state.load_plan(
-            tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id
-        )
+        active = session.memory.plan_state.load_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
         if active is None:
             raise ValueError("plan disappeared during canary compile")
-        remaining = [
-            s.id for s in active.steps if s.id in plan_step_ids_to_reset and s.status != "done"
-        ]
+        remaining = [s.id for s in active.steps if s.id in plan_step_ids_to_reset and s.status != "done"]
         if not remaining:
             break
         cres: ControllerResult = session.run(
@@ -508,16 +985,6 @@ def safe_recompile_on_drift(
         return 2
 
     canary_manifest_abs = Path(canary_manifest_path).expanduser().resolve()
-    regression_thresholds: dict[str, Any] = {}
-    try:
-        eval_suite_raw = _read_json_object(
-            Path(eval_suite_path).expanduser().resolve(), what="eval_suite_path"
-        )
-        maybe = eval_suite_raw.get("regression_thresholds")
-        if isinstance(maybe, dict):
-            regression_thresholds = maybe
-    except Exception:
-        regression_thresholds = {}
     canary_suite: dict[str, Any] = {
         "suite_version": "living-canary-v1",
         "tasks": [
@@ -533,15 +1000,21 @@ def safe_recompile_on_drift(
                     "max_total_tokens": 100000,
                     "max_wall_time_ms": 60000,
                     "require_trace_spans": True,
+                    "require_runtime_replay_determinism": True,
+                    "runtime_mode": "simulate",
+                    "runtime_reliability_kpis": {
+                        "max_rollbacks_total": 0,
+                        "max_convergence_latency_ms_avg": 60000,
+                        "max_mttr_like_repair_latency_ms_avg": 60000,
+                        "require_terminal_health_in": ["healthy", "unknown", "degraded"],
+                    },
                 },
                 "judge": {"enabled": False},
             }
         ],
         "regression_thresholds": regression_thresholds,
     }
-    canary_suite_path = (
-        canary_outputs_root / tenant_id / repo_id / ".akc" / "living" / "canary_eval_suite.json"
-    )
+    canary_suite_path = canary_outputs_root / tenant_id / repo_id / ".akc" / "living" / "canary_eval_suite.json"
     canary_suite_path.parent.mkdir(parents=True, exist_ok=True)
     canary_suite_path.write_text(
         json.dumps(canary_suite, indent=2, sort_keys=True),
@@ -566,23 +1039,11 @@ def safe_recompile_on_drift(
         skip_other_pending=False,
     )
 
-    accept_config = _mk_compile_config(
-        mode=accept_mode,
-        test_mode="full",
-        policy_mode=policy_mode,
-        opa_policy_path=opa_policy_path,
-        opa_decision_path=opa_decision_path,
-    )
-
     while True:
-        active2 = session.memory.plan_state.load_plan(
-            tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id
-        )
+        active2 = session.memory.plan_state.load_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
         if active2 is None:
             raise ValueError("plan disappeared during acceptance compile")
-        remaining2 = [
-            s.id for s in active2.steps if s.id in plan_step_ids_to_reset and s.status != "done"
-        ]
+        remaining2 = [s.id for s in active2.steps if s.id in plan_step_ids_to_reset and s.status != "done"]
         if not remaining2:
             break
         cres2: ControllerResult = session.run(
@@ -598,11 +1059,39 @@ def safe_recompile_on_drift(
 
     # Acceptance succeeded: update baseline contract after the new outputs exist.
     if update_baseline_on_accept:
+        # Prefer the knowledge fingerprints emitted by the latest *acceptance* run manifest.
+        # This keeps the baseline contract aligned with how controller knowledge extraction
+        # actually ran for the accepted step set.
+        latest_manifest_path = find_latest_run_manifest(
+            outputs_root=outputs_root_p,
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+        )
+        knowledge_sem_fp_final = knowledge_semantic_fp_16
+        knowledge_prov_fp_final = knowledge_provenance_fp_16
+        if latest_manifest_path is not None:
+            try:
+                latest_manifest = load_run_manifest(
+                    path=latest_manifest_path,
+                    expected_tenant_id=tenant_id,
+                    expected_repo_id=repo_id,
+                )
+                if isinstance(latest_manifest.knowledge_semantic_fingerprint, str):
+                    knowledge_sem_fp_final = latest_manifest.knowledge_semantic_fingerprint
+                if isinstance(latest_manifest.knowledge_provenance_fingerprint, str):
+                    knowledge_prov_fp_final = latest_manifest.knowledge_provenance_fingerprint
+            except Exception:
+                # Best-effort fallback to precomputed fingerprints.
+                pass
         write_baseline(
             scope=TenantRepoScope(tenant_id=tenant_id, repo_id=repo_id),
             outputs_root=outputs_root_p,
             ingest_fingerprint=ingest_fp,
             baseline_path=baseline_path_p,
+            intent_semantic_fingerprint=intent_fingerprint.semantic,
+            intent_goal_text_fingerprint=intent_fingerprint.goal_text,
+            knowledge_semantic_fingerprint=knowledge_sem_fp_final,
+            knowledge_provenance_fingerprint=knowledge_prov_fp_final,
         )
 
     return 0

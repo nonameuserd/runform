@@ -65,5 +65,18 @@
     "repair_iterations": 0,
     "total_tokens": 180,
     "wall_time_ms": 120
+  },
+  "control_plane": {
+    "lifecycle_timestamps": {
+      "intent_received_at": 1000,
+      "compile_started_at": 1000,
+      "compile_completed_at": 2000,
+      "runtime_healthy_at": 4000
+    },
+    "time_compression_metrics": {
+      "intent_to_healthy_runtime_ms": 3000.0,
+      "compile_to_healthy_runtime_ms": 3000.0,
+      "compression_factor_vs_baseline": 9600.0
+    }
   }
 }

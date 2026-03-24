@@ -34,9 +34,7 @@ class WhyGraphStore(ABC):
     def iter_out_edges(self, *, tenant_id: str, repo_id: str, src: str) -> Iterator[WhyEdge]: ...
 
     @abstractmethod
-    def list_nodes_by_type(
-        self, *, tenant_id: str, repo_id: str, node_type: WhyNodeType
-    ) -> list[WhyNode]: ...
+    def list_nodes_by_type(self, *, tenant_id: str, repo_id: str, node_type: WhyNodeType) -> list[WhyNode]: ...
 
 
 @dataclass(frozen=True, slots=True)

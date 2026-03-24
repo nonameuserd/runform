@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:promotion_packet:v1",
+  "title": "AKC promotion packet",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:promotion_packet:v1"
+    },
+    "packet_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "run_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "tenant_id",
+        "repo_id",
+        "run_id",
+        "step_id"
+      ]
+    },
+    "intent_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "intent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stable_intent_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "semantic_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "goal_text_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        }
+      },
+      "required": [
+        "intent_id",
+        "stable_intent_sha256",
+        "semantic_fingerprint",
+        "goal_text_fingerprint"
+      ]
+    },
+    "promotion_mode": {
+      "type": "string",
+      "enum": [
+        "artifact_only",
+        "staged_apply",
+        "live_apply"
+      ]
+    },
+    "promotion_state": {
+      "type": "string",
+      "enum": [
+        "artifact_only",
+        "staged_apply",
+        "live_apply"
+      ]
+    },
+    "patch_hash_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "touched_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "passed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "command"
+        ]
+      }
+    },
+    "verifier_result": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "policy_decision_trace": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "policy_allow_decision": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "token_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowed"
+      ]
+    },
+    "compile_apply_attestation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "compile_realization_mode": {
+          "type": "string",
+          "enum": [
+            "artifact_only",
+            "scoped_apply"
+          ]
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "apply_decision_token_id": {
+          "type": "string"
+        },
+        "policy_allow_decision": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "action": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "token_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "allowed"
+          ]
+        },
+        "patch_fingerprint_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "scope_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "touched_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "apply_target_metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "issued_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "packet_signature_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "packet_version",
+    "run_ref",
+    "intent_ref",
+    "promotion_mode",
+    "promotion_state",
+    "patch_hash_sha256",
+    "touched_paths",
+    "required_tests",
+    "policy_decision_trace",
+    "policy_allow_decision",
+    "apply_target_metadata",
+    "issued_at_ms",
+    "packet_signature_sha256"
+  ]
+}

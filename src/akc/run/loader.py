@@ -15,9 +15,7 @@ def load_run_manifest(
     manifest = RunManifest.from_json_file(path)
     if expected_tenant_id is not None and manifest.tenant_id != expected_tenant_id:
         raise ValueError("run_manifest tenant_id does not match expected scope")
-    if expected_repo_id is not None and normalize_repo_id(manifest.repo_id) != normalize_repo_id(
-        expected_repo_id
-    ):
+    if expected_repo_id is not None and normalize_repo_id(manifest.repo_id) != normalize_repo_id(expected_repo_id):
         raise ValueError("run_manifest repo_id does not match expected scope")
     return manifest
 

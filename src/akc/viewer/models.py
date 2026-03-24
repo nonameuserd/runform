@@ -76,3 +76,10 @@ class ViewerSnapshot:
     manifest: Manifest | None
     scoped_outputs_dir: Path
     evidence: EvidenceIndex
+    # C4: optional persisted knowledge envelope + conflict reports for operator debugging.
+    knowledge_envelope: dict[str, Any] | None = None
+    # Versioned envelope from ``.akc/knowledge/mediation.json`` when present.
+    knowledge_mediation_envelope: dict[str, Any] | None = None
+    conflict_reports: tuple[dict[str, Any], ...] = ()
+    # Track 6 path A: optional forensics bundle + playbook report summaries (read-only).
+    operator_panels: dict[str, Any] | None = None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 import uuid
@@ -18,6 +19,19 @@ else:  # pragma: no cover - runtime type alias to avoid import cycles
     TenantRepoScope = Any
 
 PolicyMode = Literal["audit_only", "enforce"]
+
+# Knowledge-layer conflict mediation when automated scores tie (compile retrieve stage).
+# - ``fail_closed``: ambiguous ties raise and block extraction.
+# - ``warn_and_continue``: deterministic lexicographic tie-break; mediation events record the rule.
+# - ``defer_to_intent``: same tie-break as a provisional winner, but ``CanonicalDecision.resolved``
+#   is set False and intent constraint ids are attached to mediation events (intent authority).
+KnowledgeUnresolvedConflictPolicy = Literal["fail_closed", "warn_and_continue", "defer_to_intent"]
+
+
+def knowledge_mediation_blocks_on_ambiguous_tie(*, policy: KnowledgeUnresolvedConflictPolicy) -> bool:
+    """Return True when an unbroken score/hard tie must fail the extraction step."""
+
+    return policy == "fail_closed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,9 +388,7 @@ class CapabilityAttenuator:
         new_expires = base_expires
         if ttl_ms is not None:
             candidate = effective_now + int(ttl_ms)
-            new_expires = (
-                candidate if base_expires is None else min(int(base_expires), int(candidate))
-            )
+            new_expires = candidate if base_expires is None else min(int(base_expires), int(candidate))
 
         merged_constraints: dict[str, JSONValue] = dict(token.constraints or {})
         if additional_constraints:
@@ -407,6 +419,62 @@ def _merge_json_context(
     return out
 
 
+DEFAULT_BUNDLE_SECRET_PATTERNS: tuple[str, ...] = (
+    r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    r"(?i)\bAKIA[0-9A-Z]{16}\b",
+    r"(?i)\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
+    r"(?i)\bghp_[A-Za-z0-9]{20,}\b",
+    r"(?i)\b(?:api[-_ ]?key|access[-_ ]?token|bearer|password|secret)\b.{0,32}",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BundleRedactionPolicy:
+    """Policy controls for incident/forensics bundle redaction."""
+
+    policy_version: str = "bundle-redaction-v1"
+    denylist_patterns: tuple[str, ...] = DEFAULT_BUNDLE_SECRET_PATTERNS
+    sensitive_field_names: tuple[str, ...] = (
+        "token",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "password",
+        "secret",
+        "private_key",
+        "client_secret",
+    )
+    schema_field_redactions: dict[str, tuple[str, ...]] | None = None
+    redaction_placeholder: str = "[REDACTED]"
+
+    def compiled_denylist(self) -> tuple[re.Pattern[str], ...]:
+        compiled: list[re.Pattern[str]] = []
+        for pat in self.denylist_patterns:
+            try:
+                compiled.append(re.compile(str(pat)))
+            except re.error:
+                continue
+        return tuple(compiled)
+
+    def effective_schema_field_redactions(self) -> dict[str, tuple[str, ...]]:
+        if self.schema_field_redactions is not None:
+            return dict(self.schema_field_redactions)
+        return {
+            "incident.runtime_evidence": (
+                "included.runtime_evidence.source_relpath",
+                "included.runtime_evidence.source",
+            ),
+            "forensics.replay": (
+                "replay.forensics_summary.decisions.*.inputs_snapshot.authorization",
+                "replay.forensics_summary.decisions.*.inputs_snapshot.api_key",
+                "replay.forensics_summary.decisions.*.inputs_snapshot.token",
+            ),
+            "forensics.operations_index": ("operations_index.run.labels.*",),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyWrappedLLMBackend:
     """LLM wrapper enforcing capability-based policy before `llm.complete`.
@@ -417,9 +485,7 @@ class PolicyWrappedLLMBackend:
     backend: Any  # LLMBackend (kept Any to avoid import cycles/typing overhead)
     policy_engine: PolicyEngine
     issuer: CapabilityIssuer
-    decision_observer: (
-        Callable[[str, CapabilityToken, PolicyDecision, dict[str, JSONValue] | None], None] | None
-    ) = None
+    decision_observer: Callable[[str, CapabilityToken, PolicyDecision, dict[str, JSONValue] | None], None] | None = None
 
     def complete(
         self,
@@ -468,9 +534,7 @@ class PolicyWrappedExecutor:
     policy_engine: PolicyEngine
     issuer: CapabilityIssuer
     attenuator: CapabilityAttenuator | None = None
-    decision_observer: (
-        Callable[[str, CapabilityToken, PolicyDecision, dict[str, JSONValue] | None], None] | None
-    ) = None
+    decision_observer: Callable[[str, CapabilityToken, PolicyDecision, dict[str, JSONValue] | None], None] | None = None
 
     def run_with_stage(
         self,

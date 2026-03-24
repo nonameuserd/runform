@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: External callback surface
+  version: "1.0.0"
+paths:
+  /callbacks/notify:
+    post:
+      summary: Outbound notification
+      description: |
+        Callbacks MUST use HTTPS. Integrations MUST NOT embed personally identifiable
+        information in query strings. Authenticate with an auth token header, never a password.
+components: {}

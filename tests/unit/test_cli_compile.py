@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from akc.cli import main
+from akc.cli.compile import resolve_compile_policies
 from akc.memory.facade import build_memory
 from akc.run import PassRecord, RetrievalSnapshot, RunManifest
 
@@ -110,6 +111,15 @@ def test_cli_compile_quick_mode_emits_manifest_and_tests(tmp_path: Path) -> None
     tests_dir = base / ".akc" / "tests"
     assert tests_dir.is_dir()
     assert any(tests_dir.rglob("*.json")), "expected structured test artifacts under .akc/tests"
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.control_plane is not None
+    promotion_ref = run_manifest.control_plane.get("promotion_packet_ref")
+    assert isinstance(promotion_ref, dict)
+    packet_rel = str(promotion_ref.get("path", ""))
+    assert packet_rel.startswith(".akc/promotion/")
+    assert (base / packet_rel).exists()
+    assert run_manifest.control_plane.get("promotion_mode") == "artifact_only"
 
 
 def test_cli_compile_empty_plan_exits_success_and_emits_run_contracts(tmp_path: Path) -> None:
@@ -143,9 +153,119 @@ def test_cli_compile_empty_plan_exits_success_and_emits_run_contracts(tmp_path: 
     assert any((base / ".akc" / "ir").rglob("*.json"))
 
 
-def test_cli_compile_failing_tests_exit_code_2(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_cli_compile_emerging_profile_auto_seeds_deployable_empty_plan(tmp_path: Path) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--developer-role-profile",
+                "emerging",
+                "--mode",
+                "quick",
+            ]
+        )
+    assert excinfo.value.code == 0
+    assert (base / "manifest.json").exists()
+    tests_dir = base / ".akc" / "tests"
+    assert tests_dir.is_dir()
+    assert any(tests_dir.rglob("*.json"))
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.control_plane is not None
+    cp = dict(run_manifest.control_plane)
+    assert cp.get("developer_role_profile") == "emerging"
+    ref = cp.get("developer_profile_decisions_ref")
+    assert isinstance(ref, dict)
+    rel = str(ref.get("path", ""))
+    assert rel.endswith(".developer_profile_decisions.json")
+    assert (base / rel).exists()
+
+
+def test_cli_compile_empty_plan_non_dev_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    monkeypatch.setenv("AKC_ENV", "staging")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+            ]
+        )
+    assert excinfo.value.code == 2
+
+
+def test_cli_compile_empty_plan_analysis_only_objective_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    monkeypatch.setenv("AKC_ENV", "staging")
+    intent_path = tmp_path / "analysis_only.intent.json"
+    intent_obj = {
+        "intent_id": "intent-analysis-only",
+        "spec_version": 1,
+        "tenant_id": tenant_id,
+        "repo_id": repo_id,
+        "status": "draft",
+        "goal_statement": "Analyze architecture",
+        "objectives": [
+            {
+                "id": "obj-analysis",
+                "priority": 1,
+                "statement": "Analyze current deployment topology",
+                "metadata": {"objective_class": "analysis_only"},
+            }
+        ],
+    }
+    intent_path.write_text(json.dumps(intent_obj), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+                "--intent-file",
+                str(intent_path),
+            ]
+        )
+    assert excinfo.value.code == 0
+    assert (base / "manifest.json").exists()
+
+
+def test_cli_compile_failing_tests_exit_code_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """When tests always fail, compile exits with code 2."""
     tenant_id = "t1"
     repo_id = "repo1"
@@ -287,6 +407,36 @@ def test_cli_compile_custom_goal_used(tmp_path: Path) -> None:
         )
     assert excinfo.value.code == 0
     assert (base / "manifest.json").exists()
+
+
+def test_cli_compile_non_dev_defaults_to_staged_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+    monkeypatch.setenv("AKC_ENV", "staging")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+            ]
+        )
+    assert excinfo.value.code == 0
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.control_plane is not None
+    assert run_manifest.control_plane.get("promotion_mode") == "staged_apply"
 
 
 def test_cli_compile_full_replay_with_manifest_path_succeeds(tmp_path: Path) -> None:
@@ -480,9 +630,7 @@ def test_cli_compile_llm_vcr_with_manifest_path_succeeds(tmp_path: Path) -> None
         repo_id=repo_id,
         ir_sha256="b" * 64,
         replay_mode="llm_vcr",
-        passes=(
-            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
-        ),
+        passes=(PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),),
     )
     replay_manifest_path = tmp_path / "replay-llm-vcr.manifest.json"
     replay_manifest_path.write_text(
@@ -545,9 +693,7 @@ def test_cli_compile_partial_replay_with_manifest_path_succeeds(tmp_path: Path) 
         repo_id=repo_id,
         ir_sha256="c" * 64,
         replay_mode="partial_replay",
-        passes=(
-            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
-        ),
+        passes=(PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),),
     )
     replay_manifest_path = tmp_path / "replay-partial.manifest.json"
     replay_manifest_path.write_text(
@@ -582,9 +728,7 @@ def test_cli_compile_partial_replay_with_manifest_path_succeeds(tmp_path: Path) 
     assert any(run_dir.rglob("*.manifest.json"))
     tests_dir = base / ".akc" / "tests"
     if tests_dir.is_dir():
-        assert any(tests_dir.rglob("*.json")), (
-            "expected structured test artifacts under .akc/tests when tests run"
-        )
+        assert any(tests_dir.rglob("*.json")), "expected structured test artifacts under .akc/tests when tests run"
 
 
 def test_cli_compile_partial_replay_with_selected_passes_succeeds(tmp_path: Path) -> None:
@@ -617,9 +761,7 @@ def test_cli_compile_partial_replay_with_selected_passes_succeeds(tmp_path: Path
         repo_id=repo_id,
         ir_sha256="d" * 64,
         replay_mode="partial_replay",
-        passes=(
-            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
-        ),
+        passes=(PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),),
     )
     replay_manifest_path = tmp_path / "replay-partial-selected.manifest.json"
     replay_manifest_path.write_text(
@@ -682,9 +824,7 @@ def test_cli_compile_partial_replay_overrides_manifest_mode(tmp_path: Path) -> N
         repo_id=repo_id,
         ir_sha256="e" * 64,
         replay_mode="full_replay",
-        passes=(
-            PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),
-        ),
+        passes=(PassRecord(name="generate", status="succeeded", metadata={"llm_text": replay_patch}),),
     )
     replay_manifest_path = tmp_path / "replay-mode-mismatch.manifest.json"
     replay_manifest_path.write_text(
@@ -850,9 +990,7 @@ def test_cli_compile_strong_sandbox_allows_explicit_wasm_preference(
     assert fake_session.executor_seen.underlying.rust_cfg.lane == "wasm"
 
 
-def test_cli_compile_use_rust_exec_allows_explicit_wasm_lane(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_cli_compile_use_rust_exec_allows_explicit_wasm_lane(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`--use-rust-exec --rust-exec-lane wasm` should select the Rust WASM lane directly."""
     import akc.cli.compile as compile_mod
 
@@ -1157,9 +1295,7 @@ def test_cli_compile_strict_wasm_fails_fast_when_rust_surface_unavailable(
     assert "Install the Rust WASM execution surface" in out
 
 
-def test_cli_compile_strong_docker_hardening_flags_propagate(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_cli_compile_strong_docker_hardening_flags_propagate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import akc.cli.compile as compile_mod
 
     fake_session = _FakeSession()
@@ -1251,9 +1387,7 @@ def test_cli_compile_invalid_docker_hardening_exits_non_zero(
     assert "soft limit cannot exceed hard limit" in out
 
 
-def test_cli_compile_missing_seccomp_profile_fails_closed(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compile_missing_seccomp_profile_fails_closed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "missing-seccomp.json"
 
     with pytest.raises(SystemExit) as excinfo:
@@ -1537,3 +1671,40 @@ def test_cli_compile_rejects_non_positive_cpu_fuel(tmp_path: Path) -> None:
             ]
         )
     assert excinfo.value.code == 2
+
+
+def test_resolve_compile_policies_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AKC_IR_OPERATIONAL_STRUCTURE_POLICY", raising=False)
+    monkeypatch.delenv("AKC_IR_GRAPH_INTEGRITY_POLICY", raising=False)
+    monkeypatch.delenv("AKC_ARTIFACT_CONSISTENCY_POLICY", raising=False)
+    assert resolve_compile_policies(
+        cli_ir_operational=None,
+        cli_ir_graph=None,
+        cli_artifact_consistency=None,
+    ) == ("warn", None, "warn")
+
+
+def test_resolve_compile_policies_env_and_cli_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AKC_IR_OPERATIONAL_STRUCTURE_POLICY", "error")
+    monkeypatch.setenv("AKC_IR_GRAPH_INTEGRITY_POLICY", "error")
+    monkeypatch.setenv("AKC_ARTIFACT_CONSISTENCY_POLICY", "error")
+    assert resolve_compile_policies(
+        cli_ir_operational=None,
+        cli_ir_graph=None,
+        cli_artifact_consistency=None,
+    ) == ("error", "error", "error")
+    assert resolve_compile_policies(
+        cli_ir_operational="warn",
+        cli_ir_graph=None,
+        cli_artifact_consistency=None,
+    ) == ("warn", "error", "error")
+
+
+def test_resolve_compile_policies_rejects_bad_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AKC_IR_OPERATIONAL_STRUCTURE_POLICY", "maybe")
+    with pytest.raises(ValueError, match="AKC_IR_OPERATIONAL_STRUCTURE_POLICY"):
+        resolve_compile_policies(
+            cli_ir_operational=None,
+            cli_ir_graph=None,
+            cli_artifact_consistency=None,
+        )
