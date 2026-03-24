@@ -28,7 +28,10 @@ from tests.unit.test_cli_compile import (
 def test_compile_live_apply_scoped_apply_then_runtime_enforce_passes_promotion_and_attestation_gate(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER", raising=False)
+    monkeypatch.delenv("AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER", raising=False)
     tenant_id = "t1"
     repo_id = "repo1"
     outputs_root = tmp_path
