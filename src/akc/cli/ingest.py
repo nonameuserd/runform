@@ -114,6 +114,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         connector_options["max_threads"] = str(int(args.slack_max_threads))
         connector_options["max_answers"] = str(int(args.slack_max_answers))
         connector_options["include_bot_answers"] = "true" if args.slack_include_bot_answers else "false"
+    if connector == "mcp":
+        connector_options["mcp_config_path"] = str(Path(str(args.mcp_config)).expanduser())
+        if getattr(args, "mcp_uri_prefix", None) is not None:
+            connector_options["mcp_uri_prefix"] = str(args.mcp_uri_prefix)
+        if getattr(args, "mcp_static_prompt", None) is not None:
+            connector_options["mcp_static_prompt"] = str(args.mcp_static_prompt)
+        connector_options["mcp_timeout_s"] = str(float(getattr(args, "mcp_timeout_s", 120.0)))
 
     embedder = _build_embedder(args)
     vector_store = None

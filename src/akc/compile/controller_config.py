@@ -18,6 +18,7 @@ from akc.control.policy import KnowledgeUnresolvedConflictPolicy
 from akc.memory.models import JSONValue, require_non_empty
 
 TierName: TypeAlias = Literal["small", "medium", "large"]
+CompileMcpToolStage: TypeAlias = Literal["generate", "repair"]
 TestMode: TypeAlias = Literal["smoke", "full"]
 KnowledgeExtractionMode: TypeAlias = Literal["deterministic", "llm", "hybrid"]
 DocDerivedAssertionsMode: TypeAlias = Literal["off", "limited"]
@@ -25,6 +26,17 @@ StoredAssertionIndexMode: TypeAlias = Literal["off", "merge"]
 CompilePromptIntentContractPolicy: TypeAlias = Literal["auto", "full", "reference_first"]
 OperationalValidityFailedTriggerSeverity: TypeAlias = Literal["block", "advisory"]
 CompileRealizationMode: TypeAlias = Literal["artifact_only", "scoped_apply"]
+
+
+@dataclass(frozen=True, slots=True)
+class CompileMcpToolSpec:
+    """One MCP ``tools/call`` invocation during compile (generate/repair), under policy + budgets."""
+
+    tool_name: str
+    arguments: dict[str, JSONValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        require_non_empty(self.tool_name, name="compile_mcp_tool.tool_name")
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +172,7 @@ class CostRates:
     input_per_1k_tokens_usd: float = 0.0
     output_per_1k_tokens_usd: float = 0.0
     tool_call_usd: float = 0.0
+    mcp_call_usd: float = 0.0
     currency: str = "USD"
     pricing_version: str = "static-v1"
 
@@ -170,6 +183,8 @@ class CostRates:
             raise ValueError("cost_rates.output_per_1k_tokens_usd must be >= 0")
         if float(self.tool_call_usd) < 0:
             raise ValueError("cost_rates.tool_call_usd must be >= 0")
+        if float(self.mcp_call_usd) < 0:
+            raise ValueError("cost_rates.mcp_call_usd must be >= 0")
         require_non_empty(self.currency, name="cost_rates.currency")
         require_non_empty(self.pricing_version, name="cost_rates.pricing_version")
 
@@ -178,6 +193,7 @@ class CostRates:
             "input_per_1k_tokens_usd": float(self.input_per_1k_tokens_usd),
             "output_per_1k_tokens_usd": float(self.output_per_1k_tokens_usd),
             "tool_call_usd": float(self.tool_call_usd),
+            "mcp_call_usd": float(self.mcp_call_usd),
             "currency": str(self.currency),
             "pricing_version": str(self.pricing_version),
         }
@@ -200,6 +216,7 @@ class Budget:
     # Total (generate+repair) iterations allowed for a single plan step.
     max_iterations_total: int = 5
     max_tool_calls: int | None = None
+    max_mcp_calls: int | None = None
     max_input_tokens: int | None = None
     max_total_tokens: int | None = None
     max_output_tokens: int | None = None
@@ -223,6 +240,8 @@ class Budget:
             raise ValueError("max_iterations_total must be > 0")
         if self.max_tool_calls is not None and int(self.max_tool_calls) < 0:
             raise ValueError("max_tool_calls must be >= 0 when set")
+        if self.max_mcp_calls is not None and int(self.max_mcp_calls) < 0:
+            raise ValueError("max_mcp_calls must be >= 0 when set")
         if self.max_input_tokens is not None and int(self.max_input_tokens) <= 0:
             raise ValueError("max_input_tokens must be > 0 when set")
         if self.max_total_tokens is not None and int(self.max_total_tokens) <= 0:
@@ -250,6 +269,7 @@ class Budget:
             "max_repairs_per_step": int(self.max_repairs_per_step),
             "max_iterations_total": int(self.max_iterations_total),
             "max_tool_calls": int(self.max_tool_calls) if self.max_tool_calls is not None else None,
+            "max_mcp_calls": int(self.max_mcp_calls) if self.max_mcp_calls is not None else None,
             "max_input_tokens": int(self.max_input_tokens) if self.max_input_tokens is not None else None,
             "max_total_tokens": int(self.max_total_tokens) if self.max_total_tokens is not None else None,
             "max_output_tokens": int(self.max_output_tokens) if self.max_output_tokens is not None else None,
@@ -377,6 +397,14 @@ class ControllerConfig:
     # Shallow-merged into the controller accounting dict after initialization (tests, controlled bridges).
     # Keys such as ``operational_compile_bundle`` / ``operational_verifier_findings`` must already be tenant-scoped.
     accounting_overlay: Mapping[str, Any] | None = None
+    # Optional compile-time MCP (live retrieval): same trust model as ingest-mcp; gated by policy + budgets.
+    compile_mcp_enabled: bool = False
+    compile_mcp_config_path: str | None = None
+    compile_mcp_server: str | None = None
+    compile_mcp_resource_uris: tuple[str, ...] = ()
+    compile_mcp_session_timeout_s: float | None = 60.0
+    compile_mcp_tools: tuple[CompileMcpToolSpec, ...] = ()
+    compile_mcp_tool_stages: tuple[CompileMcpToolStage, ...] = ("generate", "repair")
 
     def __post_init__(self) -> None:
         if not self.tiers:
@@ -479,6 +507,24 @@ class ControllerConfig:
                 raise ValueError("apply_scope_root must be an absolute path")
         if self.accounting_overlay is not None and not isinstance(self.accounting_overlay, Mapping):
             raise ValueError("accounting_overlay must be a mapping when set")
+        if self.compile_mcp_enabled:
+            if self.compile_mcp_config_path is None or not str(self.compile_mcp_config_path).strip():
+                raise ValueError("compile_mcp_config_path must be set when compile_mcp_enabled")
+            p = Path(str(self.compile_mcp_config_path).strip()).expanduser()
+            if not p.is_absolute():
+                raise ValueError("compile_mcp_config_path must be an absolute path")
+        if self.compile_mcp_server is not None and not str(self.compile_mcp_server).strip():
+            raise ValueError("compile_mcp_server must be non-empty when set")
+        if any(not isinstance(u, str) or not u.strip() for u in self.compile_mcp_resource_uris):
+            raise ValueError("compile_mcp_resource_uris must contain only non-empty strings")
+        if self.compile_mcp_session_timeout_s is not None and float(self.compile_mcp_session_timeout_s) <= 0:
+            raise ValueError("compile_mcp_session_timeout_s must be > 0 when set")
+        for spec in self.compile_mcp_tools:
+            if not isinstance(spec, CompileMcpToolSpec):
+                raise ValueError("compile_mcp_tools must contain only CompileMcpToolSpec entries")
+        for st in self.compile_mcp_tool_stages:
+            if st not in ("generate", "repair"):
+                raise ValueError("compile_mcp_tool_stages entries must be 'generate' or 'repair'")
 
     def effective_deployment_intents_ir_alignment_policy(self) -> Literal["off", "warn", "error"]:
         """Policy for ``deployment_intents`` vs IR deployable nodes (runtime bundle projection check)."""
@@ -590,4 +636,11 @@ class ControllerConfig:
             apply_scope_root=self.apply_scope_root,
             metadata=self.metadata,
             accounting_overlay=self.accounting_overlay,
+            compile_mcp_enabled=self.compile_mcp_enabled,
+            compile_mcp_config_path=self.compile_mcp_config_path,
+            compile_mcp_server=self.compile_mcp_server,
+            compile_mcp_resource_uris=self.compile_mcp_resource_uris,
+            compile_mcp_session_timeout_s=self.compile_mcp_session_timeout_s,
+            compile_mcp_tools=self.compile_mcp_tools,
+            compile_mcp_tool_stages=self.compile_mcp_tool_stages,
         )

@@ -20,7 +20,8 @@ from akc.compile.controller_budget_loop import run_budgeted_generate_execute_rep
 from akc.compile.controller_config import ControllerConfig
 from akc.compile.controller_patch_utils import (
     _derive_full_test_command,
-    _estimate_cost_usd,
+    combined_tool_like_calls,
+    refresh_controller_estimated_cost_usd,
 )
 from akc.compile.controller_plan_helpers import (
     _replayed_retrieval_context,
@@ -44,6 +45,7 @@ from akc.compile.knowledge_extractor import (
     build_intent_constraint_ids_by_assertion,
     extract_knowledge_snapshot,
 )
+from akc.compile.mcp_adapter import merge_compile_time_mcp_into_ctx
 from akc.compile.planner import (
     advance_plan,
     annotate_constraint_hints_for_verifier,
@@ -88,7 +90,7 @@ from akc.memory.why_conflicts import enrich_conflict_reports_from_mediation
 from akc.memory.why_graph import ConflictDetector
 from akc.promotion import intent_declares_deployable_objective
 from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_success_criteria
-from akc.run.manifest import ReplayMode, RunManifest
+from akc.run.manifest import McpReplayEvent, ReplayMode, RunManifest
 
 
 def _hard_allow_network_from_executor(*, executor: Executor) -> bool:
@@ -570,6 +572,7 @@ def run_compile_loop(
     accounting: dict[str, Any] = {
         "llm_calls": 0,
         "tool_calls": 0,
+        "mcp_calls": 0,
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
@@ -702,6 +705,17 @@ def run_compile_loop(
 
     ctx = dict(ctx)
     ctx["intent_contract"] = intent_contract
+    mcp_replay_events: list[McpReplayEvent] = []
+    if replayed_ctx is None and bool(config.compile_mcp_enabled):
+        mcp_replay_events = merge_compile_time_mcp_into_ctx(
+            ctx=ctx,
+            config=config,
+            scope=scope,
+            policy_engine=effective_policy_engine,
+            accounting=accounting,
+            budget=budget,
+        )
+    accounting["mcp_manifest_events"] = [e.to_json_obj() for e in mcp_replay_events]
     _append_span(
         span_id=retrieve_span_id,
         parent_span_id=step_span_id,
@@ -713,6 +727,8 @@ def run_compile_loop(
             "top_k": 20,
             "stage": "retrieve",
             "replayed_from_manifest": replayed_ctx is not None,
+            "mcp_compile_events": len(mcp_replay_events),
+            "mcp_compile_resource_reads": sum(1 for e in mcp_replay_events if e.kind == "resource.read"),
         },
     )
     # Phase 3 knowledge layer: unify intent constraints with retrieved evidence.
@@ -864,6 +880,7 @@ def run_compile_loop(
                 "item_ids": sorted(set(retrieval_item_ids)),
                 "provenance": list(retrieval_provenance),
                 "replayed_from_manifest": replayed_ctx is not None,
+                "mcp_events": [e.to_json_obj() for e in mcp_replay_events],
             },
             "knowledge_snapshot": knowledge_snapshot.to_json_obj(),
             "knowledge_intent_assertion_ids": sorted(intent_assertion_map.keys()),
@@ -969,30 +986,10 @@ def run_compile_loop(
     def _tool_budget_ok() -> bool:
         if budget.max_tool_calls is None:
             return True
-        return int(accounting["tool_calls"]) < int(budget.max_tool_calls)
+        return combined_tool_like_calls(accounting) < int(budget.max_tool_calls)
 
     def _refresh_estimated_cost() -> None:
-        md = dict(config.metadata or {})
-        # Backward compatibility: allow legacy metadata keys when explicit cost rates are unset.
-        in_rate = float(config.cost_rates.input_per_1k_tokens_usd)
-        out_rate = float(config.cost_rates.output_per_1k_tokens_usd)
-        tool_rate = float(config.cost_rates.tool_call_usd)
-        if in_rate == 0.0:
-            in_rate = float(md.get("cost_input_per_1k_tokens_usd", 0.0) or 0.0)
-        if out_rate == 0.0:
-            out_rate = float(md.get("cost_output_per_1k_tokens_usd", 0.0) or 0.0)
-        if tool_rate == 0.0:
-            tool_rate = float(md.get("cost_tool_call_usd", 0.0) or 0.0)
-        accounting["estimated_cost_usd"] = float(
-            _estimate_cost_usd(
-                input_tokens=int(accounting["input_tokens"]),
-                output_tokens=int(accounting["output_tokens"]),
-                tool_calls=int(accounting["tool_calls"]),
-                input_per_1k_tokens_usd=in_rate,
-                output_per_1k_tokens_usd=out_rate,
-                tool_call_usd=tool_rate,
-            )
-        )
+        refresh_controller_estimated_cost_usd(accounting=accounting, config=config)
 
     def _cost_budget_ok() -> bool:
         if budget.max_cost_usd is None:

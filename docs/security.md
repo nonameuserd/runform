@@ -20,6 +20,7 @@ This document describes AKC’s **defense-in-depth** security model: tenant isol
 | Tenant-scoped secrets helper | `src/akc/execute/secrets.py` (`SecretsScopeConfig`) |
 | Rust executor implementation | `rust/crates/akc_executor/` (bin `akc-exec`), `rust/crates/akc_protocol/` |
 | Rust ingestion CLI | `rust/crates/akc_ingest/` (bin `akc-ingest`) |
+| MCP ingest client (optional) | `src/akc/ingest/connectors/mcp/` (`ingest-mcp` extra; stdio subprocess + streamable HTTP) |
 | Runtime HTTP + subprocess policy | `src/akc/runtime/http_execute.py`, `src/akc/runtime/adapters/local_depth.py`, `src/akc/runtime/action_routing.py` |
 
 ## Status: enforced vs best-effort
@@ -412,6 +413,25 @@ Isolation principles:
 - ingestion should be treated as parsing untrusted payloads (no direct execution of document contents as code)
 - tenant-scoped output records include `tenant_id`
 - normalization is deterministic (stable ordering and stable ids) to reduce the chance of adversarial non-determinism affecting downstream compilation
+
+### MCP ingest connector (`ingest-mcp` extra)
+
+`akc ingest --connector mcp` runs a **Model Context Protocol** client against servers you configure (stdio subprocess or streamable HTTP). Treat this as **high trust** in the configured command or remote endpoint:
+
+- **Stdio**: AKC spawns the configured process with the merged environment (including secrets referenced via `${VAR}` expansion in config). That process is **arbitrary code** with the user’s privileges; only run allowlisted binaries and minimize inherited secrets.
+- **HTTP**: Non-loopback URLs must use **HTTPS** (enforced in the connector). For local servers, prefer binding to **127.0.0.1** and follow MCP guidance on **Origin** validation and DNS rebinding for streamable HTTP.
+- **Tenant isolation**: emitted `Document` metadata still includes `tenant_id` like other connectors; do not point multiple tenants at the same MCP server unless you enforce isolation on the server side.
+
+Incremental skips use listing metadata (for example `meta.etag`) when present; without server hints, sources are re-fetched each run.
+
+### AKC as MCP server (`mcp-serve` extra / `akc mcp serve`)
+
+`akc mcp serve` runs a **read-only** Model Context Protocol server (FastMCP) so MCP hosts (for example IDEs) can query indexed knowledge and inspect compile run metadata.
+
+- **Tenant isolation**: tools require an explicit `tenant_id`. Use `--allow-tenant` / `AKC_MCP_ALLOWED_TENANTS` to restrict which tenants the process will serve.
+- **Scoped secrets**: optional `AKC_MCP_TOOL_TOKEN` (or `--tool-token`) forces clients to pass `tool_token` on each tool call (stdio-friendly shared secret). When `--http-bearer-token` / `AKC_MCP_HTTP_BEARER_TOKEN` is set for streamable HTTP or SSE, FastMCP enforces bearer auth at the transport and **does not** require `tool_token`.
+- **Network exposure**: HTTP transports default to **127.0.0.1**. Do not expose an unauthenticated server to untrusted networks; prefer SSH tunnels or a reverse proxy with strong auth for remote access.
+- **Data exposure**: `akc_query_index` returns document snippets (truncated); `akc_list_recent_runs` / `akc_get_compile_status` read the tenant operations index and manifest pointers—treat the MCP host as having read access to whatever paths your outputs root contains.
 
 ## Observability and logging
 

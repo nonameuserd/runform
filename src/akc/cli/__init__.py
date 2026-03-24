@@ -29,6 +29,7 @@ from .ingest import cmd_ingest, cmd_slack_list_channels
 from .init import cmd_init, register_init_parser
 from .living import cmd_living_recompile, cmd_living_webhook_serve
 from .living_doctor import cmd_living_doctor
+from .mcp_serve import register_mcp_parser
 from .metrics import cmd_metrics
 from .policy import cmd_policy_explain
 from .runtime import (
@@ -118,13 +119,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--connector",
         required=True,
-        choices=["docs", "openapi", "slack"],
-        help="Connector: docs, openapi, slack (extend via ingest modules)",
+        choices=["docs", "openapi", "slack", "mcp"],
+        help="Connector: docs, openapi, slack, mcp (mcp requires ingest-mcp extra)",
     )
     ingest.add_argument(
         "--input",
         required=True,
-        help="Connector input (docs root path, OpenAPI spec path/URL, or Slack channel id)",
+        help=(
+            "Connector input: docs root, OpenAPI spec path/URL, Slack channel id, "
+            "or MCP server name / path to inline MCP server JSON"
+        ),
     )
 
     ingest.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -239,6 +243,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Allow bot messages as answers (default: false)",
     )
     ingest.add_argument(
+        "--mcp-config",
+        default=".akc/mcp-ingest.json",
+        help="Path to multi-server MCP config JSON (default: .akc/mcp-ingest.json)",
+    )
+    ingest.add_argument(
+        "--mcp-uri-prefix",
+        default=None,
+        help="Only ingest MCP resources whose URI starts with this prefix",
+    )
+    ingest.add_argument(
+        "--mcp-static-prompt",
+        default=None,
+        help="Optional extra UTF-8 text source to ingest alongside MCP resources (akc://static-prompt)",
+    )
+    ingest.add_argument(
+        "--mcp-timeout-s",
+        type=float,
+        default=120.0,
+        help="Per-session timeout for MCP stdio/HTTP operations in seconds (default: 120; 0 = no limit)",
+    )
+    ingest.add_argument(
         "--assertion-index-root",
         metavar="DIR",
         help=(
@@ -259,6 +284,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     ingest.set_defaults(func=cmd_ingest)
+
+    register_mcp_parser(sub)
 
     slack = sub.add_parser("slack", help="Slack utilities")
     slack.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -1151,6 +1178,43 @@ def _build_parser() -> argparse.ArgumentParser:
             "Embed full system IR JSON in the runtime bundle (larger artifact; "
             "for air-gapped transfer or debugging; default off)."
         ),
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp",
+        action="store_true",
+        help=(
+            "Enable optional compile-time MCP (requires ingest-mcp extra). "
+            "Servers are defined in JSON (default: <work-root>/.akc/mcp-ingest.json); "
+            "extends tool allowlist with mcp.resource.read and mcp.tool.call."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-config",
+        default=None,
+        help="Path to multi-server MCP JSON (default: <work-root>/.akc/mcp-ingest.json when --compile-mcp is set).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-server",
+        default=None,
+        help="Logical server name from the MCP config (else default_server from the JSON file).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-resource",
+        action="append",
+        default=[],
+        help="MCP resource URI to read at retrieve (repeatable).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-tool",
+        action="append",
+        default=[],
+        metavar="JSON",
+        help='MCP tools/call spec as JSON, e.g. {"tool_name":"echo","arguments":{"message":"hi"}} (repeatable).',
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-tools-generate-only",
+        action="store_true",
+        help="Run configured --compile-mcp-tool only on generate iterations, not repair.",
     )
     compile_cmd.add_argument(
         "--format",

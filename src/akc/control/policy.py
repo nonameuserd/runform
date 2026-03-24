@@ -20,6 +20,11 @@ else:  # pragma: no cover - runtime type alias to avoid import cycles
 
 PolicyMode = Literal["audit_only", "enforce"]
 
+# Compile-time MCP (optional): stable action names for allowlists and OPA/Rego inputs.
+MCP_RESOURCE_READ_ACTION = "mcp.resource.read"
+MCP_TOOL_CALL_ACTION = "mcp.tool.call"
+MCP_COMPILE_ACTIONS: tuple[str, ...] = (MCP_RESOURCE_READ_ACTION, MCP_TOOL_CALL_ACTION)
+
 # Knowledge-layer conflict mediation when automated scores tie (compile retrieve stage).
 # - ``fail_closed``: ambiguous ties raise and block extraction.
 # - ``warn_and_continue``: deterministic lexicographic tie-break; mediation events record the rule.

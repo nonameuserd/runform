@@ -84,37 +84,134 @@ def _validate_json_mapping(value: Any, *, what: str) -> dict[str, JSONValue]:
     return out
 
 
+McpReplayEventKind = Literal["resource.read", "tool.call", "refused_live"]
+ALLOWED_MCP_REPLAY_EVENT_KINDS: tuple[str, ...] = ("resource.read", "tool.call", "refused_live")
+# Keep literals local to avoid importing ``akc.control.policy`` (manifest is imported very early).
+_DEFAULT_MCP_RESOURCE_READ_ACTION = "mcp.resource.read"
+_DEFAULT_MCP_TOOL_CALL_ACTION = "mcp.tool.call"
+
+
+@dataclass(frozen=True, slots=True)
+class McpReplayEvent:
+    """Audit/replay record for compile-time MCP (live calls are non-deterministic).
+
+    Payloads are represented by ``payload_sha256`` (full SHA256 hex) so replays stay
+    stable without storing raw MCP bodies in the manifest.
+    """
+
+    kind: McpReplayEventKind
+    server: str
+    action: str
+    uri: str | None = None
+    tool_name: str | None = None
+    arguments_sha256: str | None = None
+    payload_sha256: str | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        require_non_empty(self.server, name="mcp_replay_event.server")
+        require_non_empty(self.action, name="mcp_replay_event.action")
+        if self.kind not in ALLOWED_MCP_REPLAY_EVENT_KINDS:
+            raise ValueError(f"mcp_replay_event.kind must be one of {ALLOWED_MCP_REPLAY_EVENT_KINDS}")
+        for name, val in (
+            ("arguments_sha256", self.arguments_sha256),
+            ("payload_sha256", self.payload_sha256),
+        ):
+            if val is not None:
+                _validate_sha256_hex(str(val), name=f"mcp_replay_event.{name}")
+
+    def to_json_obj(self) -> dict[str, JSONValue]:
+        out: dict[str, JSONValue] = {
+            "kind": self.kind,
+            "server": self.server.strip(),
+            "action": self.action.strip(),
+        }
+        if self.uri is not None:
+            out["uri"] = self.uri
+        if self.tool_name is not None:
+            out["tool_name"] = self.tool_name
+        if self.arguments_sha256 is not None:
+            out["arguments_sha256"] = self.arguments_sha256
+        if self.payload_sha256 is not None:
+            out["payload_sha256"] = self.payload_sha256
+        if self.reason is not None:
+            out["reason"] = self.reason
+        return out
+
+    @staticmethod
+    def from_json_obj(obj: Mapping[str, Any]) -> McpReplayEvent:
+        kind_raw = str(obj.get("kind", "")).strip()
+        if kind_raw not in ALLOWED_MCP_REPLAY_EVENT_KINDS:
+            raise ValueError(f"mcp_replay_event.kind must be one of {ALLOWED_MCP_REPLAY_EVENT_KINDS}")
+        action_raw = str(obj.get("action", "")).strip()
+        if not action_raw:
+            action_raw = (
+                _DEFAULT_MCP_TOOL_CALL_ACTION
+                if kind_raw == "tool.call"
+                else _DEFAULT_MCP_RESOURCE_READ_ACTION
+            )
+        return McpReplayEvent(
+            kind=cast(McpReplayEventKind, kind_raw),
+            server=str(obj.get("server", "")),
+            action=action_raw,
+            uri=(str(obj.get("uri")) if obj.get("uri") is not None else None),
+            tool_name=(str(obj.get("tool_name")) if obj.get("tool_name") is not None else None),
+            arguments_sha256=(str(obj.get("arguments_sha256")) if obj.get("arguments_sha256") is not None else None),
+            payload_sha256=(str(obj.get("payload_sha256")) if obj.get("payload_sha256") is not None else None),
+            reason=(str(obj.get("reason")) if obj.get("reason") is not None else None),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievalSnapshot:
     source: str
     query: str
     top_k: int
     item_ids: tuple[str, ...]
+    mcp_events: tuple[McpReplayEvent, ...] = ()
 
     def __post_init__(self) -> None:
         require_non_empty(self.source, name="retrieval_snapshot.source")
         require_non_empty(self.query, name="retrieval_snapshot.query")
         if int(self.top_k) <= 0:
             raise ValueError("retrieval_snapshot.top_k must be > 0")
+        for ev in self.mcp_events:
+            if not isinstance(ev, McpReplayEvent):
+                raise ValueError("retrieval_snapshot.mcp_events must contain only McpReplayEvent")
 
     def to_json_obj(self) -> dict[str, JSONValue]:
-        return {
+        base: dict[str, JSONValue] = {
             "source": self.source.strip(),
             "query": self.query,
             "top_k": int(self.top_k),
             "item_ids": [str(x) for x in self.item_ids],
         }
+        if self.mcp_events:
+            base["mcp_events"] = [e.to_json_obj() for e in self.mcp_events]
+        return base
 
     @staticmethod
     def from_json_obj(obj: Mapping[str, Any]) -> RetrievalSnapshot:
         item_ids_raw = obj.get("item_ids") or []
         if not isinstance(item_ids_raw, Sequence) or isinstance(item_ids_raw, (str, bytes)):
             raise ValueError("retrieval_snapshot.item_ids must be an array")
+        mcp_raw = obj.get("mcp_events") or []
+        mcp_events: tuple[McpReplayEvent, ...] = ()
+        if mcp_raw is not None and mcp_raw != []:
+            if not isinstance(mcp_raw, Sequence) or isinstance(mcp_raw, (str, bytes)):
+                raise ValueError("retrieval_snapshot.mcp_events must be an array")
+            parsed: list[McpReplayEvent] = []
+            for item in mcp_raw:
+                if not isinstance(item, dict):
+                    raise ValueError("retrieval_snapshot.mcp_events[] must be an object")
+                parsed.append(McpReplayEvent.from_json_obj(item))
+            mcp_events = tuple(parsed)
         return RetrievalSnapshot(
             source=str(obj.get("source", "")),
             query=str(obj.get("query", "")),
             top_k=int(obj.get("top_k", 0)),
             item_ids=tuple(str(x) for x in item_ids_raw),
+            mcp_events=mcp_events,
         )
 
 

@@ -18,7 +18,7 @@ from akc.compile import (
     RustExecutor,
     TierConfig,
 )
-from akc.compile.controller_config import TestMode
+from akc.compile.controller_config import CompileMcpToolSpec, CompileMcpToolStage, TestMode
 from akc.compile.executors import (
     _validate_docker_security_identifier,
     _validate_docker_tmpfs_mounts,
@@ -481,6 +481,75 @@ class _OfflineLLM(LLMBackend):
         return LLMResponse(text=text, raw=None, usage=None)
 
 
+def _extend_tool_allowlist_for_mcp(base: tuple[str, ...]) -> tuple[str, ...]:
+    extra = ("mcp.resource.read", "mcp.tool.call")
+    seen = set(base)
+    out = list(base)
+    for x in extra:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return tuple(out)
+
+
+def configure_compile_mcp_from_cli(
+    config: ControllerConfig,
+    *,
+    project_root: Path,
+    compile_mcp: bool,
+    mcp_config: str | None,
+    mcp_server: str | None,
+    mcp_resources: list[str],
+    mcp_tool_jsons: list[str],
+    tools_generate_only: bool,
+) -> ControllerConfig:
+    """Enable compile-time MCP from CLI flags (shared server JSON with ``akc ingest``)."""
+
+    if not compile_mcp:
+        return config
+    cfg_path = Path(mcp_config).expanduser() if mcp_config else project_root / ".akc" / "mcp-ingest.json"
+    cfg_path = cfg_path.resolve()
+    if not cfg_path.is_file():
+        raise SystemExit(
+            f"compile MCP config not found: {cfg_path}\n"
+            "Add a multi-server MCP JSON (see `akc ingest` / docs) or pass --compile-mcp-config PATH."
+        )
+    tools: list[CompileMcpToolSpec] = []
+    for raw in mcp_tool_jsons:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"Invalid --compile-mcp-tool JSON: {e}") from e
+        if not isinstance(obj, dict):
+            raise SystemExit("--compile-mcp-tool must be a JSON object")
+        tname = str(obj.get("tool_name") or obj.get("name") or "").strip()
+        if not tname:
+            raise SystemExit('--compile-mcp-tool requires string "tool_name" (or alias "name")')
+        args = obj.get("arguments")
+        if args is None:
+            args_dict: dict[str, JSONValue] = {}
+        elif isinstance(args, dict):
+            args_dict = {str(k): cast(JSONValue, v) for k, v in args.items()}
+        else:
+            raise SystemExit("--compile-mcp-tool arguments must be a JSON object when set")
+        tools.append(CompileMcpToolSpec(tool_name=tname, arguments=args_dict))
+    res_uris = tuple(str(x).strip() for x in mcp_resources if str(x).strip())
+    if not res_uris and not tools:
+        raise SystemExit("--compile-mcp requires at least one --compile-mcp-resource and/or --compile-mcp-tool")
+    stages: tuple[CompileMcpToolStage, ...] = ("generate",) if tools_generate_only else ("generate", "repair")
+    srv = str(mcp_server).strip() if mcp_server is not None and str(mcp_server).strip() else None
+    return replace(
+        config,
+        tool_allowlist=_extend_tool_allowlist_for_mcp(config.tool_allowlist),
+        compile_mcp_enabled=True,
+        compile_mcp_config_path=str(cfg_path),
+        compile_mcp_server=srv,
+        compile_mcp_resource_uris=res_uris,
+        compile_mcp_tools=tuple(tools),
+        compile_mcp_tool_stages=stages,
+    )
+
+
 def _build_compile_config(
     *,
     mode: str,
@@ -936,6 +1005,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
     md2["developer_profile_auto_seed_step"] = bool(profile_resolved["auto_seed_deployable_step"].value)
     md2["developer_profile_intent_bootstrap_from_store"] = bool(profile_resolved["intent_bootstrap_from_store"].value)
     config = replace(config, metadata=md2)
+    config = configure_compile_mcp_from_cli(
+        config,
+        project_root=work_root.resolve(),
+        compile_mcp=bool(getattr(args, "compile_mcp", False)),
+        mcp_config=getattr(args, "compile_mcp_config", None),
+        mcp_server=getattr(args, "compile_mcp_server", None),
+        mcp_resources=list(getattr(args, "compile_mcp_resource", None) or []),
+        mcp_tool_jsons=list(getattr(args, "compile_mcp_tool", None) or []),
+        tools_generate_only=bool(getattr(args, "compile_mcp_tools_generate_only", False)),
+    )
     llm = _OfflineLLM()
 
     goal = args.goal or "Compile repository"
@@ -980,6 +1059,11 @@ def cmd_compile(args: argparse.Namespace) -> int:
         print(f"  apply_scope_root: {apply_scope_root}")
     print(f"  developer_role_profile: {developer_role_profile}")
     print(f"  promotion_mode: {promotion_mode} (require_deployable_steps={bool(require_deployable)})")
+    if bool(getattr(args, "compile_mcp", False)):
+        print(f"  compile_mcp: enabled (config={config.compile_mcp_config_path})")
+        print(f"    resources: {list(config.compile_mcp_resource_uris)}")
+        print(f"    tools: {[t.tool_name for t in config.compile_mcp_tools]}")
+        print(f"    tool_stages: {list(config.compile_mcp_tool_stages)}")
     if (
         sandbox_mode == "strong"
         and strong_lane_preference == "wasm"

@@ -59,8 +59,17 @@ ingest-messaging = [
     # Optional official Slack SDK (stdlib HTTP fallback exists)
     "slack-sdk>=3.27",
 ]
+ingest-mcp = [
+    # Official Model Context Protocol Python SDK (stdio + streamable HTTP client)
+    "mcp>=1.2.0",
+    "httpx>=0.27",
+]
+# MCP host integration: ``akc mcp serve`` (FastMCP server; same ``mcp`` wheel as ingest-mcp)
+mcp-serve = [
+    "mcp>=1.2.0",
+]
 ingest-all = [
-    "akc[ingest-docs,ingest-openapi,ingest-embed,ingest-vectorstore,ingest-messaging]",
+    "akc[ingest-docs,ingest-openapi,ingest-embed,ingest-vectorstore,ingest-messaging,ingest-mcp,mcp-serve]",
 ]
 
 # Optional vector store backends

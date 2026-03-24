@@ -12,7 +12,8 @@ from akc.memory.models import (
     now_ms,
     require_non_empty,
 )
-from akc.run.manifest import RunManifest
+from akc.run.manifest import McpReplayEvent, RunManifest
+from akc.utils.fingerprint import stable_json_fingerprint
 
 
 def _update_step(
@@ -78,6 +79,23 @@ def _set_step_status(
         )
 
     return _update_step(plan=plan, step_id=step_id, mutate=_mutate)
+
+
+def persist_mcp_manifest_events_to_retrieval_snapshot(
+    *,
+    plan: PlanState,
+    step_id: str,
+    mcp_events: list[dict[str, Any]],
+) -> PlanState:
+    """Rewrite ``outputs.retrieval_snapshot.mcp_events`` (retrieve + generate/repair MCP audit)."""
+
+    step = next((s for s in plan.steps if s.id == step_id), None)
+    if step is None:
+        return plan
+    out_prev = dict(step.outputs or {})
+    snap = dict(out_prev.get("retrieval_snapshot") or {})
+    snap["mcp_events"] = list(mcp_events)
+    return _set_step_outputs(plan=plan, step_id=step_id, outputs_patch={"retrieval_snapshot": snap})
 
 
 def _manifest_pass_metadata(*, replay_manifest: RunManifest | None, pass_name: str) -> dict[str, Any] | None:
@@ -146,6 +164,44 @@ def _replayed_execution_stage(
     return stage, result, command
 
 
+def _mcp_replay_doc_id(ev: McpReplayEvent) -> str:
+    return f"mcp-replay:{stable_json_fingerprint(ev.to_json_obj())[:16]}"
+
+
+def _synthetic_mcp_replay_document(*, ev: McpReplayEvent, snap_idx: int) -> dict[str, Any]:
+    doc_id = _mcp_replay_doc_id(ev)
+    title = f"replayed:mcp:{ev.server}:{ev.kind}"
+    lines = [
+        "[Compile-time MCP replay — deterministic placeholder; live payload not re-fetched]",
+        f"kind={ev.kind}",
+        f"server={ev.server}",
+        f"action={ev.action}",
+    ]
+    if ev.uri:
+        lines.append(f"uri={ev.uri}")
+    if ev.tool_name:
+        lines.append(f"tool_name={ev.tool_name}")
+    if ev.arguments_sha256:
+        lines.append(f"arguments_sha256={ev.arguments_sha256}")
+    if ev.payload_sha256:
+        lines.append(f"payload_sha256={ev.payload_sha256}")
+    if ev.reason:
+        lines.append(f"reason={ev.reason}")
+    content = "\n".join(lines)
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "content": content,
+        "score": 0.05,
+        "metadata": {
+            "source_type": "mcp_compile_replay",
+            "mcp_replay": True,
+            "snapshot_index": snap_idx,
+            "replay_event": ev.to_json_obj(),
+        },
+    }
+
+
 def _replayed_retrieval_context(
     *,
     replay_manifest: RunManifest | None,
@@ -179,6 +235,10 @@ def _replayed_retrieval_context(
                     },
                 }
             )
+        for ev in snap.mcp_events:
+            doc = _synthetic_mcp_replay_document(ev=ev, snap_idx=idx)
+            documents.append(doc)
+            item_ids.append(doc["doc_id"])
 
     return {
         "code_memory_items": [

@@ -85,6 +85,7 @@ from akc.promotion import (
 )
 from akc.run import (
     ArtifactPointer,
+    McpReplayEvent,
     PassRecord,
     ReplayMode,
     RetrievalSnapshot,
@@ -1386,9 +1387,17 @@ class CompileSession:
         top_k = int(payload.get("top_k") or 20)
         item_ids_raw = payload.get("item_ids")
         item_ids = tuple(str(x) for x in item_ids_raw) if isinstance(item_ids_raw, list) else ()
+        mcp_raw = payload.get("mcp_events")
+        mcp_events: tuple[McpReplayEvent, ...] = ()
+        if isinstance(mcp_raw, list) and mcp_raw:
+            parsed: list[McpReplayEvent] = []
+            for item in mcp_raw:
+                if isinstance(item, dict):
+                    parsed.append(McpReplayEvent.from_json_obj(item))
+            mcp_events = tuple(parsed)
         if not query or top_k <= 0:
             return []
-        return [RetrievalSnapshot(source=source, query=query, top_k=top_k, item_ids=item_ids)]
+        return [RetrievalSnapshot(source=source, query=query, top_k=top_k, item_ids=item_ids, mcp_events=mcp_events)]
 
     def _build_pass_records(self, *, result: ControllerResult, step_outputs: dict[str, Any]) -> list[PassRecord]:
         compile_status: Literal["succeeded", "failed"] = (
@@ -2091,6 +2100,7 @@ class CompileSession:
             "pricing_version": str(config.cost_rates.pricing_version),
             "llm_calls": int(accounting.get("llm_calls", 0)),
             "tool_calls": int(accounting.get("tool_calls", 0)),
+            "mcp_calls": int(accounting.get("mcp_calls", 0)),
             "input_tokens": int(accounting.get("input_tokens", 0)),
             "output_tokens": int(accounting.get("output_tokens", 0)),
             "total_tokens": int(accounting.get("total_tokens", 0)),

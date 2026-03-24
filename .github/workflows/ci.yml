@@ -63,7 +63,7 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra ingest-mcp
 
       # Ragas pulls `diskcache` (pickle-based; no fixed release on PyPI yet). Keep it out of
       # `uv.lock` / Dependabot surface; install the same pin CI used previously when needed.

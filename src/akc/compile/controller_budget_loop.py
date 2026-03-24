@@ -11,16 +11,18 @@ from akc.compile.controller_config import Budget, ControllerConfig
 from akc.compile.controller_patch_utils import (
     _best_of,
     _escalate_tier,
-    _estimate_cost_usd,
     _estimate_token_count,
     _is_test_path,
     _policy_requires_tests,
     _score_candidate,
+    combined_tool_like_calls,
+    refresh_controller_estimated_cost_usd,
 )
 from akc.compile.controller_plan_helpers import (
     _replayed_execution_stage,
     _set_step_outputs,
     _set_step_status,
+    persist_mcp_manifest_events_to_retrieval_snapshot,
 )
 from akc.compile.controller_policy_runtime import COMPILE_PATCH_APPLY_ACTION
 from akc.compile.controller_types import Candidate, ControllerResult, RunStatus
@@ -29,6 +31,7 @@ from akc.compile.interfaces import ExecutionResult
 from akc.compile.ir_builder import IntentContractShape, build_ir_document_from_plan
 from akc.compile.ir_passes import DefaultIRGeneratePromptPass, DefaultIRRepairPromptPass
 from akc.compile.ir_prompt_context import intent_prompt_context_from_ir_and_resolve
+from akc.compile.mcp_adapter import run_compile_mcp_tools_into_ctx
 from akc.compile.patch_emitter import (
     ModelCallNeeded,
     ResolvedPatch,
@@ -168,35 +171,23 @@ def run_budgeted_generate_execute_repair_loop(
     def _tool_budget_ok() -> bool:
         if budget.max_tool_calls is None:
             return True
-        return int(accounting["tool_calls"]) < int(budget.max_tool_calls)
+        return combined_tool_like_calls(accounting) < int(budget.max_tool_calls)
 
     def _refresh_estimated_cost() -> None:
-        md = dict(config.metadata or {})
-        # Backward compatibility: allow legacy metadata keys when explicit cost rates are unset.
-        in_rate = float(config.cost_rates.input_per_1k_tokens_usd)
-        out_rate = float(config.cost_rates.output_per_1k_tokens_usd)
-        tool_rate = float(config.cost_rates.tool_call_usd)
-        if in_rate == 0.0:
-            in_rate = float(md.get("cost_input_per_1k_tokens_usd", 0.0) or 0.0)
-        if out_rate == 0.0:
-            out_rate = float(md.get("cost_output_per_1k_tokens_usd", 0.0) or 0.0)
-        if tool_rate == 0.0:
-            tool_rate = float(md.get("cost_tool_call_usd", 0.0) or 0.0)
-        accounting["estimated_cost_usd"] = float(
-            _estimate_cost_usd(
-                input_tokens=int(accounting["input_tokens"]),
-                output_tokens=int(accounting["output_tokens"]),
-                tool_calls=int(accounting["tool_calls"]),
-                input_per_1k_tokens_usd=in_rate,
-                output_per_1k_tokens_usd=out_rate,
-                tool_call_usd=tool_rate,
-            )
-        )
+        refresh_controller_estimated_cost_usd(accounting=accounting, config=config)
 
     def _cost_budget_ok() -> bool:
         if budget.max_cost_usd is None:
             return True
         return float(accounting["estimated_cost_usd"]) <= float(budget.max_cost_usd)
+
+    def _flush_mcp_manifest_events() -> None:
+        nonlocal plan
+        evs = accounting.get("mcp_manifest_events")
+        if not isinstance(evs, list) or not evs:
+            return
+        plan = persist_mcp_manifest_events_to_retrieval_snapshot(plan=plan, step_id=step_id, mcp_events=evs)
+        plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
 
     # Generate → Execute loop with bounded repairs.
     current_tier = gen_tier
@@ -302,6 +293,26 @@ def run_budgeted_generate_execute_repair_loop(
             current_knowledge_provenance_fingerprint=knowledge_provenance_fingerprint,
             intent_mandatory_partial_replay_passes=intent_mandatory_partial_replay_passes,
         )
+
+        if (
+            config.compile_mcp_enabled
+            and config.compile_mcp_tools
+            and stage in config.compile_mcp_tool_stages
+            and pass_decision.should_call_model
+        ):
+            tool_events = run_compile_mcp_tools_into_ctx(
+                ctx=ctx,
+                config=config,
+                scope=scope,
+                policy_engine=policy_engine,
+                accounting=accounting,
+                budget=budget,
+                stage=str(stage),
+            )
+            mlist = accounting.get("mcp_manifest_events")
+            if isinstance(mlist, list):
+                for te in tool_events:
+                    mlist.append(te.to_json_obj())
 
         last_generation_text = best.llm_text if best is not None else ""
 
@@ -962,6 +973,7 @@ def run_budgeted_generate_execute_repair_loop(
                     "status": "succeeded",
                 },
             )
+            _flush_mcp_manifest_events()
             return ControllerResult(
                 status="succeeded",
                 plan=plan,
@@ -1038,6 +1050,7 @@ def run_budgeted_generate_execute_repair_loop(
         },
         status="error",
     )
+    _flush_mcp_manifest_events()
     return ControllerResult(
         status=status,
         plan=plan,

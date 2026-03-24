@@ -3,6 +3,7 @@
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import (
     Budget,
+    CompileMcpToolSpec,
     ControllerConfig,
     CostRates,
     DocDerivedAssertionsMode,
@@ -33,6 +34,7 @@ from akc.compile.verifier import DeterministicVerifier, VerifierPolicy, Verifier
 
 __all__ = [
     "Budget",
+    "CompileMcpToolSpec",
     "CompileSession",
     "ControllerConfig",
     "DocDerivedAssertionsMode",
