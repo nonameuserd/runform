@@ -1853,7 +1853,8 @@ def run_runtime_autopilot(
             cp_post = (
                 manifest_post_runtime.control_plane if isinstance(manifest_post_runtime.control_plane, dict) else {}
             )
-            tcm = dict(cp_post.get("time_compression_metrics") or {}) if isinstance(cp_post, dict) else {}
+            raw_tcm = cp_post.get("time_compression_metrics") if isinstance(cp_post, dict) else None
+            tcm: dict[str, Any] = dict(raw_tcm) if isinstance(raw_tcm, dict) else {}
 
             history_entry = AutopilotHistoryEntry(
                 event_kind="runtime_rollout",

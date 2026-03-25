@@ -1266,28 +1266,33 @@ def run_runtime_bundle_pass(
     ):
         projected = delivery_targets_by_id.get(node.id)
         deployment_intents.append(
-            {
-                "node_id": node.id,
-                "kind": node.kind,
-                "name": node.name,
-                "depends_on": list(node.depends_on),
-                "effects": node.effects.to_json_obj() if node.effects is not None else None,
-                "contract_id": node.contract.contract_id if node.contract is not None else None,
-                "target_class": (str(projected.get("target_class")) if isinstance(projected, Mapping) else "unknown"),
-                "environment_support": (
-                    sorted(str(k) for k in cast(dict[str, Any], projected.get("supported_delivery_paths", {})))
-                    if isinstance(projected, Mapping)
-                    else ["local", "staging", "production"]
-                ),
-                "delivery_paths": (
-                    projected.get("supported_delivery_paths")
-                    if isinstance(projected, Mapping)
-                    else {"local": ["direct_apply"]}
-                ),
-                "operational_profile_fingerprint": (
-                    stable_json_fingerprint(dict(projected)) if isinstance(projected, Mapping) else None
-                ),
-            }
+            cast(
+                dict[str, JSONValue],
+                {
+                    "node_id": node.id,
+                    "kind": node.kind,
+                    "name": node.name,
+                    "depends_on": list(node.depends_on),
+                    "effects": node.effects.to_json_obj() if node.effects is not None else None,
+                    "contract_id": node.contract.contract_id if node.contract is not None else None,
+                    "target_class": (
+                        str(projected.get("target_class")) if isinstance(projected, Mapping) else "unknown"
+                    ),
+                    "environment_support": (
+                        sorted(str(k) for k in cast(dict[str, Any], projected.get("supported_delivery_paths", {})))
+                        if isinstance(projected, Mapping)
+                        else ["local", "staging", "production"]
+                    ),
+                    "delivery_paths": (
+                        projected.get("supported_delivery_paths")
+                        if isinstance(projected, Mapping)
+                        else {"local": ["direct_apply"]}
+                    ),
+                    "operational_profile_fingerprint": (
+                        stable_json_fingerprint(dict(projected)) if isinstance(projected, Mapping) else None
+                    ),
+                },
+            )
         )
 
     allow_network, renv_knowledge = effective_allow_network_for_handoff(
@@ -1797,19 +1802,24 @@ def run_deployment_config_pass(
                                 "image": tgt_image,
                                 "ports": [{"containerPort": port}],
                                 "envFrom": [{"configMapRef": {"name": f"akc-runtime-{run_id}"}}],
-                                "env": [{"name": k, "value": v} for k, v in sorted(env_defaults.items())]
-                                + [
-                                    {
-                                        "name": key,
-                                        "valueFrom": {
-                                            "secretKeyRef": {
-                                                "name": _k8s_target_secret_name(run_id=run_id, target_key=target_key),
-                                                "key": key,
+                                "env": cast(
+                                    JSONValue,
+                                    [{"name": k, "value": v} for k, v in sorted(env_defaults.items())]
+                                    + [
+                                        {
+                                            "name": key,
+                                            "valueFrom": {
+                                                "secretKeyRef": {
+                                                    "name": _k8s_target_secret_name(
+                                                        run_id=run_id, target_key=target_key
+                                                    ),
+                                                    "key": key,
+                                                },
                                             },
-                                        },
-                                    }
-                                    for key in sorted(required_secrets)
-                                ],
+                                        }
+                                        for key in sorted(required_secrets)
+                                    ],
+                                ),
                                 "securityContext": {
                                     "allowPrivilegeEscalation": False,
                                     "readOnlyRootFilesystem": True,
@@ -1903,7 +1913,7 @@ def run_deployment_config_pass(
         "x-akc-config": {
             "env_file": ".akc/deployment/compose/app.env",
             "config_template": ".akc/deployment/compose/app-config.json",
-            "secrets_placeholders": secrets_placeholders,
+            "secrets_placeholders": cast(JSONValue, secrets_placeholders),
         },
     }
     _validate_docker_compose_hardening(compose_obj=compose_obj)
@@ -1977,7 +1987,7 @@ def run_deployment_config_pass(
     k8s_base_kustomization_obj: dict[str, JSONValue] = {
         "apiVersion": "kustomize.config.k8s.io/v1beta1",
         "kind": "Kustomization",
-        "resources": k8s_resource_files,
+        "resources": cast(JSONValue, k8s_resource_files),
     }
     k8s_staging_overlay_obj: dict[str, JSONValue] = {
         "apiVersion": "kustomize.config.k8s.io/v1beta1",

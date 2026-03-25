@@ -23,7 +23,7 @@ from akc.delivery.packaging_adapters import (
     enforce_packaging_preflight,
     packaging_adapter_for,
 )
-from akc.delivery.types import DeliveryPlatform, PlatformBuildSpec, ReleaseMode
+from akc.delivery.types import DeliveryPlatform, PlatformBuildSpec
 from akc.delivery.versioning import derive_platform_provider_versions
 
 
@@ -308,10 +308,10 @@ def run_delivery_build_and_package(
             tenant_id=tid,
             repo_id=rid,
             platforms=platforms,
-            release_mode=cast(ReleaseMode, release_mode),
+            release_mode=release_mode,
             delivery_version=delivery_version,
             compile_run_id=compile_run_id,
-            lanes=lanes_for_post_package_wave(cast(ReleaseMode, release_mode)),
+            lanes=lanes_for_post_package_wave(release_mode),
         )
         if not bool(dist_summary.get("ok")):
             ok_all = False

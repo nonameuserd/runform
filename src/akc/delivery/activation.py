@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 
@@ -35,7 +35,7 @@ def recipient_platforms_from_sidecar(recipients_sidecar: Mapping[str, Any] | Non
     return tuple(str(p) for p in plat if str(p).strip())
 
 
-def _evidence_for_recipient(records: list[Mapping[str, Any]], *, email: str) -> list[Mapping[str, Any]]:
+def _evidence_for_recipient(records: Sequence[Mapping[str, Any]], *, email: str) -> list[Mapping[str, Any]]:
     em = email.strip().lower()
     return [r for r in records if str(r.get("recipient_email") or "").strip().lower() == em]
 

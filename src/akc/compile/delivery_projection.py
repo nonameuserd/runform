@@ -6,7 +6,7 @@ from typing import Any, Literal, cast
 
 from akc.artifacts.contracts import apply_schema_envelope
 from akc.ir import IRDocument, IRNode
-from akc.memory.models import JSONValue
+from akc.memory.models import JSONValue, json_value_as_int
 from akc.utils.fingerprint import stable_json_fingerprint
 
 TargetClass = str
@@ -96,15 +96,18 @@ def _build_target_contract(*, node: IRNode, target_class: TargetClass) -> dict[s
     props = node.properties
     effects = node.effects.to_json_obj() if node.effects is not None else {}
     container_image = _as_non_empty_str(props.get("image")) or "ghcr.io/example/akc-app:latest"
-    service_port = int(props.get("port", 8080)) if isinstance(props.get("port"), int) else 8080
+    port_raw = props.get("port")
+    service_port = int(port_raw) if isinstance(port_raw, int) else 8080
     public = bool(props.get("public", target_class in {"web_app", "backend_service"}))
     cpu_request = _as_non_empty_str(props.get("cpu_request")) or "250m"
     mem_request = _as_non_empty_str(props.get("memory_request")) or "256Mi"
     cpu_limit = _as_non_empty_str(props.get("cpu_limit")) or "1000m"
     mem_limit = _as_non_empty_str(props.get("memory_limit")) or "1Gi"
     health_path = _as_non_empty_str(props.get("health_path")) or "/healthz"
-    replicas = int(props.get("replicas", 1)) if isinstance(props.get("replicas"), int) else 1
-    startup_seconds = int(props.get("startup_seconds", 30)) if isinstance(props.get("startup_seconds"), int) else 30
+    replicas_raw = props.get("replicas")
+    replicas = int(replicas_raw) if isinstance(replicas_raw, int) else 1
+    startup_raw = props.get("startup_seconds")
+    startup_seconds = int(startup_raw) if isinstance(startup_raw, int) else 30
     health_known = _as_bool(props.get("health_endpoint_known"), default=True)
     env_keys: list[str] = []
     raw_env = props.get("env")
@@ -137,8 +140,8 @@ def _build_target_contract(*, node: IRNode, target_class: TargetClass) -> dict[s
             "transport": "http",
         },
         "config_secrets_contract": {
-            "required_env": env_keys,
-            "required_secrets": secret_keys,
+            "required_env": cast(JSONValue, env_keys),
+            "required_secrets": cast(JSONValue, secret_keys),
             "secret_injection_mode": "platform_secret_store",
         },
         "health_contract": {
@@ -188,8 +191,10 @@ def _build_target_contract(*, node: IRNode, target_class: TargetClass) -> dict[s
                 "tracing_enabled": tracing_enabled,
                 "metrics_enabled": metrics_enabled,
             },
-            "environment_variables": env_keys,
-            "secrets_placeholders": [f"{key}=<set-in-secret-store>" for key in secret_keys],
+            "environment_variables": cast(JSONValue, env_keys),
+            "secrets_placeholders": cast(
+                JSONValue, [f"{key}=<set-in-secret-store>" for key in secret_keys]
+            ),
             "alert_health_expectations": {
                 "staging": "No sustained readiness failures for 10m before production gate.",
                 "production": "Page on liveness failures > 3 in 5m and latency/SLO breaches.",
@@ -459,7 +464,10 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                 },
             )
         )
-    return sorted(reqs, key=lambda r: (int(r.get("ask_order", 99)), str(r.get("id", ""))))
+    return sorted(
+        reqs,
+        key=lambda r: (json_value_as_int(r.get("ask_order"), default=99), str(r.get("id", ""))),
+    )
 
 
 def build_delivery_plan(
@@ -526,20 +534,25 @@ def build_delivery_plan(
                 "coordination": dict(coordination_obj),
             }
         ),
-        "targets": targets,
-        "environments": list(_V1_ENVIRONMENTS),
-        "environment_model": list(env_model_rows),
-        "delivery_paths": delivery_paths,
-        "operational_profiles": {"default": {"rollout_strategy": "rolling", "health_required": True}},
-        "required_human_inputs": required_human_inputs,
-        "promotion_readiness": {
-            "status": promotion_readiness_status,
-            "blocking_inputs": [item["id"] for item in required_human_inputs],
-            "promotion_blockers": promotion_blockers,
-            "production_manual_approval_required": production_manual_approval_required,
-            "is_promotion_ready": promotion_ready,
-            "default_promotion_environment": "production",
-        },
+        "targets": cast(JSONValue, targets),
+        "environments": cast(JSONValue, list(_V1_ENVIRONMENTS)),
+        "environment_model": cast(JSONValue, list(env_model_rows)),
+        "delivery_paths": cast(JSONValue, delivery_paths),
+        "operational_profiles": cast(
+            JSONValue, {"default": {"rollout_strategy": "rolling", "health_required": True}}
+        ),
+        "required_human_inputs": cast(JSONValue, required_human_inputs),
+        "promotion_readiness": cast(
+            JSONValue,
+            {
+                "status": promotion_readiness_status,
+                "blocking_inputs": [item["id"] for item in required_human_inputs],
+                "promotion_blockers": promotion_blockers,
+                "production_manual_approval_required": production_manual_approval_required,
+                "is_promotion_ready": promotion_ready,
+                "default_promotion_environment": "production",
+            },
+        ),
     }
     apply_schema_envelope(obj=out, kind="delivery_plan", version=1)
     return out

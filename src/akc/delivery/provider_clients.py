@@ -126,7 +126,7 @@ def _asc_api_key_parts() -> tuple[str, str, Path]:
 
 def _asc_jwt_token() -> str:
     try:
-        import jwt  # type: ignore[import-not-found]
+        import jwt
     except ImportError as exc:
         raise RuntimeError(
             "App Store Connect API requires PyJWT; install `akc[delivery-providers]`",
