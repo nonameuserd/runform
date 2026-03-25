@@ -246,8 +246,20 @@ jobs:
       - name: Install Nuitka build toolchain
         run: uv pip install nuitka
 
+      # Nuitka otherwise re-downloads Winlibs GCC, Dependency Walker, etc. on every fresh runner
+      # (often 10–20+ minutes on Windows before C compilation). Persist cache under the workspace.
+      - name: Cache Nuitka downloads and compilation cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .nuitka-ci-cache
+          key: nuitka-${{ matrix.platform }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'tools/nuitka/**') }}
+          restore-keys: |
+            nuitka-${{ matrix.platform }}-
+
       - name: Build standalone `akc` (Nuitka)
         shell: bash
+        env:
+          NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-ci-cache
         run: |
           set -euo pipefail
           uv run python - <<'PY'
@@ -264,6 +276,8 @@ jobs:
           subprocess.check_call(cmd)
           PY
 
+      # Same step list for every matrix OS: GitHub always shows all steps, but each runner
+      # skips irrelevant ones via `if:` (e.g. Windows never runs the bash smoke step).
       - name: Smoke check built binary (macOS/Linux)
         if: runner.os != 'Windows'
         shell: bash

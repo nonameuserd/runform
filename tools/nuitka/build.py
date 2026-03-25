@@ -70,8 +70,10 @@ def nuitka_akc_args(*, repo_root: Path, output_name: str) -> list[str]:
     # Nuitka 4.x rejects a trailing `-m akc.cli` (parses `-m` as an invalid option). Use the
     # package directory plus `--python-flag=-m` so `__main__.py` is the entry (see Nuitka
     # warning when pointing `--main` at `__main__.py` directly).
+    # Without this, the standalone folder defaults to the main module basename (`cli.dist`),
+    # while CI and signing expect `akc.dist`.
     entry = (repo_root / "src/akc/cli").resolve()
-    target = [f"--main={entry}"]
+    target = ["--output-folder-name=akc", f"--main={entry}"]
     return [*base, *data, *target]
 
 
