@@ -6,6 +6,7 @@ from akc.compile.controller_config import ControllerConfig
 from akc.compile.interfaces import Executor, LLMBackend, TenantRepoScope
 from akc.compile.verifier import DeterministicVerifier
 from akc.control.policy import (
+    MCP_COMPILE_ACTIONS,
     CapabilityAttenuator,
     CapabilityIssuer,
     DefaultDenyPolicyEngine,
@@ -106,9 +107,9 @@ def setup_policy_runtime(
 
 
 def compile_policy_actions() -> tuple[str, ...]:
-    """Policy action names used by the compile loop (mutation and tool calls)."""
+    """Policy action names used by the compile loop (mutation, tools, optional MCP)."""
 
-    return (COMPILE_PATCH_APPLY_ACTION,)
+    return (COMPILE_PATCH_APPLY_ACTION,) + MCP_COMPILE_ACTIONS
 
 
 def runtime_policy_actions() -> tuple[str, ...]:

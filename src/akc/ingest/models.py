@@ -26,6 +26,14 @@ class DocumentMetadata(TypedDict, total=False):
     operation_id: NotRequired[str]
     openapi_path: NotRequired[str]
     openapi_method: NotRequired[str]
+    # MCP connector provenance (ingest-mcp extra)
+    mcp_uri: NotRequired[str]
+    mcp_server_id: NotRequired[str]
+    mcp_source_id: NotRequired[str]
+    mcp_content_sha256: NotRequired[str]
+    mcp_resource_name: NotRequired[str]
+    mcp_resource_description: NotRequired[str]
+    mime_type: NotRequired[str]
 
 
 def _require_non_empty(value: str, *, field_name: str) -> None:

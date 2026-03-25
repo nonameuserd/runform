@@ -4,11 +4,37 @@ This document describes the high-level architecture of the Agentic Knowledge Com
 
 ## Overview
 
-AKC turns messy inputs (docs, messaging, APIs) into executable artifacts and runtime bundles through a pipeline: **Ingestion → Memory → Compilation → Runtime → Evidence/Outputs**. The compile phase is a loop: Plan → Retrieve → Generate → Execute → Repair, with retrieval from both the structured index and code memory to keep outputs grounded and correct.
+AKC turns messy inputs (docs, messaging, APIs) into executable artifacts and runtime bundles through a pipeline: **Ingestion → Memory → Compilation → Runtime → Evidence/Outputs**, with an optional **Delivery** path for named-recipient app distribution that consumes compile-time `delivery_plan` and related artifacts (not the core LLM controller loop). The compile phase is a loop: Plan → Retrieve → Generate → Execute → Repair, with retrieval from both the structured index and code memory to keep outputs grounded and correct.
 
 Phase A hardening introduces two compiler contracts:
 - **Versioned IR (`src/akc/ir/`)**: a typed, stable intermediate representation (nodes, dependencies, effect annotations, provenance pointers) that becomes the pass boundary between ingestion and compilation.
 - **Run manifest (`src/akc/run/`)**: a replay/audit artifact with IR fingerprint, retrieval snapshots, per-pass records, and replay mode.
+
+## Package layout (`src/akc/`)
+
+The Python implementation is split into first-class packages (plus a few root modules) that mirror the pipeline and control-plane concerns:
+
+| Package | Role |
+|--------|------|
+| `ingest/` | Connectors (`connectors/`: docs, OpenAPI, Slack), chunking, embeddings, structured index (`index/`: vector store + optional graph) |
+| `memory/` | Code memory, plan state, why-graph / conflict surfaces (e.g. SQLite-backed stores) |
+| `ir/` | Versioned IR (`IRDocument` / `IRNode`), diffing, workflow ordering |
+| `run/` | Run manifest, replay mode resolution, VCR helpers, delivery lifecycle projection hooks |
+| `intent/` | `IntentSpec` models, JSON/SQLite intent stores, resolution and policy projection for compile/runtime |
+| `compile/` | Controller (tiered generate/repair), planner, retriever, verifier, artifact lowering passes (`artifact_passes.py`), scoped apply, patch utilities |
+| `outputs/` | Emitters, workflow and system-spec helpers, drift/fingerprint helpers |
+| `runtime/` | Kernel, scheduler, reconciler, state store, adapter registry, providers (local, compose, k8s), bundle/delivery handoff helpers |
+| `delivery/` | Named-recipient delivery sessions (artifacts under `.akc/delivery/`), packaging adapters (iOS/Android/Web builds), distribution adapters (e.g. TestFlight, Play, Firebase App Distribution, web invites), dispatch and provider clients |
+| `control/` | OPA/Rego policy evaluation, capability tokens, operations and cost indexes, trace span types, fleet automation helpers |
+| `living/` | Drift-driven safe recompile, webhook receiver, runtime bridge, automation profiles |
+| `coordination/` | Coordination graph parse/schedule shared by compile and runtime (no heavy I/O) |
+| `knowledge/` | Canonical knowledge snapshot models, persistence envelopes, fingerprints |
+| `artifacts/` | Schema envelopes and validation helpers for tenant-scoped emitted JSON |
+| `execute/` | Executor factory, sandbox/strong execution, secrets hooks for the execute phase |
+| `viewer/` | TUI and static HTML snapshot/export helpers |
+| `evals/` | Evaluation harness |
+
+Root modules such as `pass_registry.py` (controller vs artifact pass ordering) and `promotion.py` (promotion gates) tie compile and runtime contracts together without importing cycles.
 
 ## Flow diagram
 
@@ -44,12 +70,19 @@ flowchart LR
     Workflows[Workflows]
     Agents[Agents]
     RuntimeArtifacts[Runtime Bundle]
+    DeliveryPlan[Delivery Plan]
   end
 
   subgraph runtime [Runtime]
     Kernel[Kernel / Scheduler]
     Reconciler[Deployment Reconciler]
     Evidence[Runtime Evidence]
+  end
+
+  subgraph delivery [Delivery optional]
+    NamedRecipients[Named recipients]
+    Packaging[Packaging]
+    Distribution[Store / invite distribution]
   end
 
   inputs --> ingest
@@ -59,6 +92,7 @@ flowchart LR
   compile --> outputs
   compile --> runtime
   runtime --> outputs
+  outputs --> delivery
   Exec --> Repair
   Repair --> Gen
 ```
@@ -77,7 +111,7 @@ flowchart LR
 - **Scope:** The maintained Python connectors are **docs**, **OpenAPI**, and **Slack** (under `src/akc/ingest/connectors/`). Alignment and “executable knowledge” proof do not require additional connector types as long as those three suffice for representative chunk shapes; add a new connector when a product need requires **new normalization or chunk semantics** the existing three cannot cover. Follow `.cursor/skills/akc-add-connector/SKILL.md` and add at least **one fixture and one integration test** per new connector so CI keeps coverage explicit.
 - **Chunk / Normalize:** Chunking for retrieval with overlap; connectors and chunking must preserve **tenant isolation** via `tenant_id` in metadata.
 - **Embedding:** Optional step that converts chunks into vectors for similarity search (remote providers or local/deterministic embeddings for tests).
-- **Structured Index:** Vector store (and optional graph) for retrieval during compilation. All search APIs are tenant-scoped to prevent cross-tenant retrieval. Enables “retrieve before generate” (ARCS/DeepCode-style).
+- **Structured Index:** Vector store (and optional graph) for retrieval during compilation. CLI/index backends include **memory** (ephemeral), **sqlite**, and **pgvector** (persistent). All search APIs are tenant-scoped to prevent cross-tenant retrieval. Enables “retrieve before generate” (ARCS/DeepCode-style).
 - **Ingestion state (incremental):** Optional per-tenant state to support incremental re-ingestion (e.g. file mtimes, Slack cursors, OpenAPI ETag) without re-indexing everything.
 
 ### 3. Memory & State (`src/akc/memory/`)
@@ -85,6 +119,12 @@ flowchart LR
 - **Knowledge Graph (optional):** Entities and relations for “why” and conflict detection (ActMem-style).
 - **Code Memory:** Persistent store of generated or existing code artifacts (DeepCode-style); used by the compile loop to avoid hallucination and stay consistent.
 - **Plan State:** Current goal, steps done, next step (ReAct/agent-style state).
+
+### Intent (`src/akc/intent/`)
+
+- **IntentSpec:** Structured goals, constraints, and operational validity windows compiled from JSON (or derived artifacts) into stable fingerprints and policy projections.
+- **Stores:** `JsonFileIntentStore` / `SQLiteIntentStore` persist intent under the outputs tree; paths align with the debugging checklist (authority layout under `<outputs-root>/.akc/intent/...`).
+- **Resolution:** `resolve_compile_intent_context` feeds the compile session so intent, policy, and IR stay aligned for a `(tenant_id, repo_id)` scope.
 
 ### 4. Compilation (`src/akc/compile/`)
 
@@ -113,7 +153,7 @@ flowchart LR
 #### 4.3 Compiler spine contracts (IR + run manifest)
 
 - **IR schema + versioning:** `IRDocument` and `IRNode` define a deterministic JSON shape (`schema_kind`, `schema_version`, `format_version`) with stable node IDs, sorted serialization, and tenant-scoped provenance pointers.
-- **IR schema reference:** [docs/ir-schema.md](/Users/dami/Documents/Runform/docs/ir-schema.md) is the durable reference for node kinds, `OperationalContract`, and validation invariants.
+- **IR schema reference:** [ir-schema.md](ir-schema.md) is the durable reference for node kinds, `OperationalContract`, and validation invariants.
 - **IR diffing:** `diff_ir` produces audit-friendly `added`/`removed`/`changed` node IDs for safe review and targeted recompilation.
 - **Run manifest format:** `RunManifest` captures run scope (`tenant_id`, `repo_id`), `ir_sha256`, retrieval snapshots, pass records, and model parameters; `stable_hash()` gives deterministic fingerprints for CI/eval anchoring.
 - **Replay modes:** `live`, `llm_vcr`, `full_replay`, and `partial_replay` are represented explicitly and resolved to model/tool call policy in `decide_replay_for_pass`.
@@ -187,7 +227,7 @@ Output emitters are extension points so new artifact types can be added without 
 
 The runtime layer consumes the compile-time `runtime_bundle` artifact and executes runtime-scoped workflows, services, and reconciliation loops without collapsing the existing compile contracts.
 
-- **Compile handoff:** `src/akc/compile/artifact_passes.py` emits `.akc/runtime/<run_id>.runtime_bundle.json`, and `src/akc/compile/session.py` records that pass in the run manifest for deterministic replay and operator inspection.
+- **Compile handoff:** `src/akc/compile/artifact_passes.py` lowers IR into ordered artifact passes (see `src/akc/pass_registry.py` for `ARTIFACT_PASS_ORDER`), including `.akc/deployment/<run_id>.delivery_plan.json` and `.akc/runtime/<run_id>.runtime_bundle.json`; `src/akc/compile/session.py` records those passes in the run manifest for deterministic replay and operator inspection.
 - **Kernel + scheduler:** `src/akc/runtime/kernel.py`, `src/akc/runtime/scheduler.py`, and `src/akc/runtime/state_store.py` build a runtime graph from IR contracts, persist checkpoints/queue snapshots, enforce idempotent ordering, and recover safely after restart.
 - **Adapters + native fallback:** `src/akc/runtime/adapters/` defines the adapter protocol and registry; unsupported capabilities fall back explicitly to the native backend instead of silently degrading behavior.
 - **Local execution depth:** optional subprocess routing, registry defaults, and checkpoint/replay semantics are described in [runtime-execution.md](runtime-execution.md).
@@ -216,6 +256,18 @@ When something fails in an **`emerging`** or policy-heavy flow, walk artifacts a
 6. **`akc control`** — `akc control runs show`, manifest diff, playbooks, and related commands tie **`run_id`** to operator forensics. Use the same **`outputs-root` / tenant / repo** as the failing run.
 
 Optional cross-checks: **`akc verify`** emits **`.akc/verification/verify_developer_context.v1.json`** (resolved profile + manifest path). Runtime evidence lives under **`.akc/runtime/`** as described in [getting-started.md](getting-started.md#runtime-operations).
+
+### 7. Delivery (`src/akc/delivery/`)
+
+Named-recipient **delivery sessions** capture a plain-language request, recipient list, and platform targets under **`.akc/delivery/<delivery_id>/`** (JSONL events, session/request records, control-plane audit hooks). This layer is **not** part of the compile controller loop; it orchestrates **build/package** steps via packaging adapters (iOS/Android/Web) and **distribution** via store or invite adapters (e.g. TestFlight, Google Play, Firebase App Distribution, App Store release, web invites), with optional HTTP signing via the **`akc[delivery-providers]`** extra (`pyproject.toml`). The CLI entrypoint is **`akc deliver`** (submit, status, events, promote, gate-pass, resend, activation-report, etc.); compile can be invoked from submit (`--compile`) to bind `delivery_plan` / manifest refs before packaging.
+
+### 8. Control plane (`src/akc/control/`)
+
+Cross-cutting **policy and observability** for automation: OPA/Rego evaluation (`PolicyEngine`, `DefaultDenyPolicyEngine`), capability issuance/attenuation, **operations** and **cost** indexes (SQLite-backed helpers for run queries), **trace span** types compatible with stored span JSON, and **fleet** helpers (catalog, webhooks, automation coordinator). These integrate with compile (`PolicyWrappedLLMBackend`, `PolicyWrappedExecutor`) and with operator CLIs under **`akc control`** and **`akc fleet`**.
+
+### 9. CLI surface (summary)
+
+Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), and **`akc slack`** utilities.
 
 ## Rust Optional Components
 
@@ -248,7 +300,7 @@ See [docs/security.md](security.md) for the threat model and tenant isolation gu
 - **Extension points:** New connectors and output types plug in via clear interfaces; core stays stable. Connectors and vector stores are pluggable via CLI flags (e.g. `--connector`, `--index-backend`) and ingest modules; new backends can be added without changing the core loop.
 - **Correctness-aware:** Tests by default in the compile loop; optional formal verification for critical paths.
 - **Transparent:** No mandatory proprietary models or APIs; support local/open models and optional cloud backends. Default CLI flows do not require API keys: embedding defaults to offline (`none` or `hash`), and the compile command uses an offline LLM backend by default; OpenAI/Gemini and other cloud-backed options are opt-in only.
-- **Reproducible:** One-command install and a short sequence for a full run (e.g. `uv sync && uv run akc compile --tenant-id my-tenant --repo-id my-repo --outputs-root ./out` after ingest; see [Getting started](getting-started.md#end-to-end-run-ingest--compile--verify)).
+- **Reproducible:** One-command install and a short sequence for a full run (e.g. `uv sync && source .venv/bin/activate && akc compile --tenant-id my-tenant --repo-id my-repo --outputs-root ./out` after ingest; see [Getting started](getting-started.md#end-to-end-run-ingest--compile--verify)).
 
 #### End-to-end run
 

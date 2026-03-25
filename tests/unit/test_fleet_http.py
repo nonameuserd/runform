@@ -11,7 +11,10 @@ import pytest
 
 from akc.control.control_audit import control_audit_jsonl_path
 from akc.control.fleet_config import load_fleet_config
-from akc.control.fleet_http import serve_fleet_http
+from akc.control.fleet_http import (
+    _sanitize_outbound_header_value,
+    serve_fleet_http,
+)
 from akc.control.operations_index import OperationsIndex
 from akc.run.manifest import RunManifest
 
@@ -54,6 +57,35 @@ def _run_etag(*, base: str, token: str, tenant_id: str = "t1", repo_id: str = "r
     )
     with urlopen(req, timeout=3.0) as r:
         return str(r.headers.get("ETag") or "")
+
+
+def test_sanitize_outbound_header_value_strips_crlf_and_nul() -> None:
+    assert _sanitize_outbound_header_value("ab\rc\nd\x00e") == "abcde"
+
+
+def test_cors_allow_origin_cannot_split_response_headers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(
+        "AKC_FLEET_CORS_ALLOW_ORIGIN",
+        "http://evil.example\r\nX-Injected: 1",
+    )
+    cfg_path = tmp_path / "fleet.json"
+    _write_fleet_config(cfg_path, root=tmp_path, token=None, anonymous=True)
+    cfg = load_fleet_config(cfg_path)
+    httpd = serve_fleet_http(cfg, host="127.0.0.1", port=0)
+    th = threading.Thread(target=httpd.serve_forever, daemon=True)
+    th.start()
+    try:
+        host, port = httpd.server_address
+        base = f"http://{host}:{port}"
+        req = Request(f"{base}/health", method="GET")
+        with urlopen(req, timeout=3.0) as r:
+            assert r.headers.get("X-Injected") is None
+            origin = r.headers.get("Access-Control-Allow-Origin") or ""
+            assert "\r" not in origin
+            assert "\n" not in origin
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_operator_dashboard_assets_present() -> None:

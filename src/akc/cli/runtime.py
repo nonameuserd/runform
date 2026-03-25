@@ -44,9 +44,11 @@ from akc.intent.operational_eval import (
 from akc.memory.models import JSONValue, normalize_repo_id
 from akc.promotion import normalize_promotion_mode, verify_signed_packet
 from akc.run import ArtifactPointer, RunManifest, RuntimeEvidenceRecord, replay_runtime_execution
+from akc.run.delivery_lifecycle import project_delivery_run_projection, resolve_delivery_target_lane
 from akc.run.time_compression import derive_time_compression_metrics
 from akc.runtime.adapters.local_depth import LocalDepthRuntimeAdapter
 from akc.runtime.adapters.native import NativeRuntimeAdapter
+from akc.runtime.bundle_delivery import build_delivery_handoff_context
 from akc.runtime.compile_apply_attestation import verify_compile_apply_attestation_for_rollout
 from akc.runtime.coordination.load import load_coordination_for_bundle
 from akc.runtime.coordination.models import CoordinationScheduler
@@ -932,6 +934,7 @@ def _build_runtime_evidence(
     policy_mode: str = "enforce",
     total_resync_wait_ms: int = 0,
     provider_contract: Mapping[str, Any] | None = None,
+    bundle_metadata: Mapping[str, JSONValue] | None = None,
 ) -> tuple[RuntimeEvidenceRecord, ...]:
     evidence: list[RuntimeEvidenceRecord] = []
     correlation = _evidence_correlation(context=context, stable_intent_sha256=stable_intent_sha256)
@@ -1023,6 +1026,9 @@ def _build_runtime_evidence(
                     contract_payload[key] = cast(JSONValue, [str(x) for x in v])
                 elif isinstance(v, Mapping):
                     contract_payload[key] = cast(JSONValue, {str(k): cast(JSONValue, val) for k, val in v.items()})
+    handoff = build_delivery_handoff_context(bundle_metadata) if isinstance(bundle_metadata, Mapping) else {}
+    if handoff:
+        contract_payload["delivery_handoff"] = cast(JSONValue, dict(handoff))
     evidence.append(
         RuntimeEvidenceRecord(
             evidence_type="provider_capability_snapshot",
@@ -1571,6 +1577,17 @@ def _runtime_manifest_with_links(
     th = str(record.get("terminal_health_status", "")).strip().lower()
     if "runtime_healthy_at" not in lifecycle and th == "healthy":
         lifecycle["runtime_healthy_at"] = int(record.get("finished_at_ms", 0) or 0)
+    dproj = record.get("delivery_lifecycle_projection")
+    manual_touch: int | None = None
+    if isinstance(dproj, Mapping):
+        ts_merge = dproj.get("timestamps")
+        if isinstance(ts_merge, Mapping):
+            for key, val in ts_merge.items():
+                if isinstance(key, str) and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+                    lifecycle[key] = val
+        mc_raw = dproj.get("manual_touch_count")
+        if isinstance(mc_raw, int) and not isinstance(mc_raw, bool) and mc_raw >= 0:
+            manual_touch = int(mc_raw)
     if lifecycle:
         control_plane["lifecycle_timestamps"] = lifecycle
         baseline_hours_raw = control_plane.get("baseline_duration_hours")
@@ -1582,6 +1599,7 @@ def _runtime_manifest_with_links(
             derive_time_compression_metrics(
                 lifecycle_timestamps=lifecycle,
                 baseline_duration_hours=baseline_hours,
+                manual_touch_count=manual_touch,
             ),
         )
     if syn_stable_intent is not None:
@@ -1843,6 +1861,10 @@ def cmd_runtime_start(args: argparse.Namespace) -> int:
         runtime_events = _load_runtime_events(record)
         _persist_policy_log(record, policy_runtime=kernel.policy_runtime)
         intent_sha = _stable_intent_sha256_from_bundle_metadata(kernel.bundle.metadata)
+        lane = resolve_delivery_target_lane(
+            cli_value=getattr(args, "delivery_target_lane", None),
+            env_value=os.environ.get("AKC_DELIVERY_TARGET_LANE"),
+        )
         evidence = _build_runtime_evidence(
             context=context,
             runtime_events=runtime_events,
@@ -1858,6 +1880,7 @@ def cmd_runtime_start(args: argparse.Namespace) -> int:
             policy_mode=str(context.policy_mode),
             total_resync_wait_ms=r_loop.total_resync_wait_ms,
             provider_contract=_deployment_provider_contract_from_bundle(kernel.bundle),
+            bundle_metadata=kernel.bundle.metadata,
         )
         expectations_raw = kernel.bundle.metadata.get("runtime_evidence_expectations") or ()
         expectations_list: list[str] = []
@@ -1881,6 +1904,18 @@ def cmd_runtime_start(args: argparse.Namespace) -> int:
         record["terminal_health_status"] = _aggregate_terminal_health_from_evidence(evidence)
         record["reconcile_all_converged"] = bool(r_loop.statuses) and all(s.converged for s in r_loop.statuses)
         record["reconcile_resync_wait_ms_scheduled"] = int(r_loop.total_resync_wait_ms)
+        healthy_at: int | None = None
+        if str(record.get("terminal_health_status", "")).strip().lower() == "healthy":
+            raw_fin = record.get("finished_at_ms")
+            if isinstance(raw_fin, int) and not isinstance(raw_fin, bool) and raw_fin >= 0:
+                healthy_at = int(raw_fin)
+        record["delivery_lifecycle_projection"] = project_delivery_run_projection(
+            evidence=evidence,
+            delivery_lane=lane,
+            record_started_at_ms=int(record["started_at_ms"]),
+            terminal_health_status=str(record.get("terminal_health_status", "")),
+            runtime_healthy_at=healthy_at,
+        )
         if violations:
             record["status"] = "failed"
             joined = ", ".join(violations)
@@ -2124,6 +2159,7 @@ def cmd_runtime_reconcile(args: argparse.Namespace) -> int:
             policy_mode=str(context.policy_mode),
             total_resync_wait_ms=r_loop.total_resync_wait_ms,
             provider_contract=_deployment_provider_contract_from_bundle(kernel.bundle),
+            bundle_metadata=kernel.bundle.metadata,
         )
         _persist_runtime_evidence(record, evidence=built)
         ov_summary = _maybe_write_operational_validity_report(record, evidence=built)

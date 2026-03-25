@@ -22,6 +22,7 @@ ARTIFACT_PASS_ORDER: tuple[str, ...] = (
     "system_design",
     "orchestration_spec",
     "agent_coordination",
+    "delivery_plan",
     "runtime_bundle",
     "deployment_config",
 )

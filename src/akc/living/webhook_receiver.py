@@ -5,6 +5,8 @@ Fleet ``deliver_fleet_webhooks`` POSTs JSON with ``schema: akc.fleet.webhook_del
 and runs the same safe recompile path as ``akc living-recompile`` for each scoped item.
 
 Tenant isolation: only items whose ``tenant_id`` matches ``tenant_allowlist`` (``*`` = any) are processed.
+Path safety: ``outputs_root`` in the signed payload is accepted only when it resolves to an absolute path
+under :attr:`LivingWebhookServerConfig.outputs_root_allowlist` (no ``~`` expansion on webhook-supplied strings).
 """
 
 from __future__ import annotations
@@ -34,13 +36,18 @@ _SUPPORTED_EVENTS = frozenset({"recompile_triggers", "living_drift"})
 
 @dataclass(frozen=True, slots=True)
 class LivingWebhookServerConfig:
-    """Process-wide settings for :func:`run_living_webhook_server`."""
+    """Process-wide settings for :func:`run_living_webhook_server`.
+
+    ``outputs_root_allowlist`` restricts payload ``outputs_root`` values to resolved paths under
+    those operator-configured directories (see module docstring).
+    """
 
     bind_host: str
     port: int
     secret: str
     ingest_state_path: Path
     tenant_allowlist: frozenset[str]
+    outputs_root_allowlist: frozenset[Path]
     living_automation_profile: LivingAutomationProfile
     opa_policy_path: str | None
     opa_decision_path: str
@@ -82,6 +89,40 @@ def _verify_signature(*, body: bytes, secret: str, header_val: str | None) -> bo
         return False
 
 
+def _resolved_outputs_root_allowlist_bases(roots: frozenset[Path]) -> tuple[Path, ...]:
+    out: list[Path] = []
+    for r in roots:
+        try:
+            out.append(r.expanduser().resolve())
+        except OSError:
+            continue
+    return tuple(out)
+
+
+def _resolve_payload_outputs_root(oroot_s: str, *, allowed_bases: tuple[Path, ...]) -> Path | None:
+    """Map webhook ``outputs_root`` string to a resolved path only if confined to ``allowed_bases``."""
+
+    s = oroot_s.strip()
+    if not s or s.startswith("~"):
+        return None
+    if not allowed_bases:
+        return None
+    try:
+        p = Path(s)
+        if not p.is_absolute():
+            return None
+        resolved = p.resolve()
+    except OSError:
+        return None
+    for base in allowed_bases:
+        try:
+            if resolved.is_relative_to(base):
+                return resolved
+        except ValueError:
+            continue
+    return None
+
+
 def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
@@ -105,6 +146,7 @@ def _resolve_scopes_from_payload(
     *,
     event: str,
     items: list[dict[str, Any]],
+    allowed_bases: tuple[Path, ...],
 ) -> list[tuple[str, str, Path]]:
     """Return ``(tenant_id, repo_id, outputs_root)`` per item (deduped)."""
 
@@ -116,9 +158,8 @@ def _resolve_scopes_from_payload(
         tid = str(it.get("tenant_id", "")).strip()
         rid = normalize_repo_id(str(it.get("repo_id", "")))
         oroot_s = str(it.get("outputs_root", "")).strip()
-        try:
-            oroot = Path(oroot_s).expanduser().resolve()
-        except OSError:
+        oroot = _resolve_payload_outputs_root(oroot_s, allowed_bases=allowed_bases)
+        if oroot is None:
             continue
         out.append((tid, rid, oroot))
     return out
@@ -144,7 +185,8 @@ def process_fleet_webhook_payload(
         return 400, {"error": "items_must_be_array"}
 
     items = [x for x in raw_items if isinstance(x, dict)]
-    scopes = _resolve_scopes_from_payload(event=event, items=items)
+    allowed_bases = _resolved_outputs_root_allowlist_bases(cfg.outputs_root_allowlist)
+    scopes = _resolve_scopes_from_payload(event=event, items=items, allowed_bases=allowed_bases)
     if not scopes:
         return 200, {"schema": "akc.living.webhook_result.v1", "processed": [], "message": "no_eligible_items"}
 

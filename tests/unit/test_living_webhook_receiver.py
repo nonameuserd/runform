@@ -50,6 +50,7 @@ def test_process_fleet_webhook_runs_per_scope(monkeypatch: pytest.MonkeyPatch, t
         secret="s",
         ingest_state_path=ingest,
         tenant_allowlist=frozenset({"*"}),
+        outputs_root_allowlist=frozenset({out_root}),
         living_automation_profile=living_automation_profile_from_id(PROFILE_OFF),
         opa_policy_path=None,
         opa_decision_path="data.akc.allow",
@@ -82,6 +83,53 @@ def test_process_fleet_webhook_runs_per_scope(monkeypatch: pytest.MonkeyPatch, t
     assert ("t2", "r2", out_root.resolve()) in calls
 
 
+def test_process_fleet_webhook_skips_outputs_root_outside_allowlist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _fake_execute(**kwargs: object) -> int:
+        raise AssertionError("living_recompile_execute should not run for disallowed outputs_root")
+
+    monkeypatch.setattr("akc.living.webhook_receiver.living_recompile_execute", _fake_execute)
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    ingest = tmp_path / "ingest.json"
+    ingest.write_text("{}", encoding="utf-8")
+
+    cfg = LivingWebhookServerConfig(
+        bind_host="127.0.0.1",
+        port=0,
+        secret="s",
+        ingest_state_path=ingest,
+        tenant_allowlist=frozenset({"*"}),
+        outputs_root_allowlist=frozenset({allowed}),
+        living_automation_profile=living_automation_profile_from_id(PROFILE_OFF),
+        opa_policy_path=None,
+        opa_decision_path="data.akc.allow",
+        llm_backend=None,
+        eval_suite_path=tmp_path / "eval.json",
+        goal="g",
+        policy_mode="enforce",
+        canary_mode="quick",
+        accept_mode="thorough",
+        canary_test_mode="smoke",
+        allow_network=False,
+        update_baseline_on_accept=True,
+        skip_other_pending=True,
+    )
+
+    payload = {
+        "schema": "akc.fleet.webhook_delivery.v1",
+        "event": "recompile_triggers",
+        "items": [{"tenant_id": "t1", "repo_id": "r1", "outputs_root": str(other)}],
+    }
+    status, body = process_fleet_webhook_payload(payload, cfg=cfg)
+    assert status == 200
+    assert body.get("message") == "no_eligible_items"
+
+
 def test_process_fleet_webhook_tenant_allowlist(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def _fake_execute(**kwargs: object) -> int:
         return 0
@@ -99,6 +147,7 @@ def test_process_fleet_webhook_tenant_allowlist(monkeypatch: pytest.MonkeyPatch,
         secret="s",
         ingest_state_path=ingest,
         tenant_allowlist=frozenset({"t1"}),
+        outputs_root_allowlist=frozenset({out_root}),
         living_automation_profile=living_automation_profile_from_id(PROFILE_OFF),
         opa_policy_path=None,
         opa_decision_path="data.akc.allow",
@@ -143,6 +192,7 @@ def test_http_post_triggers_handler(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         secret="whsec",
         ingest_state_path=ingest,
         tenant_allowlist=frozenset({"*"}),
+        outputs_root_allowlist=frozenset({out_root}),
         living_automation_profile=living_automation_profile_from_id(PROFILE_OFF),
         opa_policy_path=None,
         opa_decision_path="data.akc.allow",
@@ -199,6 +249,7 @@ def test_http_rejects_bad_signature(tmp_path: Path) -> None:
         secret="whsec",
         ingest_state_path=ingest,
         tenant_allowlist=frozenset({"*"}),
+        outputs_root_allowlist=frozenset({out_root}),
         living_automation_profile=living_automation_profile_from_id(PROFILE_OFF),
         opa_policy_path=None,
         opa_decision_path="data.akc.allow",

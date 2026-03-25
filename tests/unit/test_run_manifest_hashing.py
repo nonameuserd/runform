@@ -876,3 +876,11 @@ def test_find_latest_run_manifest_prefers_newest_file(tmp_path: Path) -> None:
     latest = find_latest_run_manifest(outputs_root=tmp_path, tenant_id="tenant-a", repo_id="repo-a")
     assert latest is not None
     assert latest.name == "new.manifest.json"
+
+
+def test_find_latest_run_manifest_rejects_tenant_path_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="tenant_id must not"):
+        find_latest_run_manifest(outputs_root=tmp_path, tenant_id="../etc", repo_id="repo-a")
+
+    with pytest.raises(ValueError, match="tenant_id must not"):
+        find_latest_run_manifest(outputs_root=tmp_path, tenant_id="a/b", repo_id="repo-a")

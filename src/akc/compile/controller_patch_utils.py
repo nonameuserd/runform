@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from akc.compile.controller_config import ControllerConfig, TierConfig
@@ -161,9 +162,11 @@ def _estimate_cost_usd(
     input_tokens: int,
     output_tokens: int,
     tool_calls: int,
+    mcp_calls: int = 0,
     input_per_1k_tokens_usd: float,
     output_per_1k_tokens_usd: float,
     tool_call_usd: float,
+    mcp_call_usd: float = 0.0,
 ) -> float:
     """Estimate run cost from explicit rate configuration."""
 
@@ -171,6 +174,43 @@ def _estimate_cost_usd(
         (float(max(0, int(input_tokens))) / 1000.0) * float(input_per_1k_tokens_usd)
         + (float(max(0, int(output_tokens))) / 1000.0) * float(output_per_1k_tokens_usd)
         + float(max(0, int(tool_calls))) * float(tool_call_usd)
+        + float(max(0, int(mcp_calls))) * float(mcp_call_usd)
+    )
+
+
+def combined_tool_like_calls(accounting: Mapping[str, Any]) -> int:
+    """Executor tool runs plus compile-time MCP operations (shared ``max_tool_calls`` budget)."""
+
+    return int(accounting.get("tool_calls", 0)) + int(accounting.get("mcp_calls", 0))
+
+
+def refresh_controller_estimated_cost_usd(*, accounting: dict[str, Any], config: ControllerConfig) -> None:
+    """Recompute ``accounting['estimated_cost_usd']`` from rates + current counters."""
+
+    md = dict(getattr(config, "metadata", None) or {})
+    in_rate = float(config.cost_rates.input_per_1k_tokens_usd)
+    out_rate = float(config.cost_rates.output_per_1k_tokens_usd)
+    tool_rate = float(config.cost_rates.tool_call_usd)
+    mcp_rate = float(config.cost_rates.mcp_call_usd)
+    if in_rate == 0.0:
+        in_rate = float(md.get("cost_input_per_1k_tokens_usd", 0.0) or 0.0)
+    if out_rate == 0.0:
+        out_rate = float(md.get("cost_output_per_1k_tokens_usd", 0.0) or 0.0)
+    if tool_rate == 0.0:
+        tool_rate = float(md.get("cost_tool_call_usd", 0.0) or 0.0)
+    if mcp_rate == 0.0:
+        mcp_rate = float(md.get("cost_mcp_call_usd", 0.0) or 0.0)
+    accounting["estimated_cost_usd"] = float(
+        _estimate_cost_usd(
+            input_tokens=int(accounting["input_tokens"]),
+            output_tokens=int(accounting["output_tokens"]),
+            tool_calls=int(accounting["tool_calls"]),
+            mcp_calls=int(accounting.get("mcp_calls", 0)),
+            input_per_1k_tokens_usd=in_rate,
+            output_per_1k_tokens_usd=out_rate,
+            tool_call_usd=tool_rate,
+            mcp_call_usd=mcp_rate,
+        )
     )
 
 

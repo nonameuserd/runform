@@ -277,6 +277,44 @@ def load_profile_decisions_panel(
     }
 
 
+def _delivery_signals_from_manifest(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    """Surface delivery lifecycle + compression metrics for operator dashboards (advisory)."""
+
+    if manifest is None:
+        return {"available": False}
+    cp = manifest.get("control_plane")
+    if not isinstance(cp, dict):
+        return {"available": False}
+    lifecycle = cp.get("lifecycle_timestamps")
+    tcm = cp.get("time_compression_metrics")
+    metric_keys = (
+        "intent_to_staging_ms",
+        "intent_to_prod_ms",
+        "staging_to_prod_ms",
+        "approval_wait_ms",
+        "manual_touch_count",
+        "intent_to_healthy_runtime_ms",
+    )
+    metrics = {k: tcm.get(k) for k in metric_keys} if isinstance(tcm, dict) else {}
+    stamp_keys = (
+        "staging_healthy_at",
+        "prod_deploy_started_at",
+        "prod_healthy_at",
+        "approval_wait_started_at",
+        "approval_wait_completed_at",
+    )
+    stamps = {k: lifecycle.get(k) for k in stamp_keys} if isinstance(lifecycle, dict) else {}
+    return {
+        "available": True,
+        "lifecycle_timestamps": stamps,
+        "time_compression_metrics": metrics,
+        "improvement_signals_note": (
+            "Service-level delivery latency/throughput proxies (DORA-shaped). Use for trend review with reliability "
+            "KPIs; do not treat as single-score release gates."
+        ),
+    }
+
+
 def load_autopilot_operator_summary(*, scoped_outputs_dir: Path) -> dict[str, Any]:
     """Summarize autopilot scope state + latest decision/escalation paths for control-plane listing."""
 
@@ -455,6 +493,7 @@ def load_operator_panels_for_scope(
         "playbook": playbook_out,
         "profile_panel": profile_panel,
         "autopilot": autopilot_panel,
+        "delivery_control_plane": _delivery_signals_from_manifest(manifest),
         "trust_note": (
             "Read-only summaries of local control-plane artifacts; paths are relative to the "
             "tenant/repo outputs tree (forensics) or outputs_root (playbook). No compile/runtime."

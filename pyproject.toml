@@ -59,8 +59,17 @@ ingest-messaging = [
     # Optional official Slack SDK (stdlib HTTP fallback exists)
     "slack-sdk>=3.27",
 ]
+ingest-mcp = [
+    # Official Model Context Protocol Python SDK (stdio + streamable HTTP client)
+    "mcp>=1.2.0",
+    "httpx>=0.27",
+]
+# MCP host integration: ``akc mcp serve`` (FastMCP server; same ``mcp`` wheel as ingest-mcp)
+mcp-serve = [
+    "mcp>=1.2.0",
+]
 ingest-all = [
-    "akc[ingest-docs,ingest-openapi,ingest-embed,ingest-vectorstore,ingest-messaging]",
+    "akc[ingest-docs,ingest-openapi,ingest-embed,ingest-vectorstore,ingest-messaging,ingest-mcp,mcp-serve]",
 ]
 
 # Optional vector store backends
@@ -68,14 +77,12 @@ vectorstore-pg = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.4",
 ]
-# Offline Ragas ID metrics on deterministic retrieval fixtures (CI: optional extra).
-# Not included in the default pip-audit export (see .github/workflows/ci.yml): the Ragas
-# stack pulls large transitive deps; audit the lockfile separately if you need SBOM parity.
-eval-rag = [
-    "ragas>=0.2",
-    "rapidfuzz>=3.14.3",
-]
 
+# Provider HTTP / signing for ``akc deliver`` (App Store Connect ES256 JWT, Google OAuth).
+delivery-providers = [
+    "PyJWT[crypto]>=2.8.0",
+    "google-auth>=2.29.0",
+]
 [project.scripts]
 akc = "akc.cli:main"
 
@@ -96,6 +103,11 @@ packages = ["src/akc"]
 "src/akc/control/operator_dashboard/app.js" = "akc/control/operator_dashboard/app.js"
 "src/akc/control/operator_dashboard/README.md" = "akc/control/operator_dashboard/README.md"
 "src/akc/cli/compile_tools_policy_stub.rego" = "akc/cli/compile_tools_policy_stub.rego"
+"src/akc/viewer/static/index.html" = "akc/viewer/static/index.html"
+"src/akc/viewer/static/viewer.css" = "akc/viewer/static/viewer.css"
+"src/akc/viewer/static/viewer.js" = "akc/viewer/static/viewer.js"
+# Bundled Agent Skills default (explicit so wheels/sdists always ship SKILL.md with the package).
+"src/akc/compile/skills/bundled/akc_default/SKILL.md" = "akc/compile/skills/bundled/akc_default/SKILL.md"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/akc"]

@@ -26,9 +26,15 @@ sorted artifact path + sha256; see `CompileSession._register_pass`):
   - Outputs: `.akc/agents/<run_id>.coordination.json`, protocol stubs `.py`/`.ts`.
   - Hash inputs: same registration rule.
 
+- **delivery_plan**
+  - Inputs: `IRDocument`, `IntentSpec`, orchestration JSON text, coordination JSON text.
+  - Outputs: `.akc/deployment/<run_id>.delivery_plan.json` and companion
+    `.akc/design/<run_id>.delivery_summary.md` (non-technical narrative; JSON remains authoritative).
+  - Hash inputs: same registration rule.
+
 - **runtime_bundle**
   - Inputs: `IRDocument`, `IntentSpec`, orchestration JSON text, coordination
-    JSON text (from the two prior passes; may be replay-cloned).
+    JSON text, optional delivery-plan JSON text (from prior passes; may be replay-cloned).
   - Outputs: `.akc/runtime/<run_id>.runtime_bundle.json` (schema envelope);
     bundle embeds `spec_hashes` (fingerprints of orchestration/coordination JSON
     objects) and IR/intent references.
@@ -37,7 +43,7 @@ sorted artifact path + sha256; see `CompileSession._register_pass`):
 
 - **deployment_config**
   - Inputs: `IRDocument`, `IntentSpec`, same orchestration/coordination texts as
-    `runtime_bundle`.
+    `runtime_bundle`, optional delivery-plan JSON text.
   - Outputs: Docker Compose + K8s manifests under `.akc/deployment/`, GitHub
     Actions workflow under `.github/workflows/`.
   - Hash inputs: same registration rule as other passes.
@@ -55,6 +61,11 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from akc.artifacts.contracts import apply_schema_envelope
 from akc.artifacts.schemas import RUNTIME_BUNDLE_SCHEMA_VERSION
 from akc.compile.artifact_consistency import effective_allow_network_for_handoff
+from akc.compile.delivery_projection import (
+    build_delivery_plan,
+    parse_json_artifact_text,
+    render_delivery_summary_markdown,
+)
 from akc.compile.interfaces import LLMMessage, LLMRequest, TenantRepoScope
 from akc.compile.patch_utils import extract_touched_paths
 from akc.intent.policy_projection import (
@@ -70,14 +81,11 @@ from akc.outputs import (
     AgentSpec,
     CoordinationEdgeSpec,
     CoordinationSpec,
-    GithubActionsWorkflow,
     LlmBackendSpec,
     OrchestrationSpec,
     OrchestrationStepSpec,
     OutputArtifact,
     SystemDesignSpec,
-    WorkflowJob,
-    WorkflowStep,
     dump_yaml,
 )
 from akc.outputs.models import AgentRoleName
@@ -136,6 +144,7 @@ class DeploymentConfigPassResult:
     artifact_k8s_service: OutputArtifact
     artifact_k8s_configmap: OutputArtifact
     artifact_github_actions: OutputArtifact
+    additional_artifacts: tuple[OutputArtifact, ...]
     output_sha256: str
     metadata: dict[str, JSONValue]
 
@@ -145,6 +154,38 @@ class RuntimeBundlePassResult:
     artifact_json: OutputArtifact
     output_sha256: str
     metadata: dict[str, JSONValue]
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryPlanPassResult:
+    artifact_json: OutputArtifact
+    artifact_summary_md: OutputArtifact
+    output_sha256: str
+    metadata: dict[str, JSONValue]
+
+
+def _patch_envelope_system_skill_section(
+    *,
+    skill_blocks: Sequence[str] | None,
+    system_preamble: str | None,
+    skill_system_append: str | None,
+) -> str:
+    """Build the optional suffix appended to the base AKC system string.
+
+    If ``skill_blocks`` is not ``None``, it wins and non-empty stripped blocks are
+    joined with blank lines. Otherwise ``system_preamble`` and
+    ``skill_system_append`` are combined (both optional; legacy callers use only
+    ``skill_system_append``).
+    """
+
+    if skill_blocks is not None:
+        parts = [b.strip() for b in skill_blocks if isinstance(b, str) and b.strip()]
+        return "\n\n".join(parts)
+    p1 = (system_preamble or "").strip()
+    p2 = (skill_system_append or "").strip()
+    if p1 and p2:
+        return f"{p1}\n\n{p2}"
+    return p1 or p2
 
 
 def build_patch_artifact_prompt_envelope(
@@ -157,22 +198,42 @@ def build_patch_artifact_prompt_envelope(
     replay_mode: str,
     temperature: float,
     max_output_tokens: int | None,
+    system_preamble: str | None = None,
+    skill_blocks: Sequence[str] | None = None,
+    skill_system_append: str | None = None,
+    compile_skills_active: Sequence[Mapping[str, Any]] | None = None,
+    compile_skills_mode: str | None = None,
 ) -> ArtifactPromptEnvelope:
+    base_system = "You are an AKC compile loop assistant."
+    extra = _patch_envelope_system_skill_section(
+        skill_blocks=skill_blocks,
+        system_preamble=system_preamble,
+        skill_system_append=skill_system_append,
+    )
+    system_content = f"{base_system}\n\n{extra}" if extra else base_system
     llm_messages = [
-        LLMMessage(role="system", content="You are an AKC compile loop assistant."),
+        LLMMessage(role="system", content=system_content),
         LLMMessage(role="user", content=user_prompt),
     ]
+    meta: dict[str, JSONValue] = {
+        "tier": tier_name,
+        "tier_model": tier_model,
+        "plan_id": plan_id,
+        "step_id": step_id,
+        "replay_mode": replay_mode,
+    }
+    if compile_skills_active is not None:
+        meta["compile_skills_active"] = cast(
+            JSONValue,
+            [dict(m) for m in compile_skills_active],
+        )
+    if compile_skills_mode is not None:
+        meta["compile_skills_mode"] = compile_skills_mode
     llm_request = LLMRequest(
         messages=llm_messages,
         temperature=float(temperature),
         max_output_tokens=int(max_output_tokens) if max_output_tokens is not None else None,
-        metadata={
-            "tier": tier_name,
-            "tier_model": tier_model,
-            "plan_id": plan_id,
-            "step_id": step_id,
-            "replay_mode": replay_mode,
-        },
+        metadata=meta,
     )
     prompt_key = llm_vcr_prompt_key(
         messages=llm_messages,
@@ -1088,6 +1149,58 @@ def _default_coordination_execution_contract() -> dict[str, JSONValue]:
     }
 
 
+def run_delivery_plan_pass(
+    *,
+    run_id: str,
+    ir_document: IRDocument,
+    intent_spec: IntentSpec,
+    orchestration_spec_text: str,
+    coordination_spec_text: str,
+) -> DeliveryPlanPassResult:
+    orchestration_obj = parse_json_artifact_text(orchestration_spec_text)
+    coordination_obj = parse_json_artifact_text(coordination_spec_text)
+    delivery_plan_obj = build_delivery_plan(
+        run_id=run_id,
+        ir_document=ir_document,
+        intent_obj=intent_spec.to_json_obj(),
+        orchestration_obj=orchestration_obj,
+        coordination_obj=coordination_obj,
+    )
+    artifact = OutputArtifact.from_json(
+        path=f".akc/deployment/{run_id}.delivery_plan.json",
+        obj=delivery_plan_obj,
+        metadata={
+            "run_id": run_id,
+            "kind": "delivery_plan",
+            "target_count": len(cast(list[Any], delivery_plan_obj.get("targets", []))),
+            "required_human_inputs_count": len(cast(list[Any], delivery_plan_obj.get("required_human_inputs", []))),
+        },
+    )
+    summary_md = render_delivery_summary_markdown(run_id=run_id, delivery_plan=delivery_plan_obj)
+    summary_artifact = OutputArtifact.from_text(
+        path=f".akc/design/{run_id}.delivery_summary.md",
+        text=summary_md,
+        media_type="text/markdown; charset=utf-8",
+        metadata={"run_id": run_id, "kind": "delivery_summary_markdown", "companion_of": artifact.path},
+    )
+    return DeliveryPlanPassResult(
+        artifact_json=artifact,
+        artifact_summary_md=summary_artifact,
+        output_sha256=artifact.sha256_hex(),
+        metadata={
+            "run_id": run_id,
+            "delivery_plan_path": artifact.path,
+            "delivery_summary_path": summary_artifact.path,
+            "target_count": len(cast(list[Any], delivery_plan_obj.get("targets", []))),
+            "required_human_inputs_count": len(cast(list[Any], delivery_plan_obj.get("required_human_inputs", []))),
+            "promotion_readiness_status": str(
+                cast(dict[str, Any], delivery_plan_obj.get("promotion_readiness", {})).get("status", "unknown")
+            ),
+            "includes_delivery_summary": True,
+        },
+    )
+
+
 def run_runtime_bundle_pass(
     *,
     run_id: str,
@@ -1095,18 +1208,20 @@ def run_runtime_bundle_pass(
     intent_spec: IntentSpec,
     orchestration_spec_text: str,
     coordination_spec_text: str,
+    delivery_plan_text: str | None = None,
     embed_system_ir: bool = False,
     runtime_bundle_schema_version: int = RUNTIME_BUNDLE_SCHEMA_VERSION,
     reconcile_deploy_targets_from_ir_only: bool = False,
     deployment_intents_ir_alignment: Literal["off", "strict"] = "off",
 ) -> RuntimeBundlePassResult:
     scope = TenantRepoScope(tenant_id=ir_document.tenant_id, repo_id=ir_document.repo_id)
-    orchestration_obj = json.loads(orchestration_spec_text)
-    coordination_obj = json.loads(coordination_spec_text)
-    if not isinstance(orchestration_obj, dict):
-        raise ValueError("orchestration spec text must decode to an object")
-    if not isinstance(coordination_obj, dict):
-        raise ValueError("coordination spec text must decode to an object")
+    orchestration_obj = parse_json_artifact_text(orchestration_spec_text)
+    coordination_obj = parse_json_artifact_text(coordination_spec_text)
+    delivery_plan_obj = (
+        parse_json_artifact_text(delivery_plan_text)
+        if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
 
     selected_ids = _select_runtime_bundle_ir_node_ids(
         ir_document=ir_document,
@@ -1136,20 +1251,48 @@ def run_runtime_bundle_pass(
         key=lambda contract: contract.contract_id,
     )
     deployable_kinds = frozenset({"service", "integration", "infrastructure", "agent"})
+    delivery_targets_by_id: dict[str, Mapping[str, Any]] = {}
+    if isinstance(delivery_plan_obj, Mapping):
+        for raw_target in cast(list[Any], delivery_plan_obj.get("targets", [])):
+            if not isinstance(raw_target, Mapping):
+                continue
+            tid = raw_target.get("target_id")
+            if isinstance(tid, str) and tid.strip():
+                delivery_targets_by_id[tid.strip()] = raw_target
     deployment_intents: list[dict[str, JSONValue]] = []
     for node in sorted(
         (n for n in referenced_nodes if n.kind in deployable_kinds),
         key=lambda n: n.id,
     ):
+        projected = delivery_targets_by_id.get(node.id)
         deployment_intents.append(
-            {
-                "node_id": node.id,
-                "kind": node.kind,
-                "name": node.name,
-                "depends_on": list(node.depends_on),
-                "effects": node.effects.to_json_obj() if node.effects is not None else None,
-                "contract_id": node.contract.contract_id if node.contract is not None else None,
-            }
+            cast(
+                dict[str, JSONValue],
+                {
+                    "node_id": node.id,
+                    "kind": node.kind,
+                    "name": node.name,
+                    "depends_on": list(node.depends_on),
+                    "effects": node.effects.to_json_obj() if node.effects is not None else None,
+                    "contract_id": node.contract.contract_id if node.contract is not None else None,
+                    "target_class": (
+                        str(projected.get("target_class")) if isinstance(projected, Mapping) else "unknown"
+                    ),
+                    "environment_support": (
+                        sorted(str(k) for k in cast(dict[str, Any], projected.get("supported_delivery_paths", {})))
+                        if isinstance(projected, Mapping)
+                        else ["local", "staging", "production"]
+                    ),
+                    "delivery_paths": (
+                        projected.get("supported_delivery_paths")
+                        if isinstance(projected, Mapping)
+                        else {"local": ["direct_apply"]}
+                    ),
+                    "operational_profile_fingerprint": (
+                        stable_json_fingerprint(dict(projected)) if isinstance(projected, Mapping) else None
+                    ),
+                },
+            )
         )
 
     allow_network, renv_knowledge = effective_allow_network_for_handoff(
@@ -1213,6 +1356,19 @@ def run_runtime_bundle_pass(
             "coordination_spec_sha256": stable_json_fingerprint(coordination_obj),
         },
         "deployment_intents": deployment_intents,
+        "delivery_plan_ref": (
+            {
+                "path": f".akc/deployment/{run_id}.delivery_plan.json",
+                "fingerprint": stable_json_fingerprint(delivery_plan_obj),
+            }
+            if isinstance(delivery_plan_obj, Mapping)
+            else None
+        ),
+        "promotion_readiness": (
+            cast(dict[str, Any], delivery_plan_obj.get("promotion_readiness"))
+            if isinstance(delivery_plan_obj, Mapping)
+            else {"status": "unknown"}
+        ),
         "runtime_policy_envelope": runtime_policy_envelope,
         "deployment_provider_contract": _default_deployment_provider_contract(),
         "workflow_execution_contract": _default_workflow_execution_contract(),
@@ -1425,6 +1581,71 @@ def _validate_workflow_policy(*, workflow_obj: Mapping[str, Any]) -> None:
                             raise ValueError(f"workflow job `{job_id}` references secrets.* in PR workflow")
 
 
+def _service_key(raw: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() else "-" for ch in raw.lower()).strip("-")
+    return cleaned or "akc-app"
+
+
+def _deploy_target_runtime_slice(target: Mapping[str, Any], *, default_image: str) -> dict[str, Any]:
+    """Per-target ports, health, resources, and image for Compose/Kubernetes emission."""
+
+    hc = cast(dict[str, Any], target.get("health_contract", {}))
+    rc = cast(dict[str, Any], target.get("runtime_contract", {}))
+    sr = cast(dict[str, Any], target.get("scaling_resources", {}))
+    cfg = cast(dict[str, Any], target.get("config_secrets_contract", {}))
+    op = cast(dict[str, Any], target.get("operational_config", {}))
+    raw_port = rc.get("port", 8080)
+    port = int(raw_port) if isinstance(raw_port, int) else 8080
+    health_path = str(hc.get("readiness_path", "/healthz"))
+    health_known = bool(hc.get("health_endpoint_known", True))
+    raw_rep = sr.get("replicas", 1)
+    replicas = int(raw_rep) if isinstance(raw_rep, int) else 1
+    resource_requests = cast(dict[str, JSONValue], sr.get("requests", {"cpu": "250m", "memory": "256Mi"}))
+    resource_limits = cast(dict[str, JSONValue], sr.get("limits", {"cpu": "1000m", "memory": "1Gi"}))
+    required_env = cast(list[str], cfg.get("required_env", []))
+    required_secrets = cast(list[str], cfg.get("required_secrets", []))
+    env_defaults = {key: f"<set-{key.lower()}>" for key in required_env}
+    bc = cast(dict[str, Any], target.get("build_contract", {}))
+    raw_img = bc.get("image")
+    image = str(raw_img).strip() if isinstance(raw_img, str) and str(raw_img).strip() else default_image
+    restart_policy = str(cast(dict[str, Any], op.get("restart", {})).get("compose_policy", "unless-stopped"))
+    return {
+        "port": port,
+        "health_path": health_path,
+        "health_known": health_known,
+        "replicas": replicas,
+        "resource_requests": resource_requests,
+        "resource_limits": resource_limits,
+        "required_env": required_env,
+        "required_secrets": required_secrets,
+        "env_defaults": env_defaults,
+        "image": image,
+        "restart_policy": restart_policy,
+    }
+
+
+def _dump_yaml_documents(docs: Sequence[Mapping[str, Any]]) -> str:
+    parts = [dump_yaml(dict(d)).rstrip() for d in docs]
+    return "\n---\n".join(parts) + "\n"
+
+
+def _k8s_target_secret_name(*, run_id: str, target_key: str) -> str:
+    """Per-workload Secret so disjoint key sets stay isolated per tenant workload."""
+
+    return f"akc-secrets-{run_id}-{target_key}"
+
+
+def _recommended_k8s_labels(*, app_name: str, run_id: str, repo_id: str, component: str = "service") -> dict[str, str]:
+    return {
+        "app.kubernetes.io/name": app_name,
+        "app.kubernetes.io/instance": run_id,
+        "app.kubernetes.io/component": component,
+        "app.kubernetes.io/part-of": repo_id,
+        "app.kubernetes.io/managed-by": "akc",
+        "app.kubernetes.io/version": run_id,
+    }
+
+
 def run_deployment_config_pass(
     *,
     run_id: str,
@@ -1432,134 +1653,449 @@ def run_deployment_config_pass(
     intent_spec: IntentSpec,
     orchestration_spec_text: str,
     coordination_spec_text: str,
+    delivery_plan_text: str | None = None,
 ) -> DeploymentConfigPassResult:
-    service_name = "akc-app"
     image_name = f"ghcr.io/{ir_document.repo_id}/akc:{run_id}"
     intent_ref = build_handoff_intent_ref(intent=intent_spec)
     deployment_intent_projection = project_deployment_intent_projection(intent=intent_spec)
     intent_metadata = deployment_intent_projection.to_json_obj()
+    delivery_plan_obj = (
+        parse_json_artifact_text(delivery_plan_text)
+        if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
+    delivery_targets = (
+        cast(list[dict[str, Any]], delivery_plan_obj.get("targets", []))
+        if isinstance(delivery_plan_obj, Mapping)
+        else []
+    )
+    non_mobile = [t for t in delivery_targets if str(t.get("target_class")) != "mobile_client"]
+    deploy_targets = non_mobile if non_mobile else list(delivery_targets)
+    primary_target = deploy_targets[0] if deploy_targets else (delivery_targets[0] if delivery_targets else {})
+    service_name = _service_key(str(primary_target.get("name", "akc-app")))
+    rollout_policy = cast(dict[str, Any], primary_target.get("rollout_recovery_policy", {}))
+    rollout_strategy = str(rollout_policy.get("strategy", "rolling"))
+    canary_direct_apply_supported = rollout_strategy == "canary"
+    if canary_direct_apply_supported and isinstance(primary_target, Mapping):
+        supported_paths = cast(dict[str, Any], primary_target.get("supported_delivery_paths", {}))
+        local_paths = cast(list[str], supported_paths.get("local", []))
+        staging_paths = cast(list[str], supported_paths.get("staging", []))
+        canary_direct_apply_supported = "direct_apply" in local_paths or "direct_apply" in staging_paths
     intent_k8s_annotations = _deployment_k8s_intent_annotations(intent_ref=intent_ref)
     allow_network, _renv = effective_allow_network_for_handoff(
         ir_document=ir_document,
         intent_spec=intent_spec,
     )
+    operational_cfg = cast(dict[str, Any], primary_target.get("operational_config", {}))
+    obs_toggles = cast(dict[str, Any], operational_cfg.get("observability_toggles", {}))
+    configmap_labels = _recommended_k8s_labels(
+        app_name=service_name,
+        run_id=run_id,
+        repo_id=ir_document.repo_id,
+    )
 
+    union_env_keys: list[str] = []
+    secrets_placeholders: dict[str, str] = {}
+    for target in deploy_targets or [primary_target]:
+        cfg = cast(dict[str, Any], target.get("config_secrets_contract", {}))
+        for key in cast(list[str], cfg.get("required_env", [])):
+            if key not in union_env_keys:
+                union_env_keys.append(key)
+        for key in cast(list[str], cfg.get("required_secrets", [])):
+            secrets_placeholders[key] = "<set-in-secret-store>"
+
+    compose_services: dict[str, JSONValue] = {}
+    compose_target_by_service: dict[str, dict[str, Any]] = {}
+    k8s_deployments: list[dict[str, JSONValue]] = []
+    k8s_services: list[dict[str, JSONValue]] = []
+    k8s_secrets: list[dict[str, JSONValue]] = []
+    target_to_service_key: dict[str, str] = {}
+    for target in deploy_targets:
+        target_id = str(target.get("target_id", "")).strip()
+        if not target_id:
+            continue
+        target_to_service_key[target_id] = _service_key(str(target.get("name", target_id)))
+    if not target_to_service_key:
+        target_to_service_key["primary"] = service_name
+    for target in deploy_targets or [primary_target]:
+        raw_name = str(target.get("name", "akc-app"))
+        target_key = _service_key(raw_name)
+        prof = _deploy_target_runtime_slice(target, default_image=image_name)
+        port = int(prof["port"])
+        health_path = str(prof["health_path"])
+        health_known = bool(prof["health_known"])
+        restart_policy = str(prof["restart_policy"])
+        env_defaults = cast(dict[str, str], prof["env_defaults"])
+        required_secrets = cast(list[str], prof["required_secrets"])
+        resource_requests = cast(dict[str, JSONValue], prof["resource_requests"])
+        resource_limits = cast(dict[str, JSONValue], prof["resource_limits"])
+        tgt_image = str(prof["image"])
+        replicas = max(1, int(prof["replicas"]))
+        deps = cast(list[str], target.get("depends_on", []))
+        depends_on: dict[str, JSONValue] = {}
+        for dep in deps:
+            dep_key = target_to_service_key.get(dep)
+            if dep_key is not None and dep_key != target_key:
+                depends_on[dep_key] = {"condition": "service_healthy"}
+        compose_service: dict[str, JSONValue] = {
+            "image": tgt_image,
+            "read_only": True,
+            "security_opt": ["no-new-privileges:true"],
+            "cap_drop": ["ALL"],
+            "tmpfs": ["/tmp"],
+            "user": "10001:10001",
+            "labels": dict(_deployment_compose_intent_labels(intent_ref=intent_ref)),
+            "env_file": [".akc/deployment/compose/app.env"],
+            "environment": {
+                "AKC_TENANT_ID": ir_document.tenant_id,
+                "AKC_REPO_ID": ir_document.repo_id,
+                "AKC_ALLOW_NETWORK": str(allow_network).lower(),
+                "AKC_ROLLOUT_STRATEGY": rollout_strategy,
+                "AKC_CANARY_DIRECT_APPLY_SUPPORTED": str(canary_direct_apply_supported).lower(),
+                "AKC_CONFIG_PATH": "/run/config/app-config.json",
+            },
+            "ports": [f"{port}:{port}"],
+            "restart": restart_policy,
+        }
+        if health_known:
+            compose_service["healthcheck"] = {
+                "test": ["CMD", "curl", "-fsS", f"http://localhost:{port}{health_path}"],
+                "interval": "15s",
+                "timeout": "5s",
+                "retries": 5,
+            }
+        if depends_on:
+            compose_service["depends_on"] = depends_on
+        compose_services[target_key] = compose_service
+        compose_target_by_service[target_key] = target
+
+        component = str(target.get("target_class", "backend_service")).replace("_", "-")
+        app_l = _recommended_k8s_labels(
+            app_name=target_key,
+            run_id=run_id,
+            repo_id=ir_document.repo_id,
+            component=component,
+        )
+        dep_obj: dict[str, JSONValue] = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": f"{target_key}-{run_id}",
+                "labels": dict(app_l),
+                "annotations": dict(intent_k8s_annotations),
+            },
+            "spec": {
+                "replicas": replicas,
+                "selector": {
+                    "matchLabels": {"app.kubernetes.io/name": target_key, "app.kubernetes.io/instance": run_id},
+                },
+                "template": {
+                    "metadata": {
+                        "labels": dict(app_l),
+                        "annotations": dict(intent_k8s_annotations),
+                    },
+                    "spec": {
+                        "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
+                        "containers": [
+                            {
+                                "name": target_key,
+                                "image": tgt_image,
+                                "ports": [{"containerPort": port}],
+                                "envFrom": [{"configMapRef": {"name": f"akc-runtime-{run_id}"}}],
+                                "env": cast(
+                                    JSONValue,
+                                    [{"name": k, "value": v} for k, v in sorted(env_defaults.items())]
+                                    + [
+                                        {
+                                            "name": key,
+                                            "valueFrom": {
+                                                "secretKeyRef": {
+                                                    "name": _k8s_target_secret_name(
+                                                        run_id=run_id, target_key=target_key
+                                                    ),
+                                                    "key": key,
+                                                },
+                                            },
+                                        }
+                                        for key in sorted(required_secrets)
+                                    ],
+                                ),
+                                "securityContext": {
+                                    "allowPrivilegeEscalation": False,
+                                    "readOnlyRootFilesystem": True,
+                                    "capabilities": {"drop": ["ALL"]},
+                                },
+                                "readinessProbe": (
+                                    {
+                                        "httpGet": {"path": health_path, "port": port},
+                                        "initialDelaySeconds": 5,
+                                        "periodSeconds": 10,
+                                    }
+                                    if health_known
+                                    else None
+                                ),
+                                "livenessProbe": (
+                                    {
+                                        "httpGet": {"path": health_path, "port": port},
+                                        "initialDelaySeconds": 10,
+                                        "periodSeconds": 15,
+                                    }
+                                    if health_known
+                                    else None
+                                ),
+                                "startupProbe": (
+                                    {
+                                        "httpGet": {"path": health_path, "port": port},
+                                        "failureThreshold": 30,
+                                        "periodSeconds": 5,
+                                    }
+                                    if health_known
+                                    else None
+                                ),
+                                "resources": {
+                                    "requests": dict(resource_requests),
+                                    "limits": dict(resource_limits),
+                                },
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+        ctrs = cast(
+            list[dict[str, Any]],
+            cast(dict[str, Any], cast(dict[str, Any], dep_obj["spec"])["template"])["spec"]["containers"],
+        )
+        for container in ctrs:
+            for probe_key in ("readinessProbe", "livenessProbe", "startupProbe"):
+                if container.get(probe_key) is None:
+                    container.pop(probe_key, None)
+        _validate_k8s_restricted_security_context(deployment_obj=dep_obj)
+        k8s_deployments.append(dep_obj)
+        if required_secrets:
+            k8s_secrets.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": _k8s_target_secret_name(run_id=run_id, target_key=target_key),
+                        "labels": dict(app_l),
+                        "annotations": dict(intent_k8s_annotations),
+                    },
+                    "type": "Opaque",
+                    "stringData": dict.fromkeys(sorted(required_secrets), "<set-in-secret-store>"),
+                }
+            )
+
+        svc_obj: dict[str, JSONValue] = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": f"{target_key}-{run_id}",
+                "labels": dict(app_l),
+                "annotations": dict(intent_k8s_annotations),
+            },
+            "spec": {
+                "selector": {"app.kubernetes.io/name": target_key, "app.kubernetes.io/instance": run_id},
+                "ports": [{"port": 80, "targetPort": port}],
+                "type": "ClusterIP",
+            },
+        }
+        k8s_services.append(svc_obj)
     compose_obj: dict[str, JSONValue] = {
         "version": "3.9",
-        "services": {
-            service_name: {
-                "image": image_name,
-                "read_only": True,
-                "security_opt": ["no-new-privileges:true"],
-                "cap_drop": ["ALL"],
-                "tmpfs": ["/tmp"],
-                "user": "10001:10001",
-                "labels": dict(_deployment_compose_intent_labels(intent_ref=intent_ref)),
-                "environment": {
-                    "AKC_TENANT_ID": ir_document.tenant_id,
-                    "AKC_REPO_ID": ir_document.repo_id,
-                    "AKC_ALLOW_NETWORK": str(allow_network).lower(),
-                },
-                "ports": ["8080:8080"],
-            }
+        "services": compose_services or {service_name: {}},
+        "x-akc-rollout": {
+            "strategy": rollout_strategy,
+            "direct_apply_canary_supported": canary_direct_apply_supported,
+            "gitops_rollout_crd_deferred": True,
+        },
+        "x-akc-config": {
+            "env_file": ".akc/deployment/compose/app.env",
+            "config_template": ".akc/deployment/compose/app-config.json",
+            "secrets_placeholders": cast(JSONValue, secrets_placeholders),
         },
     }
     _validate_docker_compose_hardening(compose_obj=compose_obj)
+    staging_overlay_services: dict[str, JSONValue] = {}
+    production_overlay_services: dict[str, JSONValue] = {}
+    for svc_name in compose_services:
+        tgt = compose_target_by_service.get(svc_name, primary_target)
+        sr = cast(dict[str, Any], tgt.get("scaling_resources", {}))
+        rep = int(sr.get("replicas", 1)) if isinstance(sr.get("replicas"), int) else 1
+        staging_overlay_services[svc_name] = {
+            "environment": {"AKC_ENVIRONMENT": "staging"},
+            "deploy": {"replicas": max(1, rep)},
+        }
+        production_overlay_services[svc_name] = {
+            "environment": {"AKC_ENVIRONMENT": "production"},
+            "deploy": {"replicas": max(2, rep)},
+        }
+    compose_staging_overlay_obj: dict[str, JSONValue] = {"services": staging_overlay_services}
+    compose_production_overlay_obj: dict[str, JSONValue] = {"services": production_overlay_services}
 
     config_map_obj: dict[str, JSONValue] = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": {
             "name": f"akc-runtime-{run_id}",
-            "labels": {"app.kubernetes.io/name": service_name},
+            "labels": dict(configmap_labels),
             "annotations": dict(intent_k8s_annotations),
         },
         "data": {
             "TENANT_ID": ir_document.tenant_id,
             "REPO_ID": ir_document.repo_id,
             "RUN_ID": run_id,
+            "LOGGING_ENABLED": str(bool(obs_toggles.get("logging_enabled", True))).lower(),
+            "TRACING_ENABLED": str(bool(obs_toggles.get("tracing_enabled", True))).lower(),
+            "METRICS_ENABLED": str(bool(obs_toggles.get("metrics_enabled", True))).lower(),
             "ORCHESTRATION_SPEC_JSON": orchestration_spec_text,
             "COORDINATION_SPEC_JSON": coordination_spec_text,
         },
     }
-    deployment_obj: dict[str, JSONValue] = {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {
-            "name": f"{service_name}-{run_id}",
-            "labels": {"app.kubernetes.io/name": service_name},
-            "annotations": dict(intent_k8s_annotations),
-        },
-        "spec": {
-            "replicas": 1,
-            "selector": {"matchLabels": {"app.kubernetes.io/name": service_name}},
-            "template": {
-                "metadata": {
-                    "labels": {"app.kubernetes.io/name": service_name},
-                    "annotations": dict(intent_k8s_annotations),
-                },
-                "spec": {
-                    "securityContext": {"runAsNonRoot": True},
-                    "containers": [
-                        {
-                            "name": service_name,
-                            "image": image_name,
-                            "ports": [{"containerPort": 8080}],
-                            "envFrom": [{"configMapRef": {"name": f"akc-runtime-{run_id}"}}],
-                            "securityContext": {
-                                "allowPrivilegeEscalation": False,
-                                "readOnlyRootFilesystem": True,
-                                "capabilities": {"drop": ["ALL"]},
-                            },
-                        }
-                    ],
-                },
+    k8s_deployments_documents = _dump_yaml_documents(cast(Sequence[Mapping[str, Any]], k8s_deployments))
+    k8s_services_documents = _dump_yaml_documents(cast(Sequence[Mapping[str, Any]], k8s_services))
+    k8s_staging_patch_docs: list[dict[str, Any]] = []
+    k8s_production_patch_docs: list[dict[str, Any]] = []
+    for target in deploy_targets or [primary_target]:
+        raw_name = str(target.get("name", "akc-app"))
+        patch_key = _service_key(raw_name)
+        sr = cast(dict[str, Any], target.get("scaling_resources", {}))
+        rep = int(sr.get("replicas", 1)) if isinstance(sr.get("replicas"), int) else 1
+        k8s_staging_patch_docs.append(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": f"{patch_key}-{run_id}"},
+                "spec": {"replicas": max(1, rep)},
+            }
+        )
+        k8s_production_patch_docs.append(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": f"{patch_key}-{run_id}"},
+                "spec": {"replicas": max(2, rep)},
+            }
+        )
+    k8s_staging_patch_yaml = _dump_yaml_documents(cast(Sequence[Mapping[str, Any]], k8s_staging_patch_docs))
+    k8s_production_patch_yaml = _dump_yaml_documents(cast(Sequence[Mapping[str, Any]], k8s_production_patch_docs))
+
+    k8s_resource_files: list[str] = ["deployment.yml", "service.yml", "configmap.yml"]
+    if k8s_secrets:
+        k8s_resource_files.append("secrets.yml")
+    k8s_base_kustomization_obj: dict[str, JSONValue] = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": cast(JSONValue, k8s_resource_files),
+    }
+    k8s_staging_overlay_obj: dict[str, JSONValue] = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": ["../../base"],
+        "patchesStrategicMerge": ["deployment-patch.yml"],
+        "commonLabels": {"app.kubernetes.io/environment": "staging"},
+    }
+    k8s_production_overlay_obj: dict[str, JSONValue] = {
+        "apiVersion": "kustomize.config.k8s.io/v1beta1",
+        "kind": "Kustomization",
+        "resources": ["../../base"],
+        "patchesStrategicMerge": ["deployment-patch.yml"],
+        "commonLabels": {"app.kubernetes.io/environment": "production"},
+    }
+    workflow_obj: dict[str, JSONValue] = {
+        "name": f"AKC Delivery Pipeline {run_id}",
+        "on": {"workflow_dispatch": {}, "push": {"branches": ["main"]}},
+        "permissions": {"contents": "read"},
+        "jobs": {
+            "build": {
+                "name": "Build",
+                "runs-on": "ubuntu-latest",
+                "permissions": {"contents": "read"},
+                "steps": [
+                    {"name": "Checkout", "uses": "actions/checkout@v4"},
+                    {"name": "Build image", "run": "docker build -t ${IMAGE} .", "env": {"IMAGE": image_name}},
+                ],
+            },
+            "verify": {
+                "name": "Verify",
+                "runs-on": "ubuntu-latest",
+                "needs": ["build"],
+                "permissions": {"contents": "read"},
+                "steps": [{"name": "Run tests", "run": "pytest -q"}],
+            },
+            "publish": {
+                "name": "Publish",
+                "runs-on": "ubuntu-latest",
+                "needs": ["verify"],
+                "permissions": {"contents": "read", "packages": "write", "id-token": "write"},
+                "steps": [
+                    {
+                        "name": "Configure OIDC auth placeholder",
+                        "run": "echo 'Configure cloud/registry federation with OIDC; no long-lived secrets required'",
+                    },
+                    {
+                        "name": "Publish image",
+                        "run": "echo 'Publish ${IMAGE} using short-lived OIDC credentials'",
+                        "env": {"IMAGE": image_name},
+                    },
+                ],
+            },
+            "deploy_staging": {
+                "name": "Deploy Staging",
+                "runs-on": "ubuntu-latest",
+                "environment": {"name": "staging"},
+                "needs": ["publish"],
+                "permissions": {"contents": "read", "id-token": "write"},
+                "steps": [{"name": "Deploy overlay", "run": "kubectl apply -k .akc/deployment/k8s/overlays/staging"}],
+            },
+            "health_check": {
+                "name": "Health Check",
+                "runs-on": "ubuntu-latest",
+                "needs": ["deploy_staging"],
+                "permissions": {"contents": "read"},
+                "steps": [
+                    {
+                        "name": "Probe health",
+                        "run": "echo 'Run staging health checks against /healthz before promotion'",
+                    }
+                ],
+            },
+            "approval": {
+                "name": "Approval Gate",
+                "runs-on": "ubuntu-latest",
+                "needs": ["health_check"],
+                "environment": {"name": "production"},
+                "permissions": {"contents": "read"},
+                "steps": [
+                    {
+                        "name": "Require production approval",
+                        "run": "echo 'Production deployment requires environment reviewer approval'",
+                    }
+                ],
+            },
+            "deploy_prod": {
+                "name": "Deploy Production",
+                "runs-on": "ubuntu-latest",
+                "needs": ["approval"],
+                "environment": {"name": "production"},
+                "permissions": {"contents": "read", "id-token": "write"},
+                "steps": [
+                    {"name": "Deploy overlay", "run": "kubectl apply -k .akc/deployment/k8s/overlays/production"}
+                ],
+            },
+            "rollback": {
+                "name": "Rollback Hook",
+                "runs-on": "ubuntu-latest",
+                "needs": ["deploy_prod"],
+                "if": "${{ always() && needs.deploy_prod.result == 'failure' }}",
+                "permissions": {"contents": "read"},
+                "steps": [
+                    {"name": "Rollback", "run": "echo 'Implement rollback command for target platform/provider'"}
+                ],
             },
         },
     }
-    _validate_k8s_restricted_security_context(deployment_obj=deployment_obj)
-
-    service_obj: dict[str, JSONValue] = {
-        "apiVersion": "v1",
-        "kind": "Service",
-        "metadata": {
-            "name": f"{service_name}-{run_id}",
-            "annotations": dict(intent_k8s_annotations),
-        },
-        "spec": {
-            "selector": {"app.kubernetes.io/name": service_name},
-            "ports": [{"port": 80, "targetPort": 8080}],
-            "type": "ClusterIP",
-        },
-    }
-
-    workflow = GithubActionsWorkflow(
-        name=f"AKC Deploy {run_id}",
-        on={"workflow_dispatch": {}, "push": {"branches": ["main"]}},
-        jobs={
-            "deploy": WorkflowJob(
-                name="Deploy AKC runtime",
-                runs_on="ubuntu-latest",
-                permissions={"contents": "read"},
-                steps=(
-                    WorkflowStep(
-                        name="Checkout",
-                        uses="actions/checkout@v4",
-                    ),
-                    WorkflowStep(
-                        name="Build image",
-                        run="docker build -t ${IMAGE} .",
-                        env={"IMAGE": image_name},
-                    ),
-                    WorkflowStep(
-                        name="Render deployment manifests",
-                        run="echo 'Apply .akc/deployment artifacts with your CD system'",
-                    ),
-                ),
-            )
-        },
-    )
-    workflow_obj = workflow.to_obj()
     _validate_workflow_policy(workflow_obj=workflow_obj)
 
     compose_artifact = OutputArtifact.from_text(
@@ -1575,7 +2111,7 @@ def run_deployment_config_pass(
     )
     deployment_artifact = OutputArtifact.from_text(
         path=".akc/deployment/k8s/deployment.yml",
-        text=dump_yaml(deployment_obj),
+        text=k8s_deployments_documents,
         media_type="application/yaml; charset=utf-8",
         metadata=_deployment_output_artifact_metadata(
             run_id=run_id,
@@ -1586,7 +2122,7 @@ def run_deployment_config_pass(
     )
     service_artifact = OutputArtifact.from_text(
         path=".akc/deployment/k8s/service.yml",
-        text=dump_yaml(service_obj),
+        text=k8s_services_documents,
         media_type="application/yaml; charset=utf-8",
         metadata=_deployment_output_artifact_metadata(
             run_id=run_id,
@@ -1606,14 +2142,179 @@ def run_deployment_config_pass(
             intent_projection=intent_metadata,
         ),
     )
-    workflow_artifact = workflow.to_artifact(
-        filename=f"akc_deploy_{run_id}.yml",
-        directory=".github/workflows",
+    k8s_secrets_documents: str | None = (
+        _dump_yaml_documents(cast(Sequence[Mapping[str, Any]], k8s_secrets)) if k8s_secrets else None
+    )
+    k8s_secrets_artifacts: tuple[OutputArtifact, ...] = ()
+    if k8s_secrets_documents is not None:
+        sec_meta = _deployment_output_artifact_metadata(
+            run_id=run_id,
+            kind="deployment_k8s_secrets",
+            intent_ref=intent_ref,
+            intent_projection=intent_metadata,
+        )
+        k8s_secrets_artifacts = (
+            OutputArtifact.from_text(
+                path=".akc/deployment/k8s/secrets.yml",
+                text=k8s_secrets_documents,
+                media_type="application/yaml; charset=utf-8",
+                metadata=sec_meta,
+            ),
+        )
+    workflow_artifact = OutputArtifact.from_text(
+        path=f".github/workflows/akc_deploy_{run_id}.yml",
+        text=dump_yaml(workflow_obj),
+        media_type="application/yaml; charset=utf-8",
         metadata=_deployment_output_artifact_metadata(
             run_id=run_id,
             kind="deployment_github_actions",
             intent_ref=intent_ref,
             intent_projection=intent_metadata,
+        ),
+    )
+    additional_artifacts = (
+        OutputArtifact.from_text(
+            path=".akc/deployment/compose/app.env",
+            text=(
+                "\n".join([f"{key}=<set-{key.lower()}>" for key in sorted(union_env_keys)]) + "\n"
+                if union_env_keys
+                else "# No required environment variables inferred.\n"
+            ),
+            media_type="text/plain; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_compose_env"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/compose/app-config.json",
+            text=json.dumps(
+                {
+                    "run_id": run_id,
+                    "tenant_id": ir_document.tenant_id,
+                    "repo_id": ir_document.repo_id,
+                    "logging_tracing_toggles": cast(dict[str, Any], operational_cfg.get("observability_toggles", {})),
+                    "alert_health_expectations": cast(
+                        dict[str, Any], operational_cfg.get("alert_health_expectations", {})
+                    ),
+                    "secret_placeholders": secrets_placeholders,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            media_type="application/json; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_compose_config_template"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/compose/docker-compose.staging.yml",
+            text=dump_yaml(compose_staging_overlay_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_compose_staging_overlay"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/compose/docker-compose.production.yml",
+            text=dump_yaml(compose_production_overlay_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_compose_production_overlay"},
+        ),
+        *k8s_secrets_artifacts,
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/base/deployment.yml",
+            text=k8s_deployments_documents,
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_base_deployment"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/base/service.yml",
+            text=k8s_services_documents,
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_base_service"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/base/configmap.yml",
+            text=dump_yaml(config_map_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_base_configmap"},
+        ),
+        *(
+            (
+                OutputArtifact.from_text(
+                    path=".akc/deployment/k8s/base/secrets.yml",
+                    text=k8s_secrets_documents,
+                    media_type="application/yaml; charset=utf-8",
+                    metadata={"run_id": run_id, "kind": "deployment_k8s_base_secrets"},
+                ),
+            )
+            if k8s_secrets_documents is not None
+            else ()
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/base/kustomization.yml",
+            text=dump_yaml(k8s_base_kustomization_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_base_kustomization"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/overlays/staging/kustomization.yml",
+            text=dump_yaml(k8s_staging_overlay_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_staging_overlay"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/overlays/staging/deployment-patch.yml",
+            text=k8s_staging_patch_yaml,
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_staging_patch"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/overlays/production/kustomization.yml",
+            text=dump_yaml(k8s_production_overlay_obj),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_production_overlay"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/k8s/overlays/production/deployment-patch.yml",
+            text=k8s_production_patch_yaml,
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_k8s_production_patch"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/gitops/flux-kustomization.yml",
+            text=dump_yaml(
+                {
+                    "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+                    "kind": "Kustomization",
+                    "metadata": {"name": f"akc-{run_id}-production"},
+                    "spec": {
+                        "interval": "5m",
+                        "path": ".akc/deployment/k8s/overlays/production",
+                        "prune": True,
+                        "sourceRef": {"kind": "GitRepository", "name": "akc-repo"},
+                    },
+                }
+            ),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_gitops_flux_template"},
+        ),
+        OutputArtifact.from_text(
+            path=".akc/deployment/gitops/argo-application.yml",
+            text=dump_yaml(
+                {
+                    "apiVersion": "argoproj.io/v1alpha1",
+                    "kind": "Application",
+                    "metadata": {"name": f"akc-{run_id}-production"},
+                    "spec": {
+                        "project": "default",
+                        "source": {
+                            "repoURL": "https://github.com/example/repo.git",
+                            "targetRevision": "main",
+                            "path": ".akc/deployment/k8s/overlays/production",
+                        },
+                        "destination": {"server": "https://kubernetes.default.svc", "namespace": "default"},
+                        "syncPolicy": {"automated": {"prune": True, "selfHeal": True}},
+                    },
+                }
+            ),
+            media_type="application/yaml; charset=utf-8",
+            metadata={"run_id": run_id, "kind": "deployment_gitops_argo_template"},
         ),
     )
 
@@ -1623,6 +2324,7 @@ def run_deployment_config_pass(
         artifact_k8s_service=service_artifact,
         artifact_k8s_configmap=configmap_artifact,
         artifact_github_actions=workflow_artifact,
+        additional_artifacts=additional_artifacts,
         output_sha256=compose_artifact.sha256_hex(),
         metadata={
             "run_id": run_id,
@@ -1632,7 +2334,19 @@ def run_deployment_config_pass(
             "stable_intent_sha256": deployment_intent_projection.stable_intent_sha256,
             "intent_ref": intent_ref,
             "intent_projection": intent_metadata,
+            "delivery_plan_ref": (
+                {
+                    "path": f".akc/deployment/{run_id}.delivery_plan.json",
+                    "fingerprint": stable_json_fingerprint(delivery_plan_obj),
+                }
+                if isinstance(delivery_plan_obj, Mapping)
+                else None
+            ),
             "workflow_path": workflow_artifact.path,
             "k8s_deployment_path": deployment_artifact.path,
+            "rollout_strategy": rollout_strategy,
+            "canary_direct_apply_supported": canary_direct_apply_supported,
+            "k8s_secret_manifest_count": len(k8s_secrets),
+            "additional_artifact_count": len(additional_artifacts),
         },
     )

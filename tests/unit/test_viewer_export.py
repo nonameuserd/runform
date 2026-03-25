@@ -11,7 +11,7 @@ from akc.outputs.emitters import JsonManifestEmitter
 from akc.outputs.models import OutputArtifact, OutputBundle
 from akc.viewer import ViewerInputs, load_viewer_snapshot
 from akc.viewer.export import export_bundle
-from akc.viewer.web import build_static_viewer
+from akc.viewer.web import VIEWER_UI_VERSION, build_static_viewer
 
 
 def test_viewer_export_and_web_bundle(tmp_path: Path) -> None:
@@ -192,6 +192,24 @@ def test_viewer_export_and_web_bundle(tmp_path: Path) -> None:
     web_dir = tmp_path / "web"
     web = build_static_viewer(snapshot=snap, out_dir=web_dir)
     assert web.index_html.exists()
+    index_html = web.index_html.read_text(encoding="utf-8")
+    assert 'role="tablist"' in index_html
+    assert "step_subheader" in index_html
+    assert 'href="./static/viewer.css"' in index_html
+    assert 'src="./static/viewer.js"' in index_html
+    assert 'name="akc-viewer-ui-version"' in index_html
+    assert VIEWER_UI_VERSION in index_html
+    assert "__VIEWER_UI_VERSION__" not in index_html
+
+    static_css = web_dir / "static" / "viewer.css"
+    static_js = web_dir / "static" / "viewer.js"
+    assert static_css.is_file()
+    assert static_js.is_file()
+    assert "prefers-color-scheme: light" in static_css.read_text(encoding="utf-8")
+    viewer_js = static_js.read_text(encoding="utf-8")
+    assert "JSON_TREE_CHUNK" in viewer_js
+    assert 'params.get("step")' in viewer_js
+
     assert (web_dir / "data" / "plan.json").exists()
     assert (web_dir / "data" / "knowledge_obs.json").exists()
     assert (web_dir / "data" / "operator_panels.json").exists()

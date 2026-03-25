@@ -13,12 +13,17 @@ from typing import Literal, TypeAlias, cast
 from akc.compile import (
     Budget,
     CompileSession,
-    ControllerConfig,
     CostRates,
     RustExecutor,
     TierConfig,
 )
-from akc.compile.controller_config import TestMode
+from akc.compile.controller_config import (
+    CompileMcpToolSpec,
+    CompileMcpToolStage,
+    CompileSkillsMode,
+    ControllerConfig,
+    TestMode,
+)
 from akc.compile.executors import (
     _validate_docker_security_identifier,
     _validate_docker_tmpfs_mounts,
@@ -41,7 +46,7 @@ from .profile_defaults import (
     resolve_developer_role_profile,
     resolve_optional_project_string,
 )
-from .project_config import load_akc_project_config
+from .project_config import AkcProjectConfig, load_akc_project_config
 
 IrGraphIntegrityPolicy: TypeAlias = Literal["off", "warn", "error"] | None
 
@@ -481,6 +486,75 @@ class _OfflineLLM(LLMBackend):
         return LLMResponse(text=text, raw=None, usage=None)
 
 
+def _extend_tool_allowlist_for_mcp(base: tuple[str, ...]) -> tuple[str, ...]:
+    extra = ("mcp.resource.read", "mcp.tool.call")
+    seen = set(base)
+    out = list(base)
+    for x in extra:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return tuple(out)
+
+
+def configure_compile_mcp_from_cli(
+    config: ControllerConfig,
+    *,
+    project_root: Path,
+    compile_mcp: bool,
+    mcp_config: str | None,
+    mcp_server: str | None,
+    mcp_resources: list[str],
+    mcp_tool_jsons: list[str],
+    tools_generate_only: bool,
+) -> ControllerConfig:
+    """Enable compile-time MCP from CLI flags (shared server JSON with ``akc ingest``)."""
+
+    if not compile_mcp:
+        return config
+    cfg_path = Path(mcp_config).expanduser() if mcp_config else project_root / ".akc" / "mcp-ingest.json"
+    cfg_path = cfg_path.resolve()
+    if not cfg_path.is_file():
+        raise SystemExit(
+            f"compile MCP config not found: {cfg_path}\n"
+            "Add a multi-server MCP JSON (see `akc ingest` / docs) or pass --compile-mcp-config PATH."
+        )
+    tools: list[CompileMcpToolSpec] = []
+    for raw in mcp_tool_jsons:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"Invalid --compile-mcp-tool JSON: {e}") from e
+        if not isinstance(obj, dict):
+            raise SystemExit("--compile-mcp-tool must be a JSON object")
+        tname = str(obj.get("tool_name") or obj.get("name") or "").strip()
+        if not tname:
+            raise SystemExit('--compile-mcp-tool requires string "tool_name" (or alias "name")')
+        args = obj.get("arguments")
+        if args is None:
+            args_dict: dict[str, JSONValue] = {}
+        elif isinstance(args, dict):
+            args_dict = {str(k): cast(JSONValue, v) for k, v in args.items()}
+        else:
+            raise SystemExit("--compile-mcp-tool arguments must be a JSON object when set")
+        tools.append(CompileMcpToolSpec(tool_name=tname, arguments=args_dict))
+    res_uris = tuple(str(x).strip() for x in mcp_resources if str(x).strip())
+    if not res_uris and not tools:
+        raise SystemExit("--compile-mcp requires at least one --compile-mcp-resource and/or --compile-mcp-tool")
+    stages: tuple[CompileMcpToolStage, ...] = ("generate",) if tools_generate_only else ("generate", "repair")
+    srv = str(mcp_server).strip() if mcp_server is not None and str(mcp_server).strip() else None
+    return replace(
+        config,
+        tool_allowlist=_extend_tool_allowlist_for_mcp(config.tool_allowlist),
+        compile_mcp_enabled=True,
+        compile_mcp_config_path=str(cfg_path),
+        compile_mcp_server=srv,
+        compile_mcp_resource_uris=res_uris,
+        compile_mcp_tools=tuple(tools),
+        compile_mcp_tool_stages=stages,
+    )
+
+
 def _build_compile_config(
     *,
     mode: str,
@@ -538,6 +612,89 @@ def _build_compile_config(
         apply_scope_root=apply_scope_root,
         metadata={"mode": mode},
     )
+
+
+def _merge_compile_skills_from_sources(
+    *,
+    config: ControllerConfig,
+    proj: AkcProjectConfig | None,
+    cli_skill_names: list[str],
+    cli_mode: str | None,
+    cli_extra_skill_roots: list[str],
+    cli_max_file_bytes: int | None = None,
+    cli_max_total_bytes: int | None = None,
+    project_dir: Path,
+) -> ControllerConfig:
+    """Merge project.json + CLI compile skill names, mode, roots, and byte caps into ``ControllerConfig``."""
+
+    names: list[str] = []
+    if proj is not None:
+        names.extend(proj.compile_skills)
+    for raw in cli_skill_names:
+        s = str(raw).strip()
+        if s:
+            names.append(s)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for n in names:
+        if n in seen:
+            continue
+        seen.add(n)
+        deduped.append(n)
+
+    mode_raw = cli_mode if cli_mode is not None else (proj.compile_skills_mode if proj is not None else None)
+    mode_str = str(mode_raw).strip().lower() if mode_raw is not None and str(mode_raw).strip() else None
+    if mode_str is None or mode_str == "":
+        mode_str = "explicit" if deduped else str(config.compile_skills_mode)
+    allowed_modes = {"off", "default_only", "explicit", "auto"}
+    if mode_str not in allowed_modes:
+        raise SystemExit(f"Invalid compile skills mode {mode_raw!r}; expected one of {sorted(allowed_modes)}")
+    roots = tuple(proj.skill_roots) if proj is not None else ()
+
+    resolved_extras: list[Path] = []
+    seen_extra: set[str] = set()
+    for p in config.compile_skill_extra_roots:
+        rp = p.expanduser().resolve()
+        key = str(rp)
+        if key in seen_extra:
+            continue
+        seen_extra.add(key)
+        resolved_extras.append(rp)
+    for raw in cli_extra_skill_roots:
+        s = str(raw).strip()
+        if not s:
+            continue
+        p = Path(s).expanduser()
+        p = (project_dir / p).resolve() if not p.is_absolute() else p.resolve()
+        key = str(p)
+        if key in seen_extra:
+            continue
+        seen_extra.add(key)
+        resolved_extras.append(p)
+
+    file_bytes = cli_max_file_bytes
+    if file_bytes is None and proj is not None:
+        file_bytes = proj.compile_skill_max_file_bytes
+    if file_bytes is not None and int(file_bytes) <= 0:
+        raise SystemExit("compile_skill_max_file_bytes must be > 0")
+    total_bytes = cli_max_total_bytes
+    if total_bytes is None and proj is not None:
+        total_bytes = proj.compile_skill_max_total_bytes
+    if total_bytes is not None and int(total_bytes) <= 0:
+        raise SystemExit("compile_skill_max_total_bytes must be > 0")
+
+    cfg = replace(
+        config,
+        compile_skills_mode=cast(CompileSkillsMode, mode_str),
+        compile_skill_allowlist=tuple(deduped),
+        compile_skill_relative_roots=roots,
+        compile_skill_extra_roots=tuple(resolved_extras),
+    )
+    if file_bytes is not None:
+        cfg = replace(cfg, compile_skill_max_file_bytes=int(file_bytes))
+    if total_bytes is not None:
+        cfg = replace(cfg, compile_skill_max_total_bytes=int(total_bytes))
+    return cfg
 
 
 def cmd_compile(args: argparse.Namespace) -> int:
@@ -841,6 +998,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
         compile_realization_mode=compile_rm,
         apply_scope_root=apply_scope_root,
     )
+    config = _merge_compile_skills_from_sources(
+        config=config,
+        proj=proj,
+        cli_skill_names=list(getattr(args, "compile_skill", None) or []),
+        cli_mode=getattr(args, "compile_skills_mode", None),
+        cli_extra_skill_roots=list(getattr(args, "compile_skill_extra_root", None) or []),
+        cli_max_file_bytes=getattr(args, "compile_skill_max_file_bytes", None),
+        cli_max_total_bytes=getattr(args, "compile_skill_max_total_bytes", None),
+        project_dir=cwd,
+    )
     promotion_mode = resolve_default_promotion_mode(
         explicit=promotion_mode_explicit,
         sandbox_mode=sandbox_mode,
@@ -936,6 +1103,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
     md2["developer_profile_auto_seed_step"] = bool(profile_resolved["auto_seed_deployable_step"].value)
     md2["developer_profile_intent_bootstrap_from_store"] = bool(profile_resolved["intent_bootstrap_from_store"].value)
     config = replace(config, metadata=md2)
+    config = configure_compile_mcp_from_cli(
+        config,
+        project_root=work_root.resolve(),
+        compile_mcp=bool(getattr(args, "compile_mcp", False)),
+        mcp_config=getattr(args, "compile_mcp_config", None),
+        mcp_server=getattr(args, "compile_mcp_server", None),
+        mcp_resources=list(getattr(args, "compile_mcp_resource", None) or []),
+        mcp_tool_jsons=list(getattr(args, "compile_mcp_tool", None) or []),
+        tools_generate_only=bool(getattr(args, "compile_mcp_tools_generate_only", False)),
+    )
     llm = _OfflineLLM()
 
     goal = args.goal or "Compile repository"
@@ -980,6 +1157,11 @@ def cmd_compile(args: argparse.Namespace) -> int:
         print(f"  apply_scope_root: {apply_scope_root}")
     print(f"  developer_role_profile: {developer_role_profile}")
     print(f"  promotion_mode: {promotion_mode} (require_deployable_steps={bool(require_deployable)})")
+    if bool(getattr(args, "compile_mcp", False)):
+        print(f"  compile_mcp: enabled (config={config.compile_mcp_config_path})")
+        print(f"    resources: {list(config.compile_mcp_resource_uris)}")
+        print(f"    tools: {[t.tool_name for t in config.compile_mcp_tools]}")
+        print(f"    tool_stages: {list(config.compile_mcp_tool_stages)}")
     if (
         sandbox_mode == "strong"
         and strong_lane_preference == "wasm"
@@ -1002,6 +1184,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
             intent_file=intent_file,
             developer_role_profile=developer_role_profile,
             developer_profile_decisions=profile_decisions,
+            skills_project_root=work_root,
         )
     except IntentCompilerError as exc:
         print(f"Intent compilation failed: {exc}")

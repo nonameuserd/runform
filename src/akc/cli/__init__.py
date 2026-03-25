@@ -29,6 +29,7 @@ from .ingest import cmd_ingest, cmd_slack_list_channels
 from .init import cmd_init, register_init_parser
 from .living import cmd_living_recompile, cmd_living_webhook_serve
 from .living_doctor import cmd_living_doctor
+from .mcp_serve import register_mcp_parser
 from .metrics import cmd_metrics
 from .policy import cmd_policy_explain
 from .runtime import (
@@ -118,13 +119,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--connector",
         required=True,
-        choices=["docs", "openapi", "slack"],
-        help="Connector: docs, openapi, slack (extend via ingest modules)",
+        choices=["docs", "openapi", "slack", "mcp"],
+        help="Connector: docs, openapi, slack, mcp (mcp requires ingest-mcp extra)",
     )
     ingest.add_argument(
         "--input",
         required=True,
-        help="Connector input (docs root path, OpenAPI spec path/URL, or Slack channel id)",
+        help=(
+            "Connector input: docs root, OpenAPI spec path/URL, Slack channel id, "
+            "or MCP server name / path to inline MCP server JSON"
+        ),
     )
 
     ingest.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -239,6 +243,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Allow bot messages as answers (default: false)",
     )
     ingest.add_argument(
+        "--mcp-config",
+        default=".akc/mcp-ingest.json",
+        help="Path to multi-server MCP config JSON (default: .akc/mcp-ingest.json)",
+    )
+    ingest.add_argument(
+        "--mcp-uri-prefix",
+        default=None,
+        help="Only ingest MCP resources whose URI starts with this prefix",
+    )
+    ingest.add_argument(
+        "--mcp-static-prompt",
+        default=None,
+        help="Optional extra UTF-8 text source to ingest alongside MCP resources (akc://static-prompt)",
+    )
+    ingest.add_argument(
+        "--mcp-timeout-s",
+        type=float,
+        default=120.0,
+        help="Per-session timeout for MCP stdio/HTTP operations in seconds (default: 120; 0 = no limit)",
+    )
+    ingest.add_argument(
         "--assertion-index-root",
         metavar="DIR",
         help=(
@@ -259,6 +284,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     ingest.set_defaults(func=cmd_ingest)
+
+    register_mcp_parser(sub)
 
     slack = sub.add_parser("slack", help="Slack utilities")
     slack.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -504,6 +531,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tenant-allowlist",
         default=None,
         help="Comma-separated tenant ids to accept, or * (default *; or AKC_LIVING_WEBHOOK_TENANT_ALLOWLIST)",
+    )
+    living_wh.add_argument(
+        "--outputs-root-allowlist",
+        default=None,
+        help=(
+            "Comma-separated directory roots: payload outputs_root must resolve under one of these "
+            "(or AKC_LIVING_WEBHOOK_OUTPUTS_ROOT_ALLOWLIST; default: outputs_root from .akc/project.json)"
+        ),
     )
     living_wh.add_argument(
         "--developer-role-profile",
@@ -1145,6 +1180,94 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     compile_cmd.add_argument(
+        "--compile-skills-mode",
+        choices=["off", "default_only", "explicit", "auto"],
+        default=None,
+        help=(
+            "Agent Skills (SKILL.md) injection into patch LLM system prompt: "
+            "off=none; default_only=bundled AKC skill; explicit=default + --compile-skill / project compile_skills; "
+            "auto=explicit plus keyword-scored extras (respects disable-model-invocation). "
+            "Default: default_only, or explicit when compile_skills / --compile-skill are set. "
+            "Optional global scan root: AKC_SKILLS_ROOT (single directory, for headless automation)."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Activate a skill by manifest name (repeatable; merged with .akc/project.json compile_skills).",
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-extra-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Extra absolute directory scanned for Agent Skills packages (child dirs with SKILL.md). "
+            "Relative paths are resolved from the current working directory. Repeatable; merged with "
+            "ControllerConfig.compile_skill_extra_roots. See also AKC_SKILLS_ROOT for a single env-provided root."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-max-file-bytes",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum bytes read per discovered SKILL.md (ControllerConfig.compile_skill_max_file_bytes). "
+            "Overrides .akc/project.json compile_skill_max_file_bytes when set."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-max-total-bytes",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum UTF-8 bytes for the injected Agent Skills system preamble "
+            "(ControllerConfig.compile_skill_max_total_bytes). "
+            "Overrides .akc/project.json compile_skill_max_total_bytes when set."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp",
+        action="store_true",
+        help=(
+            "Enable optional compile-time MCP (requires ingest-mcp extra). "
+            "Servers are defined in JSON (default: <work-root>/.akc/mcp-ingest.json); "
+            "extends tool allowlist with mcp.resource.read and mcp.tool.call."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-config",
+        default=None,
+        help="Path to multi-server MCP JSON (default: <work-root>/.akc/mcp-ingest.json when --compile-mcp is set).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-server",
+        default=None,
+        help="Logical server name from the MCP config (else default_server from the JSON file).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-resource",
+        action="append",
+        default=[],
+        help="MCP resource URI to read at retrieve (repeatable).",
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-tool",
+        action="append",
+        default=[],
+        metavar="JSON",
+        help='MCP tools/call spec as JSON, e.g. {"tool_name":"echo","arguments":{"message":"hi"}} (repeatable).',
+    )
+    compile_cmd.add_argument(
+        "--compile-mcp-tools-generate-only",
+        action="store_true",
+        help="Run configured --compile-mcp-tool only on generate iterations, not repair.",
+    )
+    compile_cmd.add_argument(
         "--format",
         choices=["text", "json"],
         default="text",
@@ -1242,6 +1365,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         default="text",
         help="Output format for diagnostics (structured policy denial on policy-related failures).",
+    )
+    runtime_start.add_argument(
+        "--delivery-target-lane",
+        choices=["staging", "production"],
+        default=None,
+        help=(
+            "Maps aggregate health timestamps to staging vs production delivery lifecycle fields "
+            "(default: AKC_DELIVERY_TARGET_LANE, else staging)."
+        ),
     )
     runtime_start.add_argument("--verbose", action="store_true", help="Enable debug logging")
     runtime_start.set_defaults(func=cmd_runtime_start)
@@ -2081,8 +2213,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pb_write.set_defaults(func=cmd_control_policy_bundle_write)
 
+    from akc.cli.deliver import register_deliver_parsers
     from akc.cli.fleet import register_fleet_parsers
 
+    register_deliver_parsers(sub)
     register_fleet_parsers(sub)
 
     view = sub.add_parser(
@@ -2114,6 +2248,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     view_web = view_sub.add_parser("web", help="Generate a static HTML viewer bundle")
     view_web.add_argument("--out-dir", help="Output directory for the static viewer bundle")
+    view_web.add_argument(
+        "--serve",
+        action="store_true",
+        help=(
+            "After writing the bundle, serve it over HTTP on 127.0.0.1 only (developer "
+            "convenience; not for remote exposure)"
+        ),
+    )
+    view_web.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        dest="serve_port",
+        metavar="PORT",
+        help="TCP port when using --serve (default: ephemeral port)",
+    )
     view_web.set_defaults(func=cmd_view)
 
     view_export = view_sub.add_parser("export", help="Export a portable evidence bundle (dir + zip)")

@@ -119,6 +119,26 @@ def test_load_akc_project_config_json(tmp_path: Path) -> None:
     assert cfg.opa_decision_path is None
 
 
+def test_load_akc_project_config_compile_skill_byte_caps(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps(
+            {
+                "tenant_id": "t",
+                "repo_id": "r",
+                "outputs_root": "/tmp/out",
+                "compile_skill_max_file_bytes": 120_000,
+                "compile_skill_max_total_bytes": 30_000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_akc_project_config(tmp_path)
+    assert cfg is not None
+    assert cfg.compile_skill_max_file_bytes == 120_000
+    assert cfg.compile_skill_max_total_bytes == 30_000
+
+
 def test_load_akc_project_config_json_opa_fields(tmp_path: Path) -> None:
     (tmp_path / ".akc").mkdir(parents=True)
     (tmp_path / ".akc" / "project.json").write_text(

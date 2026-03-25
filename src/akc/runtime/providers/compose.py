@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from akc.memory.models import JSONValue
+from akc.runtime.bundle_delivery import build_delivery_handoff_context
 from akc.runtime.models import HealthStatus, ObservedHealthCondition, ObservedHealthConditionStatus, ReconcileOperation
 from akc.runtime.observe_probes import evaluate_observe_probes, parse_observe_probe_specs
 from akc.runtime.providers._subprocess import run_checked
@@ -158,6 +159,7 @@ class DockerComposeObserveProvider(DeploymentProviderClient):
     hash_contract: dict[str, JSONValue] | None
     observe_probe_specs: tuple[dict[str, JSONValue], ...] = ()
     timeout_sec: float = 45.0
+    delivery_handoff_context: dict[str, JSONValue] = field(default_factory=dict)
 
     @classmethod
     def from_bundle_metadata(
@@ -198,6 +200,7 @@ class DockerComposeObserveProvider(DeploymentProviderClient):
             service_map=service_map,
             hash_contract=hash_contract,
             observe_probe_specs=probes,
+            delivery_handoff_context=build_delivery_handoff_context(metadata),
         )
 
     def _compose_base_argv(self) -> list[str]:
@@ -412,6 +415,7 @@ class DockerComposeApplyProvider(DockerComposeObserveProvider):
             hash_contract=base.hash_contract,
             observe_probe_specs=base.observe_probe_specs,
             timeout_sec=base.timeout_sec,
+            delivery_handoff_context=base.delivery_handoff_context,
             apply_manifest_path=rel,
             apply_manifest_sha256_hex=digest,
             rollback_apply_manifest_by_desired_hash=rollback_map,

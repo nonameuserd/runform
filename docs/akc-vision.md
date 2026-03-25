@@ -122,11 +122,25 @@ Developers focus on:
 
 ---
 
+### 10. Operator Control Anywhere
+
+Operators can control AKC from:
+
+- Slack
+- Discord
+- WhatsApp
+- Telegram
+
+These are control-plane interfaces, not the core product. They issue policy-gated actions into the same deterministic, auditable runtime.
+
+---
+
 ## What This Is NOT
 
 - Not just an agent builder
 - Not a chatbot platform
 - Not a code generator
+- Not channel-specific bot software (Slack/Discord/WhatsApp/Telegram are operator interfaces only)
 
 It is a:
 
@@ -187,6 +201,7 @@ It is a:
 - cost tracking
 - policy enforcement
 - debugging
+- multi-channel operator adapters (Slack, Discord, WhatsApp, Telegram)
 
 ---
 

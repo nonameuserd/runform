@@ -1,21 +1,26 @@
-# OSS Security & Correctness Requirements (Phase 0)
+# OSS Security & Correctness Requirements
 
-This document is a checklist of security/correctness requirements that OSS CI and release processes must enforce.
+This document is a checklist of security/correctness requirements that OSS **CI and release** processes enforce or recommend.
 
-It is written as “requirements to implement/maintain”, not as a claim about future features. Where the repo already enforces something, the evidence points to the corresponding workflow/tests.
+It is written as “requirements to implement/maintain”, not as a claim about future features. Where the repo already enforces something, the evidence points to the corresponding workflow/tests. **Not every requirement runs on every push/PR**—some jobs are conditional (labels, base branch, or `workflow_dispatch`). See `.github/workflows/ci.yml` for exact `if:` conditions.
 
 ## 1) CI correctness gates (baseline)
 
-Every PR and mainline change must run the baseline quality gates:
+Every PR and mainline change runs the baseline quality gates in the **`ci`** job:
 
 - Python lint: `uv run ruff check .`
 - Python formatting check: `uv run ruff format --check .`
 - Python typecheck: `uv run mypy src/akc`
 - Python tests: `uv run pytest`
-- Rust checks:
-  - `cargo fmt --check`
-  - `cargo clippy -- -D warnings`
-  - `cargo test --all`
+
+Rust checks run in a separate job with `working-directory: rust`:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --all`
+- `cargo vet --locked` (supply chain) plus an exemptions count guard
+
+Additional jobs on typical PRs include: **`policy-test`** (OSPS guardrails script), **`rust_bwrap`**, **`rust_windows`**, **`docker_hardening`**, **`wasm_lane`** (matrix), and others—see `.github/workflows/ci.yml`.
 
 Evidence: `.github/workflows/ci.yml`
 
@@ -27,7 +32,7 @@ CI must assume PR code is untrusted. Requirements:
 - Use GitHub Actions `pull_request` contexts with restrictive permissions.
 - Avoid patterns that route secrets to untrusted steps.
 
-Evidence: `.github/workflows/ci.yml` (CI permissions default to `contents: read`)
+Evidence: `.github/workflows/ci.yml` (workflow `permissions:` default to `contents: read`); `scripts/ci_policy_test.py` (invoked by `policy-test` job)
 
 ## 3) Tenant isolation invariants (security correctness)
 
@@ -43,6 +48,7 @@ CI/release requirements:
 - Treat any failure in tenant isolation tests as a release-blocking correctness/safety failure.
 
 Evidence:
+
 - Security model: `docs/security.md`
 - CI tenant sandbox tests: `.github/workflows/ci.yml` (`rust_bwrap`, `rust_windows`)
 - Tenant isolation tests in Rust: `rust/crates/akc_executor/tests/tenant_isolation.rs`
@@ -61,7 +67,7 @@ CI/release requirements:
 - Ensure sandbox posture tests cover the critical lanes.
 - Ensure executor changes include or update the relevant tenant isolation / sandbox regression tests.
 
-Evidence: `docs/security.md`, `.github/workflows/ci.yml`
+Evidence: [`docs/security.md` — compile loop: execution surfaces](security.md#compile-loop-execution-surfaces) (dev subprocess vs strong Docker vs Rust), `.github/workflows/ci.yml`
 
 ## 5) Patch safety and verifier gate requirements
 
@@ -74,10 +80,11 @@ Correctness and security require a deterministic verifier gate that can veto pro
 
 CI/release requirements:
 
-- The verifier’s unit tests must be run on every PR.
+- The verifier’s unit tests must be run on every PR (via the baseline `ci` job’s `pytest`).
 - Any change to verifier behavior must include updated tests and evidence artifacts documenting the change.
 
 Evidence:
+
 - Verifier implementation: `src/akc/compile/verifier.py`
 - Verifier unit tests: `tests/unit/test_compile_verifier_unit.py`
 
@@ -95,6 +102,7 @@ CI/release requirements:
 - Keep the artifact contract stable and treat changes as schema/boundary updates requiring explicit review.
 
 Evidence:
+
 - Emitter implementation: `src/akc/outputs/emitters.py`
 - Emitter tests: `tests/unit/test_outputs_emitters.py`
 
@@ -111,69 +119,79 @@ CI/release requirements:
 - Tests must validate that emission occurs with correct scoping and stable bundle semantics.
 
 Evidence:
+
 - Compile session emission: `src/akc/compile/session.py`
 - Manifest emitter contract: `src/akc/outputs/emitters.py`
+- Path/layout documentation: `docs/artifact-contracts.md`
 
 ## 8) Supply-chain hardening and provenance (release processes)
 
-Release must produce verifiable provenance evidence:
+Release and extended CI gates should produce verifiable supply-chain evidence:
 
-- Rust integrity checks must run before provenance generation (including `cargo-vet`).
-- SLSA provenance must be generated for release artifacts via the `slsa-github-generator` workflow.
-- Release jobs must use keyless signing via OIDC where supported.
+- Rust integrity checks run in CI (`cargo vet`) before relying on Rust artifacts; see `rust/supply-chain/config.toml`.
+- **Release** workflow runs `pip-audit` with CycloneDX output on exported requirements before publishing; installs use `uv sync --frozen --extra dev`.
+- **SLSA provenance** for release subjects is generated via `slsa-framework/slsa-github-generator` (generic SLSA3 workflow) in `.github/workflows/release.yml`, with subjects including Rust binaries and Python wheels/sdists from the `rust-integrity` job.
 
 CI/release requirements:
 
-- Any release workflow modifications must preserve provenance generation.
-- Provenance generation must not be skipped without an explicit documented exception.
-- Python dependency vulnerability scanning must be enforced in CI and the release publishing path.
-  - The gate uses `pip-audit` to generate a CycloneDX SBOM annotated with known Python dependency vulnerabilities.
-- All Python installs in CI/release must be lockfile-only (`uv sync --frozen`) to prevent dependency drift.
+- Release workflow modifications must preserve provenance generation where present.
+- Treat skipping provenance or vulnerability gates as an explicit, documented exception.
+- **Note:** The default **`ci`** job does **not** run `pip-audit` on every PR. A `pip-audit` + SBOM step runs in the **`runtime_mutating_opt_in`** job (PR label `mutating-runtime` or manual `workflow_dispatch`) and **always** in the **release** workflow. Contributors can run `uv run pip-audit` locally using dev extras.
 
 Evidence:
-- Rust supply chain checks: `.github/workflows/ci.yml` (`cargo vet`)
-- Python vulnerability scanning gate + SBOM output: `.github/workflows/ci.yml` and `.github/workflows/release.yml` (`pip-audit` + `uv export`)
-- Release provenance: `.github/workflows/release.yml` (`slsa-github-generator`)
+
+- Rust supply chain checks: `.github/workflows/ci.yml` (`cargo vet`, exemptions guard)
+- Python vulnerability scanning: `.github/workflows/ci.yml` (`runtime_mutating_opt_in` step “Security gate”), `.github/workflows/release.yml` (`pip-audit` + `uv export`)
+- SLSA provenance: `.github/workflows/release.yml` (`slsa-provenance` job → `generator_generic_slsa3.yml`)
 
 ## 9) Viewer contract alignment (security boundary)
 
-Although a viewer may be implemented later, CI/release requirements must preserve the boundary:
+The viewer is **read-only**: it must not execute patches, run generated code from evidence, call the executor on behalf of the user, or access secrets. Implementation today:
 
-- Viewer must be read-only: it must not execute patches, run code, call the executor, or access secrets.
-- Viewer must treat all evidence as untrusted data and render without interpretation-as-instructions.
+- CLI: `akc view` (`src/akc/cli/view.py`, registered in `src/akc/cli/__init__.py`)
+- Library: `src/akc/viewer/` (TUI, static HTML, export bundle)
+- Tests: `tests/unit/test_viewer_export.py`
 
 CI/release requirements:
 
-- Any addition of viewer code must include tests asserting read-only behavior and no execution side effects.
+- Viewer changes should keep read-only semantics; extend tests when adding surfaces that touch filesystem or rendering.
 
 Evidence:
+
 - Viewer non-execution threat model: `docs/security.md`
 - Viewer contract: `docs/viewer-trust-boundary.md`
+- `docs/viewer.md` (user-facing overview)
 
 ## 10) Phase 1 OSS hygiene (OSPS Level 1: security reporting + release hygiene)
+
 This phase aligns the repo with OpenSSF OSPS concepts for security reporting and release hygiene:
 
 ### 10.1) Security reporting docs
-- `SECURITY.md` defines the private vulnerability disclosure process.
+
+- [SECURITY.md](../SECURITY.md) defines the private vulnerability disclosure process.
 - `security-insights.yml` provides a machine-readable, OSPS-aligned summary of security reporting and release hygiene (aligned to the OpenSSF Security Insights schema).
-- `CONTRIBUTING.md` points contributors to the security reporting process for security-sensitive bugs.
+- [CONTRIBUTING.md](../CONTRIBUTING.md) points contributors to the security reporting process for security-sensitive bugs.
 
 ### 10.2) CI guardrails for untrusted PRs (least privilege)
+
 - All untrusted PR code must run under low-privilege defaults:
   - GitHub Actions `pull_request` context (not `pull_request_target`).
   - Workflow-level permissions remain restrictive (`contents: read`).
-- The CI workflow includes a `policy-test` stage that asserts:
-  - no `pull_request_target` / privileged patterns are introduced,
-  - no `secrets.*` references appear in `pull_request` workflows,
-  - no artifact uploads occur in PR contexts without provenance/attestation signals.
+- The **`policy-test`** job runs `scripts/ci_policy_test.py`, which statically checks `.github/workflows/*.yml` for: no `pull_request_target`; no `secrets.*` in `pull_request` workflows; no write permissions on PR workflows; artifact uploads on PR workflows only when provenance-related signals appear (`slsa-github-generator`, attest, cosign, sigstore).
 
 ### 10.3) Branch protection expectations (required checks)
-Branch protection for default and release branches should require the CI checks that implement the baseline hygiene gates:
+
+Branch protection for default and release branches should require the CI checks that implement baseline hygiene. Exact names appear in GitHub’s UI; typical jobs include:
+
 - `CI / ci`
 - `CI / Rust checks`
 - `CI / Linux bwrap hardened isolation`
 - `CI / Windows sandbox`
+- `CI / Docker hardening regression gate`
+- `CI / WASM lane regression (<os>)` (matrix)
 - `CI / Policy test (OSPS untrusted PR guardrails)`
+
+Add or adjust required checks when new blocking jobs are introduced.
 
 ## 11) WASM policy quick reference (deterministic limits + stable failures)
 
@@ -221,6 +239,7 @@ CI/release requirements:
   protocol `limits.cpu_fuel` map to stable failure classification.
 
 Evidence:
+
 - WASM lane implementation: `rust/crates/akc_executor/src/backend/wasm.rs`
 - Exit code constants: `rust/crates/akc_executor/src/lib.rs`
 - Bridge parsing/logging surface: `src/akc/compile/rust_bridge.py`
@@ -291,11 +310,12 @@ CI/release requirements:
   - read-only rootfs denial outside tmpfs
   - writable tmpfs path
   - network isolation
-- CI must run a Docker strong compile against the prod Rego profile so executor/policy drift is caught outside of unit tests.
+- CI must run a Docker strong compile against the prod Rego profile so executor/policy drift is caught outside of unit tests (`docker_hardening` job in `.github/workflows/ci.yml`; release workflow includes a similar enforced compile).
 - CI/release branch protection should treat Docker hardening regressions as blocking once the rollout reaches stage 2.
 - Documentation in `docs/security.md` and `docs/getting-started.md` must stay aligned with the implemented defaults and tests.
 
 Evidence:
+
 - Docker executor implementation: `src/akc/compile/executors.py`
 - CLI Docker preflight/validation: `src/akc/cli/compile.py`
 - Docker policy context emission: `src/akc/compile/controller.py`

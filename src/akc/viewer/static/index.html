@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="akc-viewer-ui-version" content="__VIEWER_UI_VERSION__" />
+    <title>AKC viewer (read-only)</title>
+    <link rel="stylesheet" href="./static/viewer.css" />
+  </head>
+  <body>
+    <header>
+      <h1>AKC viewer (read-only)</h1>
+      <div class="meta" id="meta"></div>
+    </header>
+    <main>
+      <section class="card steps-pane" aria-label="Plan steps">
+        <h2>Plan steps</h2>
+        <div class="list" id="steps"></div>
+      </section>
+      <section class="card detail-pane" aria-label="Step details">
+        <div class="detail-head">
+          <div class="step-subheader" id="step_subheader">
+            <span id="step_subheader_title">Select a step</span>
+            <span class="sub-muted" id="step_subheader_meta"></span>
+          </div>
+          <div role="tablist" class="tabs" aria-label="Detail sections" id="tablist"></div>
+        </div>
+        <div class="detail-body">
+          <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" hidden></div>
+          <div id="panel-evidence" role="tabpanel" aria-labelledby="tab-evidence" hidden></div>
+          <div id="panel-knowledge" role="tabpanel" aria-labelledby="tab-knowledge" hidden></div>
+          <div id="panel-control" role="tabpanel" aria-labelledby="tab-control" hidden></div>
+          <div id="panel-profile" role="tabpanel" aria-labelledby="tab-profile" hidden></div>
+        </div>
+      </section>
+    </main>
+    <script src="./static/viewer.js"></script>
+  </body>
+</html>
