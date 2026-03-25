@@ -1180,6 +1180,57 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     compile_cmd.add_argument(
+        "--compile-skills-mode",
+        choices=["off", "default_only", "explicit", "auto"],
+        default=None,
+        help=(
+            "Agent Skills (SKILL.md) injection into patch LLM system prompt: "
+            "off=none; default_only=bundled AKC skill; explicit=default + --compile-skill / project compile_skills; "
+            "auto=explicit plus keyword-scored extras (respects disable-model-invocation). "
+            "Default: default_only, or explicit when compile_skills / --compile-skill are set. "
+            "Optional global scan root: AKC_SKILLS_ROOT (single directory, for headless automation)."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Activate a skill by manifest name (repeatable; merged with .akc/project.json compile_skills).",
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-extra-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Extra absolute directory scanned for Agent Skills packages (child dirs with SKILL.md). "
+            "Relative paths are resolved from the current working directory. Repeatable; merged with "
+            "ControllerConfig.compile_skill_extra_roots. See also AKC_SKILLS_ROOT for a single env-provided root."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-max-file-bytes",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum bytes read per discovered SKILL.md (ControllerConfig.compile_skill_max_file_bytes). "
+            "Overrides .akc/project.json compile_skill_max_file_bytes when set."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--compile-skill-max-total-bytes",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum UTF-8 bytes for the injected Agent Skills system preamble "
+            "(ControllerConfig.compile_skill_max_total_bytes). "
+            "Overrides .akc/project.json compile_skill_max_total_bytes when set."
+        ),
+    )
+    compile_cmd.add_argument(
         "--compile-mcp",
         action="store_true",
         help=(

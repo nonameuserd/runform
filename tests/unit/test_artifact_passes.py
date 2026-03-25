@@ -151,6 +151,37 @@ def test_build_prompt_envelope_uses_llm_vcr_prompt_key_contract() -> None:
     assert env.prompt_key == expected
 
 
+def test_llm_vcr_prompt_key_fingerprint_includes_explicit_final_system() -> None:
+    """Replay keys must bind to the full system string, not only user/metadata."""
+
+    from akc.compile.interfaces import LLMMessage
+    from akc.utils.fingerprint import stable_json_fingerprint
+
+    msgs = [
+        LLMMessage(role="system", content="BASE\n\nSKILL_BLOCK"),
+        LLMMessage(role="user", content="user_prompt"),
+    ]
+    key = llm_vcr_prompt_key(
+        messages=msgs,
+        temperature=0.25,
+        max_output_tokens=99,
+        metadata={"tier": "small"},
+    )
+    manual = stable_json_fingerprint(
+        {
+            "messages": [
+                {"role": "system", "content": "BASE\n\nSKILL_BLOCK"},
+                {"role": "user", "content": "user_prompt"},
+            ],
+            "final_system": "BASE\n\nSKILL_BLOCK",
+            "temperature": 0.25,
+            "max_output_tokens": 99,
+            "metadata": {"tier": "small"},
+        }
+    )
+    assert key == manual
+
+
 def test_run_system_design_pass_emits_design_artifacts() -> None:
     ir_doc = IRDocument(
         tenant_id="t1",

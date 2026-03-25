@@ -26,6 +26,7 @@ StoredAssertionIndexMode: TypeAlias = Literal["off", "merge"]
 CompilePromptIntentContractPolicy: TypeAlias = Literal["auto", "full", "reference_first"]
 OperationalValidityFailedTriggerSeverity: TypeAlias = Literal["block", "advisory"]
 CompileRealizationMode: TypeAlias = Literal["artifact_only", "scoped_apply"]
+CompileSkillsMode: TypeAlias = Literal["off", "default_only", "explicit", "auto"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,6 +406,14 @@ class ControllerConfig:
     compile_mcp_session_timeout_s: float | None = 60.0
     compile_mcp_tools: tuple[CompileMcpToolSpec, ...] = ()
     compile_mcp_tool_stages: tuple[CompileMcpToolStage, ...] = ("generate", "repair")
+    # Agent Skills (SKILL.md) injected into patch LLM system message (tenant-local paths only).
+    compile_skills_mode: CompileSkillsMode = "default_only"
+    compile_skill_allowlist: tuple[str, ...] = ()
+    compile_skill_relative_roots: tuple[str, ...] = ()
+    compile_skill_extra_roots: tuple[Path, ...] = ()
+    # UTF-8 byte budgets: per-SKILL.md read from disk and total injected system preamble.
+    compile_skill_max_total_bytes: int = 98_304
+    compile_skill_max_file_bytes: int = 393_216
 
     def __post_init__(self) -> None:
         if not self.tiers:
@@ -525,6 +534,24 @@ class ControllerConfig:
         for st in self.compile_mcp_tool_stages:
             if st not in ("generate", "repair"):
                 raise ValueError("compile_mcp_tool_stages entries must be 'generate' or 'repair'")
+        if self.compile_skills_mode not in {"off", "default_only", "explicit", "auto"}:
+            raise ValueError("compile_skills_mode must be one of: off, default_only, explicit, auto")
+        if int(self.compile_skill_max_total_bytes) <= 0:
+            raise ValueError("compile_skill_max_total_bytes must be > 0")
+        if int(self.compile_skill_max_file_bytes) <= 0:
+            raise ValueError("compile_skill_max_file_bytes must be > 0")
+        if any(not isinstance(a, str) or not a.strip() for a in self.compile_skill_allowlist):
+            raise ValueError("compile_skill_allowlist must contain only non-empty strings")
+        if any(not isinstance(r, str) or not r.strip() for r in self.compile_skill_relative_roots):
+            raise ValueError("compile_skill_relative_roots must contain only non-empty strings")
+        for p in self.compile_skill_extra_roots:
+            if not isinstance(p, Path):
+                raise ValueError("compile_skill_extra_roots must contain only pathlib.Path entries")
+            exp = p.expanduser()
+            if not str(exp).strip():
+                raise ValueError("compile_skill_extra_roots must not contain empty paths")
+            if not exp.is_absolute():
+                raise ValueError("compile_skill_extra_roots entries must be absolute paths")
 
     def effective_deployment_intents_ir_alignment_policy(self) -> Literal["off", "warn", "error"]:
         """Policy for ``deployment_intents`` vs IR deployable nodes (runtime bundle projection check)."""
@@ -643,4 +670,10 @@ class ControllerConfig:
             compile_mcp_session_timeout_s=self.compile_mcp_session_timeout_s,
             compile_mcp_tools=self.compile_mcp_tools,
             compile_mcp_tool_stages=self.compile_mcp_tool_stages,
+            compile_skills_mode=self.compile_skills_mode,
+            compile_skill_allowlist=self.compile_skill_allowlist,
+            compile_skill_relative_roots=self.compile_skill_relative_roots,
+            compile_skill_extra_roots=self.compile_skill_extra_roots,
+            compile_skill_max_total_bytes=self.compile_skill_max_total_bytes,
+            compile_skill_max_file_bytes=self.compile_skill_max_file_bytes,
         )

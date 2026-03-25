@@ -58,6 +58,7 @@ from akc.compile.provenance_mapper import (
 )
 from akc.compile.retriever import boost_retrieved_documents_for_knowledge_evidence, retrieve_context
 from akc.compile.rust_bridge import RustExecConfig
+from akc.compile.skills.pipeline import build_compile_skill_system_append
 from akc.compile.why_graph_writer import upsert_knowledge_snapshot_into_why_graph
 from akc.control.policy import (
     PolicyEngine,
@@ -376,6 +377,7 @@ def run_compile_loop(
     intent_file: str | Path | None = None,
     intent_store: IntentStore | None = None,
     knowledge_artifact_root: str | Path | None = None,
+    skills_project_root: str | Path | None = None,
 ) -> ControllerResult:
     """Run the Phase 3 compile loop for the active plan step.
 
@@ -1001,6 +1003,25 @@ def run_compile_loop(
     )
     current_stable_intent_sha256 = resolved_intent.stable_intent_sha256
 
+    skills_root_path: Path | None = None
+    if skills_project_root is not None:
+        skills_root_path = Path(skills_project_root).expanduser().resolve()
+
+    skill_append_pre, skill_audit_pre = build_compile_skill_system_append(
+        config=config,
+        project_root=skills_root_path,
+        intent_spec=intent_spec,
+        goal=goal,
+        effective_max_input_tokens=effective_max_input_tokens,
+    )
+    raw_active = skill_audit_pre.get("compile_skills_active", [])
+    skills_active_pre: list[dict[str, Any]] = [dict(x) for x in raw_active] if isinstance(raw_active, list) else []
+    compile_skills_resolved: tuple[str | None, list[dict[str, Any]], str] = (
+        skill_append_pre,
+        skills_active_pre,
+        str(skill_audit_pre.get("compile_skills_mode", config.compile_skills_mode)),
+    )
+
     return run_budgeted_generate_execute_repair_loop(
         tenant_id=tenant_id,
         repo_id=repo_id,
@@ -1058,4 +1079,6 @@ def run_compile_loop(
         resolved_intent_context=resolved_intent,
         intent_store=intent_store,
         intent_contract_shape=intent_contract_shape,
+        skills_project_root=skills_root_path,
+        compile_skills_resolved=compile_skills_resolved,
     )

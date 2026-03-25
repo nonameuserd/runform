@@ -279,6 +279,7 @@ class CompileSession:
         partial_replay_passes: tuple[str, ...] | None = None,
         developer_role_profile: str = "classic",
         developer_profile_decisions: Mapping[str, JSONValue] | None = None,
+        skills_project_root: str | Path | None = None,
     ) -> ControllerResult:
         """Run the Phase 3 compile loop for this tenant+repo scope."""
         compile_started_at_ms = int(time.time() * 1000)
@@ -510,6 +511,7 @@ class CompileSession:
             intent_file=intent_file,
             intent_store=intent_store_for_controller,
             knowledge_artifact_root=knowledge_artifact_root,
+            skills_project_root=skills_project_root,
         )
 
         # Phase 4 Outputs integration (minimal): on success, emit a scoped manifest
@@ -1406,6 +1408,21 @@ class CompileSession:
         best_hash: str | None = None
         if result.best_candidate is not None and result.best_candidate.llm_text.strip():
             best_hash = stable_json_fingerprint({"patch": result.best_candidate.llm_text})
+        generate_metadata: dict[str, Any] | None = None
+        if result.best_candidate is not None:
+            generate_metadata = {
+                "llm_text": result.best_candidate.llm_text,
+                "prompt_key": str(step_outputs.get("last_prompt_key") or ""),
+            }
+            skills_active = result.accounting.get("compile_skills_active")
+            if isinstance(skills_active, list):
+                generate_metadata["compile_skills_active"] = [
+                    dict(x) for x in skills_active if isinstance(x, dict)
+                ]
+            skills_mode = result.accounting.get("compile_skills_mode")
+            if skills_mode is not None:
+                generate_metadata["compile_skills_mode"] = str(skills_mode)
+
         out: list[PassRecord] = [
             PassRecord(name="plan", status="succeeded"),
             PassRecord(name="retrieve", status="succeeded"),
@@ -1417,14 +1434,7 @@ class CompileSession:
                     else "skipped"
                 ),
                 output_sha256=best_hash,
-                metadata=(
-                    {
-                        "llm_text": result.best_candidate.llm_text,
-                        "prompt_key": str(step_outputs.get("last_prompt_key") or ""),
-                    }
-                    if result.best_candidate is not None
-                    else None
-                ),
+                metadata=generate_metadata,
             ),
         ]
         exec_payload = step_outputs.get("last_tests_full") or step_outputs.get("last_tests_smoke")

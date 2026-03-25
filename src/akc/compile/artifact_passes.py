@@ -164,6 +164,30 @@ class DeliveryPlanPassResult:
     metadata: dict[str, JSONValue]
 
 
+def _patch_envelope_system_skill_section(
+    *,
+    skill_blocks: Sequence[str] | None,
+    system_preamble: str | None,
+    skill_system_append: str | None,
+) -> str:
+    """Build the optional suffix appended to the base AKC system string.
+
+    If ``skill_blocks`` is not ``None``, it wins and non-empty stripped blocks are
+    joined with blank lines. Otherwise ``system_preamble`` and
+    ``skill_system_append`` are combined (both optional; legacy callers use only
+    ``skill_system_append``).
+    """
+
+    if skill_blocks is not None:
+        parts = [b.strip() for b in skill_blocks if isinstance(b, str) and b.strip()]
+        return "\n\n".join(parts)
+    p1 = (system_preamble or "").strip()
+    p2 = (skill_system_append or "").strip()
+    if p1 and p2:
+        return f"{p1}\n\n{p2}"
+    return p1 or p2
+
+
 def build_patch_artifact_prompt_envelope(
     *,
     user_prompt: str,
@@ -174,22 +198,42 @@ def build_patch_artifact_prompt_envelope(
     replay_mode: str,
     temperature: float,
     max_output_tokens: int | None,
+    system_preamble: str | None = None,
+    skill_blocks: Sequence[str] | None = None,
+    skill_system_append: str | None = None,
+    compile_skills_active: Sequence[Mapping[str, Any]] | None = None,
+    compile_skills_mode: str | None = None,
 ) -> ArtifactPromptEnvelope:
+    base_system = "You are an AKC compile loop assistant."
+    extra = _patch_envelope_system_skill_section(
+        skill_blocks=skill_blocks,
+        system_preamble=system_preamble,
+        skill_system_append=skill_system_append,
+    )
+    system_content = f"{base_system}\n\n{extra}" if extra else base_system
     llm_messages = [
-        LLMMessage(role="system", content="You are an AKC compile loop assistant."),
+        LLMMessage(role="system", content=system_content),
         LLMMessage(role="user", content=user_prompt),
     ]
+    meta: dict[str, JSONValue] = {
+        "tier": tier_name,
+        "tier_model": tier_model,
+        "plan_id": plan_id,
+        "step_id": step_id,
+        "replay_mode": replay_mode,
+    }
+    if compile_skills_active is not None:
+        meta["compile_skills_active"] = cast(
+            JSONValue,
+            [dict(m) for m in compile_skills_active],
+        )
+    if compile_skills_mode is not None:
+        meta["compile_skills_mode"] = compile_skills_mode
     llm_request = LLMRequest(
         messages=llm_messages,
         temperature=float(temperature),
         max_output_tokens=int(max_output_tokens) if max_output_tokens is not None else None,
-        metadata={
-            "tier": tier_name,
-            "tier_model": tier_model,
-            "plan_id": plan_id,
-            "step_id": step_id,
-            "replay_mode": replay_mode,
-        },
+        metadata=meta,
     )
     prompt_key = llm_vcr_prompt_key(
         messages=llm_messages,

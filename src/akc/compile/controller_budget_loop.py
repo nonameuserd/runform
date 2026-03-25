@@ -42,6 +42,7 @@ from akc.compile.patch_emitter import (
 from akc.compile.planner import advance_plan
 from akc.compile.repair import parse_execution_failure
 from akc.compile.scoped_apply import ScopedApplyAccounting, run_scoped_apply_pipeline
+from akc.compile.skills.pipeline import build_compile_skill_system_append
 from akc.compile.verifier import DeterministicVerifier, VerifierPolicy
 from akc.control.policy import PolicyEngine, ToolAuthorizationError, ToolAuthorizationRequest
 from akc.control.tracing import new_span_id, now_unix_nano
@@ -116,6 +117,8 @@ def run_budgeted_generate_execute_repair_loop(
     resolved_intent_context: ResolvedIntentContext | None = None,
     intent_store: IntentStore | None = None,
     intent_contract_shape: IntentContractShape = "full",
+    skills_project_root: Path | None = None,
+    compile_skills_resolved: tuple[str | None, list[dict[str, Any]], str] | None = None,
 ) -> ControllerResult:
     """ARCS-style bounded tiered generate/execute/repair loop."""
 
@@ -316,6 +319,28 @@ def run_budgeted_generate_execute_repair_loop(
 
         last_generation_text = best.llm_text if best is not None else ""
 
+        if compile_skills_resolved is None:
+            skill_append, skill_audit = build_compile_skill_system_append(
+                config=config,
+                project_root=skills_project_root,
+                intent_spec=intent_spec,
+                goal=goal,
+                effective_max_input_tokens=effective_max_input_tokens,
+            )
+            skills_active_list = list(skill_audit.get("compile_skills_active", []))
+            skills_mode_s = str(skill_audit.get("compile_skills_mode", config.compile_skills_mode))
+        else:
+            skill_append, skills_active_list, skills_mode_s = compile_skills_resolved
+
+        accounting["compile_skills_active"] = list(skills_active_list)
+        accounting["compile_skills_mode"] = skills_mode_s
+
+        llm_skills_active = None
+        llm_skills_mode = None
+        if config.compile_skills_mode != "off":
+            llm_skills_active = list(skills_active_list)
+            llm_skills_mode = skills_mode_s
+
         patch_resolution: ModelCallNeeded | ResolvedPatch | None = resolve_patch_candidate_from_prompt(
             stage=stage,
             plan=plan,
@@ -341,6 +366,9 @@ def run_budgeted_generate_execute_repair_loop(
             should_call_model=pass_decision.should_call_model,
             generate_prompt_pass=generate_prompt_pass,
             repair_prompt_pass=repair_prompt_pass,
+            skill_system_append=skill_append,
+            compile_skills_active=llm_skills_active,
+            compile_skills_mode=llm_skills_mode,
         )
 
         if patch_resolution is None:

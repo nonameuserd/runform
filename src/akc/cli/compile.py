@@ -13,12 +13,17 @@ from typing import Literal, TypeAlias, cast
 from akc.compile import (
     Budget,
     CompileSession,
-    ControllerConfig,
     CostRates,
     RustExecutor,
     TierConfig,
 )
-from akc.compile.controller_config import CompileMcpToolSpec, CompileMcpToolStage, TestMode
+from akc.compile.controller_config import (
+    CompileMcpToolSpec,
+    CompileMcpToolStage,
+    CompileSkillsMode,
+    ControllerConfig,
+    TestMode,
+)
 from akc.compile.executors import (
     _validate_docker_security_identifier,
     _validate_docker_tmpfs_mounts,
@@ -41,7 +46,7 @@ from .profile_defaults import (
     resolve_developer_role_profile,
     resolve_optional_project_string,
 )
-from .project_config import load_akc_project_config
+from .project_config import AkcProjectConfig, load_akc_project_config
 
 IrGraphIntegrityPolicy: TypeAlias = Literal["off", "warn", "error"] | None
 
@@ -609,6 +614,89 @@ def _build_compile_config(
     )
 
 
+def _merge_compile_skills_from_sources(
+    *,
+    config: ControllerConfig,
+    proj: AkcProjectConfig | None,
+    cli_skill_names: list[str],
+    cli_mode: str | None,
+    cli_extra_skill_roots: list[str],
+    cli_max_file_bytes: int | None = None,
+    cli_max_total_bytes: int | None = None,
+    project_dir: Path,
+) -> ControllerConfig:
+    """Merge project.json + CLI compile skill names, mode, roots, and byte caps into ``ControllerConfig``."""
+
+    names: list[str] = []
+    if proj is not None:
+        names.extend(proj.compile_skills)
+    for raw in cli_skill_names:
+        s = str(raw).strip()
+        if s:
+            names.append(s)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for n in names:
+        if n in seen:
+            continue
+        seen.add(n)
+        deduped.append(n)
+
+    mode_raw = cli_mode if cli_mode is not None else (proj.compile_skills_mode if proj is not None else None)
+    mode_str = str(mode_raw).strip().lower() if mode_raw is not None and str(mode_raw).strip() else None
+    if mode_str is None or mode_str == "":
+        mode_str = "explicit" if deduped else str(config.compile_skills_mode)
+    allowed_modes = {"off", "default_only", "explicit", "auto"}
+    if mode_str not in allowed_modes:
+        raise SystemExit(f"Invalid compile skills mode {mode_raw!r}; expected one of {sorted(allowed_modes)}")
+    roots = tuple(proj.skill_roots) if proj is not None else ()
+
+    resolved_extras: list[Path] = []
+    seen_extra: set[str] = set()
+    for p in config.compile_skill_extra_roots:
+        rp = p.expanduser().resolve()
+        key = str(rp)
+        if key in seen_extra:
+            continue
+        seen_extra.add(key)
+        resolved_extras.append(rp)
+    for raw in cli_extra_skill_roots:
+        s = str(raw).strip()
+        if not s:
+            continue
+        p = Path(s).expanduser()
+        p = (project_dir / p).resolve() if not p.is_absolute() else p.resolve()
+        key = str(p)
+        if key in seen_extra:
+            continue
+        seen_extra.add(key)
+        resolved_extras.append(p)
+
+    file_bytes = cli_max_file_bytes
+    if file_bytes is None and proj is not None:
+        file_bytes = proj.compile_skill_max_file_bytes
+    if file_bytes is not None and int(file_bytes) <= 0:
+        raise SystemExit("compile_skill_max_file_bytes must be > 0")
+    total_bytes = cli_max_total_bytes
+    if total_bytes is None and proj is not None:
+        total_bytes = proj.compile_skill_max_total_bytes
+    if total_bytes is not None and int(total_bytes) <= 0:
+        raise SystemExit("compile_skill_max_total_bytes must be > 0")
+
+    cfg = replace(
+        config,
+        compile_skills_mode=cast(CompileSkillsMode, mode_str),
+        compile_skill_allowlist=tuple(deduped),
+        compile_skill_relative_roots=roots,
+        compile_skill_extra_roots=tuple(resolved_extras),
+    )
+    if file_bytes is not None:
+        cfg = replace(cfg, compile_skill_max_file_bytes=int(file_bytes))
+    if total_bytes is not None:
+        cfg = replace(cfg, compile_skill_max_total_bytes=int(total_bytes))
+    return cfg
+
+
 def cmd_compile(args: argparse.Namespace) -> int:
     """Run the compile loop for a tenant+repo scope."""
 
@@ -910,6 +998,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
         compile_realization_mode=compile_rm,
         apply_scope_root=apply_scope_root,
     )
+    config = _merge_compile_skills_from_sources(
+        config=config,
+        proj=proj,
+        cli_skill_names=list(getattr(args, "compile_skill", None) or []),
+        cli_mode=getattr(args, "compile_skills_mode", None),
+        cli_extra_skill_roots=list(getattr(args, "compile_skill_extra_root", None) or []),
+        cli_max_file_bytes=getattr(args, "compile_skill_max_file_bytes", None),
+        cli_max_total_bytes=getattr(args, "compile_skill_max_total_bytes", None),
+        project_dir=cwd,
+    )
     promotion_mode = resolve_default_promotion_mode(
         explicit=promotion_mode_explicit,
         sandbox_mode=sandbox_mode,
@@ -1086,6 +1184,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
             intent_file=intent_file,
             developer_role_profile=developer_role_profile,
             developer_profile_decisions=profile_decisions,
+            skills_project_root=work_root,
         )
     except IntentCompilerError as exc:
         print(f"Intent compilation failed: {exc}")
