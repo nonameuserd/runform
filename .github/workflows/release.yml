@@ -246,5 +246,6 @@ jobs:
     with:
       base64-subjects: ${{ needs.rust-integrity.outputs.base64_subjects }}
       provenance-name: akc-rust.intoto.jsonl
+      compile-generator: true
       upload-assets: true
       upload-tag-name: ${{ needs.release.outputs.tag }}

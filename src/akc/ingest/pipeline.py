@@ -25,7 +25,9 @@ from akc.ingest.chunking import ChunkingConfig, chunk_documents, normalize_docum
 from akc.ingest.connectors.base import Connector
 from akc.ingest.connectors.docs import build_docs_connector
 from akc.ingest.connectors.mcp.connector import build_mcp_connector, mcp_incremental_can_skip
+from akc.ingest.connectors.messaging.discord import build_discord_connector
 from akc.ingest.connectors.messaging.slack import build_slack_connector
+from akc.ingest.connectors.messaging.telegram import build_telegram_connector
 from akc.ingest.connectors.openapi import build_openapi_connector
 from akc.ingest.embedding import Embedder, embed_documents
 from akc.ingest.exceptions import IngestionError
@@ -35,7 +37,7 @@ from akc.memory.models import normalize_repo_id
 
 logger = logging.getLogger(__name__)
 
-ConnectorName = Literal["docs", "openapi", "slack", "mcp"]
+ConnectorName = Literal["docs", "openapi", "slack", "discord", "telegram", "mcp"]
 IndexBackend = Literal["memory", "sqlite", "pgvector"]
 
 
@@ -114,6 +116,15 @@ def default_state_path(*, tenant_id: str, connector: str, base_dir: Path | None 
     return base / ".akc" / "ingest" / safe_tenant / f"{connector}.state.json"
 
 
+def _default_telegram_offset_state_path(*, tenant_id: str, base_dir: Path | None = None) -> Path:
+    """Default path for Telegram update offset state (separate from pipeline state)."""
+
+    _require_non_empty(tenant_id, name="tenant_id")
+    base = base_dir or Path.cwd()
+    safe_tenant = tenant_id.replace(os.sep, "_").replace("..", "_")
+    return base / ".akc" / "ingest" / safe_tenant / "telegram.offset.json"
+
+
 def _get_connector(
     connector: ConnectorName,
     *,
@@ -154,6 +165,76 @@ def _get_connector(
             max_threads=max_threads,
             max_answers=max_answers,
             include_bot_answers=include_bot_answers,
+        )
+    if connector == "discord":
+        opts_d: dict[str, str] = dict(connector_options or {})
+        token = opts_d.get("token", "")
+        guild_id = opts_d.get("guild_id") or None
+        oldest = opts_d.get("oldest")
+        latest = opts_d.get("latest")
+        history_limit = int(opts_d.get("history_limit", "200"))
+        max_threads = int(opts_d.get("max_threads", "200"))
+        max_answers = int(opts_d.get("max_answers", "3"))
+        include_bot_answers = opts_d.get("include_bot_answers", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        timeout_s = float(opts_d.get("timeout_s", "30.0"))
+        max_retries = int(opts_d.get("max_retries", "3"))
+        return build_discord_connector(
+            tenant_id=tenant_id,
+            channel_id=input_value,
+            token=token,
+            guild_id=guild_id,
+            oldest=oldest,
+            latest=latest,
+            history_limit=history_limit,
+            max_threads=max_threads,
+            max_answers=max_answers,
+            include_bot_answers=include_bot_answers,
+            timeout_s=timeout_s,
+            max_retries=max_retries,
+        )
+    if connector == "telegram":
+        opts_t: dict[str, str] = dict(connector_options or {})
+        token = opts_t.get("token", "")
+        allowed_updates_raw = opts_t.get("allowed_updates")
+        allowed_updates = (
+            [s.strip() for s in allowed_updates_raw.split(",") if s.strip()]
+            if isinstance(allowed_updates_raw, str) and allowed_updates_raw.strip()
+            else None
+        )
+        allowed_chat_ids_raw = opts_t.get("chat_ids")
+        allowed_chat_ids = (
+            [int(s.strip()) for s in allowed_chat_ids_raw.split(",") if s.strip()]
+            if isinstance(allowed_chat_ids_raw, str) and allowed_chat_ids_raw.strip()
+            else None
+        )
+        max_updates_per_run = int(opts_t.get("max_updates_per_run", "1000"))
+        long_poll_timeout_s = int(opts_t.get("long_poll_timeout_s", "50"))
+        request_timeout_s = float(opts_t.get("request_timeout_s", "70.0"))
+        max_retries = int(opts_t.get("max_retries", "3"))
+        offset_state_path = opts_t.get("offset_state_path") or str(
+            _default_telegram_offset_state_path(tenant_id=tenant_id)
+        )
+        initial_offset_raw = opts_t.get("initial_offset")
+        initial_offset = (
+            int(initial_offset_raw)
+            if isinstance(initial_offset_raw, str) and initial_offset_raw.strip()
+            else None
+        )
+        return build_telegram_connector(
+            tenant_id=tenant_id,
+            bot_token=token,
+            allowed_chat_ids=allowed_chat_ids,
+            allowed_updates=allowed_updates,
+            max_updates_per_run=max_updates_per_run,
+            long_poll_timeout_s=long_poll_timeout_s,
+            request_timeout_s=request_timeout_s,
+            max_retries=max_retries,
+            state_path=offset_state_path,
+            initial_offset=initial_offset,
         )
     if connector == "mcp":
         opts_m: dict[str, str] = dict(connector_options or {})
