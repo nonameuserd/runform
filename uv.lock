@@ -19,6 +19,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
+    { name = "pydantic" },
 ]
 
 [package.optional-dependencies]
@@ -92,6 +93,7 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'vectorstore-pg'", specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.10" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'delivery-providers'", specifier = ">=2.8.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
