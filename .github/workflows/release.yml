@@ -71,7 +71,23 @@ jobs:
       - name: Build Docker compile test image
         run: |
           set -euo pipefail
-          docker build -t akc-release-pytest:latest -f deploy/Dockerfile.ci-pytest "${GITHUB_WORKSPACE}"
+          # Docker Hub metadata/auth (auth.docker.io) occasionally returns 5xx; retry before failing the job.
+          max_attempts=5
+          attempt=1
+          delay=15
+          while true; do
+            if docker build -t akc-release-pytest:latest -f deploy/Dockerfile.ci-pytest "${GITHUB_WORKSPACE}"; then
+              break
+            fi
+            if [ "${attempt}" -ge "${max_attempts}" ]; then
+              echo "docker build failed after ${max_attempts} attempts"
+              exit 1
+            fi
+            echo "docker build attempt ${attempt} failed; retrying in ${delay}s..."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+          done
 
       - name: Seed approved repo for enforced Docker compile
         run: |
