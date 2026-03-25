@@ -513,4 +513,3 @@ def build_whatsapp_cloud_connector(
             app_secret=app_secret,
         ),
     )
-

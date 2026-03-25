@@ -220,9 +220,7 @@ def _get_connector(
         )
         initial_offset_raw = opts_t.get("initial_offset")
         initial_offset = (
-            int(initial_offset_raw)
-            if isinstance(initial_offset_raw, str) and initial_offset_raw.strip()
-            else None
+            int(initial_offset_raw) if isinstance(initial_offset_raw, str) and initial_offset_raw.strip() else None
         )
         return build_telegram_connector(
             tenant_id=tenant_id,

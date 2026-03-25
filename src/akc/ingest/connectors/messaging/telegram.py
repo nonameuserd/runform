@@ -458,4 +458,3 @@ def build_telegram_connector(
             initial_offset=initial_offset,
         ),
     )
-
