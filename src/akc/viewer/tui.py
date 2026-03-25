@@ -26,6 +26,12 @@ _MIN_TUI_ROWS = 10
 _MODE_ORDER = ("steps", "evidence", "knowledge", "profile")
 
 
+def _terminal_size() -> os.terminal_size:
+    """Resolve terminal geometry; split for tests so global ``shutil`` is not monkeypatched."""
+
+    return shutil.get_terminal_size()
+
+
 def tui_environment_ok() -> tuple[bool, str]:
     """
     Return whether the curses TUI is likely usable without initializing curses.
@@ -40,7 +46,7 @@ def tui_environment_ok() -> tuple[bool, str]:
     if term in ("dumb", ""):
         return False, "TERM is missing or set to dumb"
     try:
-        sz = shutil.get_terminal_size()
+        sz = _terminal_size()
     except OSError:
         return False, "terminal size is unavailable"
     if sz.lines < _MIN_TUI_ROWS:

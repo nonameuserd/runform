@@ -105,7 +105,7 @@ def test_tui_environment_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("akc.viewer.tui.sys.stdout.isatty", lambda: True)
     monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(
-        "akc.viewer.tui.shutil.get_terminal_size",
+        "akc.viewer.tui._terminal_size",
         lambda: SimpleNamespace(lines=24, columns=100),
     )
     ok, reason = tui_environment_ok()
@@ -135,7 +135,7 @@ def test_tui_environment_short_terminal(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("akc.viewer.tui.sys.stdout.isatty", lambda: True)
     monkeypatch.setenv("TERM", "xterm")
     monkeypatch.setattr(
-        "akc.viewer.tui.shutil.get_terminal_size",
+        "akc.viewer.tui._terminal_size",
         lambda: SimpleNamespace(lines=4, columns=80),
     )
     ok, reason = tui_environment_ok()
