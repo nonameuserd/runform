@@ -1,6 +1,47 @@
 # Agentic Knowledge Compiler (AKC)
 
-**Compile documents, messaging, and APIs into runnable artifacts**—code, workflows, and agent specs—with retrieval, tenant-scoped isolation, policy gates, tests, and repair loops instead of one-off summarization.
+**AKC compiles docs, chats, and APIs into runnable artifacts** (code, workflows, agent specs) using a correctness-aware loop:
+**Plan → Retrieve → Generate → Execute → Repair**.
+
+Unlike “summarize & hope”, AKC is built around **grounding + replay + safety gates**:
+
+- **Retrieval-first** from a structured index + **code memory**
+- **Tenant + repo isolation** threaded through ingest/compile/runtime artifacts
+- **Policy gates (OPA/Rego)** for tool use and mutation (default-deny posture)
+- **Tests-by-default** with repair loops and evidence artifacts (manifests, spans, decisions)
+
+## 60-second demo (offline)
+
+**Requirements:** Python 3.11+, [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/nonameuserd/runform.git
+cd runform
+uv sync --extra dev
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# ingest local docs and build an index (no API keys)
+akc ingest --tenant-id demo --connector docs --input ./docs --embedder hash --index-backend sqlite
+
+# (sqlite index defaults to ./.akc/ingest/<tenant-id>/index.sqlite3; override with --sqlite-path)
+
+# compile + verify gates (compile uses an offline backend by default)
+AKC_DEVELOPER_ROLE_PROFILE=emerging akc compile --tenant-id demo --repo-id runform --outputs-root ./out
+akc verify  --tenant-id demo --repo-id runform --outputs-root ./out
+
+# inspect evidence
+akc view --tenant-id demo --repo-id runform --outputs-root ./out web
+```
+
+## What you get
+
+- **Artifacts**: versioned IR, run manifests, retrieval snapshots, policy decisions, test outputs
+- **Runtime bundles**: scheduler/reconciler-ready bundles and replayable evidence
+- **Optional delivery**: named-recipient packaging/distribution via `akc deliver`
+
+## Status
+
+**Alpha.** Interfaces are stabilizing; expect breaking changes between minor releases.
 
 ## Repository overview
 
@@ -143,6 +184,33 @@ akc deliver \
 - **[Research](docs/research.md)** — alignment (ARCS, DeepCode, DocAgent, etc.)
 - **[Governance](GOVERNANCE.md)** — maintainers and decisions
 - **[Deploy](deploy/README.md)** — Docker, Compose, Kubernetes examples
+
+## Signed standalone binaries (CI Release)
+
+The GitHub Release workflow builds standalone executables via Nuitka for macOS/Windows/Linux.
+
+- **Unsigned builds still work**: if signing secrets are not configured, CI will still publish binaries, just **unsigned / not notarized**.
+- **Signed builds (recommended)**:
+  - macOS: **Developer ID codesigning + notarytool notarization**
+  - Windows: **Authenticode signing via `signtool.exe`**
+
+### Required GitHub Secrets
+
+Configure these repository secrets for signing in `.github/workflows/release.yml`.
+
+#### macOS (Developer ID + notarytool)
+
+- **`APPLE_SIGNING_CERT_P12_BASE64`**: Base64-encoded `.p12` containing your *Developer ID Application* certificate + private key.
+- **`APPLE_SIGNING_CERT_P12_PASSWORD`**: Password for that `.p12`.
+- **`APPLE_SIGNING_IDENTITY`**: Codesign identity string, e.g. `Developer ID Application: Your Org (TEAMID)`.
+- **`APPLE_NOTARYTOOL_KEY_ID`**: App Store Connect API key id (e.g. `ABC123DEFG`).
+- **`APPLE_NOTARYTOOL_ISSUER_ID`**: App Store Connect issuer id (UUID).
+- **`APPLE_NOTARYTOOL_PRIVATE_KEY_P8_BASE64`**: Base64-encoded App Store Connect API private key (`AuthKey_XXXXXX.p8`).
+
+#### Windows (signtool)
+
+- **`WINDOWS_SIGNING_CERT_PFX_BASE64`**: Base64-encoded code signing certificate `.pfx` (with private key).
+- **`WINDOWS_SIGNING_CERT_PFX_PASSWORD`**: Password for that `.pfx`.
 
 ## Contributing
 
