@@ -49,15 +49,25 @@ def resolve_absolute_path_under_allowlist_bases(
         return None
     for base in allowed_bases:
         try:
-            rel = candidate.relative_to(base)
-        except ValueError:
-            continue
-        try:
-            resolved = (base / rel).resolve()
+            base_r = base.resolve()
         except OSError:
             continue
         try:
-            if resolved.is_relative_to(base):
+            rel = candidate.relative_to(base_r)
+        except ValueError:
+            continue
+        if rel.is_absolute():
+            continue
+        # ``rel`` is a pure suffix of ``candidate`` with respect to ``base_r``; reject any
+        # parent hops (should not occur from ``relative_to``, but keeps intent explicit).
+        if any(p == ".." for p in rel.parts):
+            continue
+        try:
+            resolved = (base_r / rel).resolve()  # codeql[py/path-injection]: allowlist only; verified below.
+        except OSError:
+            continue
+        try:
+            if resolved.is_relative_to(base_r):
                 return resolved
         except ValueError:
             continue
