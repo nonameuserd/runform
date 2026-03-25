@@ -239,11 +239,17 @@ jobs:
             -o ./.tmp/requirements.txt
           # Generates a CycloneDX SBOM annotated with known Python dependency vulnerabilities.
           # The step fails when vulnerabilities are found (vulnerability scanning gate).
+          #
+          # Documented exception — Pygments GHSA-5239-wwwm-4pmq / CVE-2026-4539 (AdlLexer regex,
+          # CWE-1333; OSV lists no fix_versions). Latest PyPI release remains 2.19.2; transitive
+          # via pytest/rich. Git installs still report 2.19.2, so they do not clear the advisory.
+          # Remove --ignore-vuln once uv.lock resolves to a fixed pygments (e.g. >2.19.2).
           uv run pip-audit \
             -r ./.tmp/requirements.txt \
             -f cyclonedx-json \
             -o ./.tmp/python-deps-vuln.sbom.cdx.json \
-            --progress-spinner off
+            --progress-spinner off \
+            --ignore-vuln GHSA-5239-wwwm-4pmq
 
       - name: Eval regression gates
         run: |
