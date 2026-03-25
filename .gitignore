@@ -6,6 +6,7 @@ env/
 # Build and install
 build/
 dist/
+out/
 *.egg-info/
 *.egg
 

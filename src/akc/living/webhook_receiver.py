@@ -26,6 +26,7 @@ from akc.control.fleet_webhooks import sign_webhook_body
 from akc.living.automation_profile import LivingAutomationProfile
 from akc.living.dispatch import living_recompile_execute
 from akc.memory.models import normalize_repo_id
+from akc.path_security import resolve_absolute_path_under_allowlist_bases
 
 logger = logging.getLogger(__name__)
 
@@ -102,25 +103,7 @@ def _resolved_outputs_root_allowlist_bases(roots: frozenset[Path]) -> tuple[Path
 def _resolve_payload_outputs_root(oroot_s: str, *, allowed_bases: tuple[Path, ...]) -> Path | None:
     """Map webhook ``outputs_root`` string to a resolved path only if confined to ``allowed_bases``."""
 
-    s = oroot_s.strip()
-    if not s or s.startswith("~"):
-        return None
-    if not allowed_bases:
-        return None
-    try:
-        p = Path(s)
-        if not p.is_absolute():
-            return None
-        resolved = p.resolve()
-    except OSError:
-        return None
-    for base in allowed_bases:
-        try:
-            if resolved.is_relative_to(base):
-                return resolved
-        except ValueError:
-            continue
-    return None
+    return resolve_absolute_path_under_allowlist_bases(oroot_s, allowed_bases=allowed_bases)
 
 
 def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

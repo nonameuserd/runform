@@ -71,7 +71,23 @@ jobs:
       - name: Build Docker compile test image
         run: |
           set -euo pipefail
-          docker build -t akc-release-pytest:latest -f deploy/Dockerfile.ci-pytest "${GITHUB_WORKSPACE}"
+          # Docker Hub metadata/auth (auth.docker.io) occasionally returns 5xx; retry before failing the job.
+          max_attempts=5
+          attempt=1
+          delay=15
+          while true; do
+            if docker build -t akc-release-pytest:latest -f deploy/Dockerfile.ci-pytest "${GITHUB_WORKSPACE}"; then
+              break
+            fi
+            if [ "${attempt}" -ge "${max_attempts}" ]; then
+              echo "docker build failed after ${max_attempts} attempts"
+              exit 1
+            fi
+            echo "docker build attempt ${attempt} failed; retrying in ${delay}s..."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+          done
 
       - name: Seed approved repo for enforced Docker compile
         run: |
@@ -160,6 +176,368 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run semantic-release publish --tag "${{ steps.next_tag.outputs.tag }}"
+
+  package-nuitka:
+    permissions:
+      contents: write
+      id-token: write
+    needs: release
+    env:
+      # Some runners/linters do not allow `secrets.*` in `if:` expressions.
+      # Map secrets into env and gate on `env.*` instead.
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: macos-14
+            platform: macos_arm64
+            archive_ext: tar.gz
+            exe_name: akc
+          - runs_on: macos-13
+            platform: macos_x64
+            archive_ext: tar.gz
+            exe_name: akc
+          - runs_on: windows-latest
+            platform: windows_x64
+            archive_ext: zip
+            exe_name: akc.exe
+          - runs_on: ubuntu-latest
+            platform: linux_x64
+            archive_ext: tar.gz
+            exe_name: akc
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Install Linux packaging deps
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # `patchelf` is commonly required for reliable standalone builds.
+          sudo apt-get install -y patchelf
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.10.11"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Install Nuitka build toolchain
+        run: uv pip install nuitka
+
+      - name: Build standalone `akc` (Nuitka)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          from __future__ import annotations
+
+          import subprocess
+          from pathlib import Path
+
+          from tools.nuitka.build import nuitka_akc_args
+
+          repo_root = Path(".").resolve()
+          cmd = nuitka_akc_args(repo_root=repo_root, output_name="akc")
+          print("Running Nuitka:", " ".join(cmd))
+          subprocess.check_call(cmd)
+          PY
+
+      - name: Smoke check built binary (macOS/Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "akc.dist/akc" || (echo "Expected executable akc.dist/akc not found or not executable" && exit 1)
+          ./akc.dist/akc --help >/dev/null
+          ./akc.dist/akc view --help >/dev/null
+          ./akc.dist/akc view tui --help >/dev/null
+
+      - name: Smoke check built binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path "akc.dist\akc.exe")) { throw "Expected executable akc.dist\akc.exe not found" }
+          & "akc.dist\akc.exe" --help | Out-Null
+          & "akc.dist\akc.exe" view --help | Out-Null
+          & "akc.dist\akc.exe" view tui --help | Out-Null
+
+      - name: macOS codesign + notarize (Developer ID)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_CERT_P12_BASE64: ${{ secrets.APPLE_SIGNING_CERT_P12_BASE64 }}
+          APPLE_SIGNING_CERT_P12_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_P12_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARYTOOL_KEY_ID: ${{ secrets.APPLE_NOTARYTOOL_KEY_ID }}
+          APPLE_NOTARYTOOL_ISSUER_ID: ${{ secrets.APPLE_NOTARYTOOL_ISSUER_ID }}
+          APPLE_NOTARYTOOL_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARYTOOL_PRIVATE_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APPLE_SIGNING_CERT_P12_BASE64:-}" ] || \
+             [ -z "${APPLE_SIGNING_CERT_P12_PASSWORD:-}" ] || \
+             [ -z "${APPLE_SIGNING_IDENTITY:-}" ] || \
+             [ -z "${APPLE_NOTARYTOOL_KEY_ID:-}" ] || \
+             [ -z "${APPLE_NOTARYTOOL_ISSUER_ID:-}" ] || \
+             [ -z "${APPLE_NOTARYTOOL_PRIVATE_KEY_P8_BASE64:-}" ]
+          then
+            echo "macOS signing/notarization secrets not configured; skipping."
+            exit 0
+          fi
+
+          test -d "akc.dist" || (echo "Expected Nuitka output dir akc.dist not found" && exit 1)
+          test -f "akc.dist/akc" || (echo "Expected akc.dist/akc not found" && exit 1)
+
+          keychain_path="${RUNNER_TEMP}/akc-signing.keychain-db"
+          keychain_pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+
+          cert_path="${RUNNER_TEMP}/developer_id.p12"
+          echo "${APPLE_SIGNING_CERT_P12_BASE64}" | base64 --decode > "${cert_path}"
+
+          security create-keychain -p "${keychain_pw}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_pw}" "${keychain_path}"
+          security import "${cert_path}" -P "${APPLE_SIGNING_CERT_P12_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain_path}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${keychain_pw}" "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}"
+
+          # Sign the executable and any native shared libs Nuitka bundled.
+          sign_id="${APPLE_SIGNING_IDENTITY}"
+          sign_args=(codesign --force --options runtime --timestamp --sign "${sign_id}")
+
+          "${sign_args[@]}" "akc.dist/akc"
+
+          # Best-effort: sign native libs if present (avoid failing on empty matches).
+          while IFS= read -r -d '' f; do
+            "${sign_args[@]}" "${f}"
+          done < <(find "akc.dist" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 || true)
+
+          codesign --verify --deep --strict --verbose=2 "akc.dist/akc"
+          spctl -a -t exec -vv "akc.dist/akc" || true
+
+          # Notarize a zip of the standalone bundle directory (Developer ID notarization).
+          notary_zip="${RUNNER_TEMP}/akc-notary.zip"
+          /usr/bin/ditto -c -k --keepParent "akc.dist" "${notary_zip}"
+
+          p8_path="${RUNNER_TEMP}/AuthKey.p8"
+          echo "${APPLE_NOTARYTOOL_PRIVATE_KEY_P8_BASE64}" | base64 --decode > "${p8_path}"
+
+          xcrun notarytool submit \
+            "${notary_zip}" \
+            --key "${p8_path}" \
+            --key-id "${APPLE_NOTARYTOOL_KEY_ID}" \
+            --issuer "${APPLE_NOTARYTOOL_ISSUER_ID}" \
+            --wait
+
+      - name: Windows signtool (Authenticode)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_PFX_BASE64 }}
+          WINDOWS_SIGNING_CERT_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PFX_PASSWORD)) {
+            Write-Host "Windows signing secrets not configured; skipping."
+            exit 0
+          }
+
+          if (-not (Test-Path "akc.dist")) { throw "Expected Nuitka output dir akc.dist not found" }
+          if (-not (Test-Path "akc.dist\akc.exe")) { throw "Expected akc.dist\akc.exe not found" }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT_PFX_BASE64))
+
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found (Windows SDK missing?)" }
+
+          & $signtool.FullName sign `
+            /f $pfxPath `
+            /p $env:WINDOWS_SIGNING_CERT_PFX_PASSWORD `
+            /fd SHA256 `
+            /tr http://timestamp.digicert.com `
+            /td SHA256 `
+            "akc.dist\akc.exe"
+
+          & $signtool.FullName verify /pa /v "akc.dist\akc.exe"
+
+      - name: Package archive + checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          platform="${{ matrix.platform }}"
+          archive_ext="${{ matrix.archive_ext }}"
+
+          uv run python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import os
+          import shutil
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          platform = os.environ["PLATFORM"]
+          archive_ext = os.environ["ARCHIVE_EXT"]
+
+          dist_dir = Path("akc.dist")
+          if not dist_dir.is_dir():
+              raise SystemExit("Expected Nuitka standalone output dir 'akc.dist' not found")
+
+          out_dir = Path(".tmp_release_assets")
+          if out_dir.exists():
+              shutil.rmtree(out_dir)
+          out_dir.mkdir(parents=True)
+
+          bundle_root = out_dir / f"akc_{tag}_{platform}"
+          shutil.copytree(dist_dir, bundle_root)
+
+          archive_name = f"{bundle_root.name}.{archive_ext}"
+          archive_path = Path.cwd() / archive_name
+
+          if archive_ext == "zip":
+              with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                  for p in bundle_root.rglob("*"):
+                      if p.is_dir():
+                          continue
+                      zf.write(p, arcname=str(p.relative_to(out_dir)))
+          elif archive_ext == "tar.gz":
+              with tarfile.open(archive_path, "w:gz") as tf:
+                  tf.add(bundle_root, arcname=bundle_root.name)
+          else:
+              raise SystemExit(f"Unsupported archive_ext: {archive_ext}")
+
+          sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+          sha_path = archive_path.with_suffix(archive_path.suffix + ".sha256")
+          sha_path.write_text(f"{sha256}  {archive_path.name}\n", encoding="utf-8")
+
+          print(f"Wrote {archive_path}")
+          print(f"Wrote {sha_path}")
+          PY
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+
+      - name: Install cosign (optional)
+        if: vars.COSIGN_KEYLESS == 'true' || env.COSIGN_PRIVATE_KEY != ''
+        uses: sigstore/cosign-installer@d7f1a0c78d3cf34f2c9a0cb6fa4b3c41098c5c7f # v3.9.1
+
+      - name: Cosign bundle (optional, keyless)
+        if: vars.COSIGN_KEYLESS == 'true'
+        shell: bash
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          platform="${{ matrix.platform }}"
+          shopt -s nullglob
+          archives=( "akc_${tag}_${platform}."* )
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "No archives found to sign"; exit 1
+          fi
+          for f in "${archives[@]}"; do
+            case "$f" in
+              *.sha256) continue ;;
+            esac
+            bundle="${f}.sigstore.bundle.json"
+            cosign sign-blob --bundle "${bundle}" "${f}"
+          done
+
+      - name: Cosign bundle (optional, key)
+        if: vars.COSIGN_KEYLESS != 'true' && env.COSIGN_PRIVATE_KEY != ''
+        shell: bash
+        env:
+          COSIGN_YES: "true"
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          platform="${{ matrix.platform }}"
+          shopt -s nullglob
+          archives=( "akc_${tag}_${platform}."* )
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "No archives found to sign"; exit 1
+          fi
+          for f in "${archives[@]}"; do
+            case "$f" in
+              *.sha256) continue ;;
+            esac
+            bundle="${f}.sigstore.bundle.json"
+            cosign sign-blob --key env://COSIGN_PRIVATE_KEY --bundle "${bundle}" "${f}"
+          done
+
+      - name: Upload assets to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          platform="${{ matrix.platform }}"
+
+          shopt -s nullglob
+          files=( "akc_${tag}_${platform}."* )
+          test "${#files[@]}" -gt 0 || (echo "No assets found to upload" && exit 1)
+
+          gh release upload "${tag}" "${files[@]}" --clobber
+
+  release-checksums:
+    permissions:
+      contents: write
+    needs: [release, package-nuitka]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Nuitka release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          mkdir -p .tmp_release_download
+          gh release download "${tag}" --dir .tmp_release_download --pattern "akc_${tag}_*"
+
+      - name: Generate combined SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .tmp_release_download
+          # Only hash archives; ignore existing per-asset sha files and any sigstore bundles.
+          ls -1 | grep -E '\.(tar\.gz|zip)$' >/dev/null
+          sha256sum *.tar.gz *.zip > "SHA256SUMS.txt"
+          cat "SHA256SUMS.txt"
+
+      - name: Upload SHA256SUMS to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release.outputs.tag }}"
+          gh release upload "${tag}" ".tmp_release_download/SHA256SUMS.txt" --clobber
 
   rust-integrity:
     permissions:

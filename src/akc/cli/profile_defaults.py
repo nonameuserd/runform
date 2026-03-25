@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -221,10 +222,21 @@ def resolve_ingest_profile_defaults(
     assertion_index_root: str | None,
 ) -> dict[str, ResolvedValue]:
     if profile != "emerging":
+        # Keep the classic profile explicit, but make sqlite usable out-of-the-box
+        # when a user opts into it (e.g. README demo). The default is tenant-scoped.
+        sqlite_default: str | None = None
+        sqlite_source: ProfileValueSource = "legacy_default"
+        if (not no_index) and str(index_backend).strip().lower() == "sqlite" and sqlite_path is None:
+            safe_tenant = str(tenant_id).replace(os.sep, "_").replace("..", "_")
+            sqlite_default = str((cwd / ".akc" / "ingest" / safe_tenant / "index.sqlite3").resolve())
+            sqlite_source = "profile_default"
         return {
             "index_backend": ResolvedValue(index_backend, "legacy_default"),
             "embedder": ResolvedValue(embedder, "legacy_default"),
-            "sqlite_path": ResolvedValue(sqlite_path, "legacy_default"),
+            "sqlite_path": ResolvedValue(
+                sqlite_path if sqlite_path is not None else sqlite_default,
+                "legacy_default" if sqlite_path is not None else sqlite_source,
+            ),
             "assertion_index_root": ResolvedValue(assertion_index_root, "legacy_default"),
         }
     if no_index:
