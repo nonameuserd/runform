@@ -61,6 +61,20 @@ def _require_slack_token(args: argparse.Namespace) -> str:
     return token
 
 
+def _require_discord_token(args: argparse.Namespace) -> str:
+    token = getattr(args, "discord_token", None) or env("AKC_DISCORD_TOKEN")
+    if token is None:
+        raise SystemExit("Missing Discord token. Provide --discord-token or set AKC_DISCORD_TOKEN.")
+    return token
+
+
+def _require_telegram_token(args: argparse.Namespace) -> str:
+    token = getattr(args, "telegram_token", None) or env("AKC_TELEGRAM_TOKEN")
+    if token is None:
+        raise SystemExit("Missing Telegram token. Provide --telegram-token or set AKC_TELEGRAM_TOKEN.")
+    return token
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     configure_logging(verbose=args.verbose)
 
@@ -114,6 +128,38 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         connector_options["max_threads"] = str(int(args.slack_max_threads))
         connector_options["max_answers"] = str(int(args.slack_max_answers))
         connector_options["include_bot_answers"] = "true" if args.slack_include_bot_answers else "false"
+    if connector == "discord":
+        connector_options["token"] = _require_discord_token(args)
+        if getattr(args, "discord_guild_id", None) is not None:
+            connector_options["guild_id"] = str(args.discord_guild_id)
+        if getattr(args, "discord_oldest", None) is not None:
+            connector_options["oldest"] = str(args.discord_oldest)
+        if getattr(args, "discord_latest", None) is not None:
+            connector_options["latest"] = str(args.discord_latest)
+        connector_options["history_limit"] = str(int(getattr(args, "discord_history_limit", 200)))
+        connector_options["max_threads"] = str(int(getattr(args, "discord_max_threads", 200)))
+        connector_options["max_answers"] = str(int(getattr(args, "discord_max_answers", 3)))
+        connector_options["include_bot_answers"] = (
+            "true" if getattr(args, "discord_include_bot_answers", False) else "false"
+        )
+        connector_options["timeout_s"] = str(float(getattr(args, "discord_timeout_s", 30.0)))
+        connector_options["max_retries"] = str(int(getattr(args, "discord_max_retries", 3)))
+    if connector == "telegram":
+        connector_options["token"] = _require_telegram_token(args)
+        allowed_updates = getattr(args, "telegram_allowed_updates", None)
+        if isinstance(allowed_updates, str) and allowed_updates.strip():
+            connector_options["allowed_updates"] = allowed_updates
+        chat_ids = getattr(args, "telegram_chat_ids", None)
+        if isinstance(chat_ids, str) and chat_ids.strip():
+            connector_options["chat_ids"] = chat_ids
+        connector_options["max_updates_per_run"] = str(int(getattr(args, "telegram_max_updates", 1000)))
+        connector_options["long_poll_timeout_s"] = str(int(getattr(args, "telegram_timeout_s", 50)))
+        connector_options["request_timeout_s"] = str(float(getattr(args, "telegram_request_timeout_s", 70.0)))
+        connector_options["max_retries"] = str(int(getattr(args, "telegram_max_retries", 3)))
+        if getattr(args, "telegram_offset_state_path", None) is not None:
+            connector_options["offset_state_path"] = str(Path(str(args.telegram_offset_state_path)).expanduser())
+        if getattr(args, "telegram_initial_offset", None) is not None:
+            connector_options["initial_offset"] = str(int(args.telegram_initial_offset))
     if connector == "mcp":
         connector_options["mcp_config_path"] = str(Path(str(args.mcp_config)).expanduser())
         if getattr(args, "mcp_uri_prefix", None) is not None:

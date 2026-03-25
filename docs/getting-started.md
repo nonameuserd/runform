@@ -53,16 +53,16 @@ akc init
 
 Top-level commands (run `akc --help` for the full tree):
 
-| Area | Commands |
-|------|----------|
-| Project | `init` |
-| Ingestion & compile | `ingest`, `compile`, `verify`, `eval` |
-| Drift & living | `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor` |
-| Runtime | `runtime` (`start`, `stop`, `status`, `events`, `reconcile`, `checkpoint`, `replay`, `autopilot`, `coordination-plan`, and related flags) |
-| Control plane | `control`, `metrics`, `policy`, `fleet` |
-| Delivery | `deliver` (named-recipient sessions; see [delivery-architecture.md](delivery-architecture.md)) |
-| Viewer | `view` (TUI / static web / export) |
-| Slack helpers | `slack list-channels` |
+| Area                | Commands                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Project             | `init`                                                                                                                                    |
+| Ingestion & compile | `ingest`, `compile`, `verify`, `eval`                                                                                                     |
+| Drift & living      | `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor`                                                             |
+| Runtime             | `runtime` (`start`, `stop`, `status`, `events`, `reconcile`, `checkpoint`, `replay`, `autopilot`, `coordination-plan`, and related flags) |
+| Control plane       | `control`, `metrics`, `policy`, `fleet`                                                                                                   |
+| Delivery            | `deliver` (named-recipient sessions; see [delivery-architecture.md](delivery-architecture.md))                                            |
+| Viewer              | `view` (TUI / static web / export)                                                                                                        |
+| Slack helpers       | `slack list-channels`                                                                                                                     |
 
 Quick inventory:
 
@@ -82,7 +82,7 @@ For always-on runtime autopilot acceptance, use the reliability scoreboard gate 
 
 ### Extension points and transparency
 
-- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, openapi, slack) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
+- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, openapi, slack, discord, telegram, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
 - **Embedding defaults to offline:** the default embedder is `none`; use `--embedder hash` for deterministic, key-free indexing. **Cloud providers (OpenAI, Gemini) are opt-in only**—use them only when you explicitly set `--embedder openai` or `--embedder gemini` and provide the corresponding API key.
 - **Compile** uses an offline LLM backend by default; no API keys are required for the standard ingest → compile → verify path. Examples in this guide use offline or generic options; cloud-backed options are explicitly marked as optional.
 
@@ -143,6 +143,56 @@ akc ingest \
   --no-index
 ```
 
+### Ingest Discord threads (Q&A heuristic)
+
+Set a bot token:
+
+```bash
+export AKC_DISCORD_TOKEN="..."
+```
+
+Then run ingestion with `--input` set to the channel id:
+
+```bash
+akc ingest \
+  --tenant-id tenant-1 \
+  --connector discord \
+  --input 123456789012345678 \
+  --no-index
+```
+
+Notes:
+
+- Discord ingestion is pull/backfill via REST. If your bot cannot read message content due to Discord intent/policy, documents may have limited text.
+- You can optionally pass `--discord-guild-id` to help thread listing in some environments.
+
+### Ingest Telegram updates (Bot API update-drain)
+
+Set a bot token:
+
+```bash
+export AKC_TELEGRAM_TOKEN="123456:ABC..."
+```
+
+Then run ingestion (Telegram bots do not provide true historical backfill; this drains new updates):
+
+```bash
+akc ingest \
+  --tenant-id tenant-1 \
+  --connector telegram \
+  --input updates \
+  --no-index
+```
+
+Notes:
+
+- Incremental progress is tracked via a tenant-scoped Telegram offset state file (separate from the general ingest state), so repeated runs do not reprocess the same updates.
+- Use `--telegram-chat-ids` to restrict ingestion to specific chats when needed.
+
+### WhatsApp Cloud webhook payload ingestion (library-level)
+
+A WhatsApp Cloud webhook payload connector exists in the codebase (JSON/JSONL payload files, dedupe, optional signature verification helper), but it is **not yet exposed via `akc ingest --connector whatsapp_cloud`**. Track progress in `.cursor/plans/messaging_connectors_discord_telegram_whatsapp_9f2c6657.plan.md`.
+
 ### Compile (Plan → Retrieve → Generate → Execute → Repair)
 
 Run the compile loop for a tenant/repo. All outputs go under `<outputs-root>/<tenant-id>/<repo-id>/` (manifest, `.akc/tests`, code memory).
@@ -164,11 +214,11 @@ By default, compile uses **`scoped_apply`**: after a passing candidate, it may a
 
 **Risk profile (what to use when)**
 
-| Profile | Settings | When |
-|--------|------------|------|
-| **Intent → filesystem (default)** | `scoped_apply` (omit flag) + policy/scope you trust | Normal AKC flow; compile may land patches after the same tests/verifier gates as a normal run. |
-| **Conservative** | `--compile-realization-mode artifact_only`, enforce policy in CI as needed | Learning AKC, shared repos, CI audits, or any environment where working-tree writes are unacceptable. |
-| **Full chain to runtime** | Above plus promotion/runtime configuration (signed packets, `live_apply` only where policy allows) | Production-style rollout only after staging evidence; see [architecture.md](architecture.md) (compile realization) and [runtime-execution.md](runtime-execution.md). |
+| Profile                           | Settings                                                                                           | When                                                                                                                                                                 |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Intent → filesystem (default)** | `scoped_apply` (omit flag) + policy/scope you trust                                                | Normal AKC flow; compile may land patches after the same tests/verifier gates as a normal run.                                                                       |
+| **Conservative**                  | `--compile-realization-mode artifact_only`, enforce policy in CI as needed                         | Learning AKC, shared repos, CI audits, or any environment where working-tree writes are unacceptable.                                                                |
+| **Full chain to runtime**         | Above plus promotion/runtime configuration (signed packets, `live_apply` only where policy allows) | Production-style rollout only after staging evidence; see [architecture.md](architecture.md) (compile realization) and [runtime-execution.md](runtime-execution.md). |
 
 Example (default — scoped apply):
 
@@ -254,11 +304,11 @@ Explicit CLI flags in this block (not counting `export`): **`--connector`**, **`
 
 Use these as **documentation-level** success criteria; they are not enforced by telemetry in the OSS CLI.
 
-| Criterion | Target |
-|-----------|--------|
-| **Time to first success** | Complete **ingest → compile → verify → runtime** under `emerging` in one sitting (local machine or CI) without debugging profile/scope wiring. |
-| **Flag budget** | Prefer **env + `.akc/project.json`** so repeated `--developer-role-profile` is unnecessary; aim for **≤ 4 explicit CLI flags** for the full chain as in the block above (adjust if you add optional tools like `--embedder hash`). |
-| **Regression signal** | **`tests/integration/test_emerging_profile_one_command_flow.py`** exercises ingest → compile → verify → runtime with **`AKC_DEVELOPER_ROLE_PROFILE=emerging`** and no per-command `--developer-role-profile`. Use **manual dogfood** or **CI step timing** on that test as a rough duration budget for the golden path. |
+| Criterion                 | Target                                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Time to first success** | Complete **ingest → compile → verify → runtime** under `emerging` in one sitting (local machine or CI) without debugging profile/scope wiring.                                                                                                                                                                          |
+| **Flag budget**           | Prefer **env + `.akc/project.json`** so repeated `--developer-role-profile` is unnecessary; aim for **≤ 4 explicit CLI flags** for the full chain as in the block above (adjust if you add optional tools like `--embedder hash`).                                                                                      |
+| **Regression signal**     | **`tests/integration/test_emerging_profile_one_command_flow.py`** exercises ingest → compile → verify → runtime with **`AKC_DEVELOPER_ROLE_PROFILE=emerging`** and no per-command `--developer-role-profile`. Use **manual dogfood** or **CI step timing** on that test as a rough duration budget for the golden path. |
 
 What the `emerging` profile does:
 
@@ -455,6 +505,7 @@ Use the rollout in this order:
 ### Compiler spine artifacts (IR + replay manifest)
 
 Phase A adds deterministic compiler contracts under:
+
 - `src/akc/ir/`:
   - `schema.py` (`IRDocument`, `IRNode`, `EffectAnnotation`, stable node IDs)
   - `provenance.py` (`ProvenancePointer` for source traceability)
@@ -465,6 +516,7 @@ Phase A adds deterministic compiler contracts under:
   - `replay.py` (`decide_replay_for_pass` for replay call policy)
 
 Replay modes currently modeled:
+
 - `live`: call model + tools normally
 - `llm_vcr`: replay model responses, still allow tool execution
 - `full_replay`: no model or tool calls
@@ -472,11 +524,11 @@ Replay modes currently modeled:
 
 Replay decision table:
 
-| Replay mode | Model calls | Tool calls | Manifest requirements |
-|---|---|---|---|
-| `live` | Yes | Yes | None (optional) |
-| `llm_vcr` | No (replayed) | Yes | Cached model payloads (`llm_vcr` or pass metadata with `llm_text`) |
-| `full_replay` | No (replayed) | No (replayed) | Cached model + execute payloads in prior run manifest |
+| Replay mode      | Model calls      | Tool calls                     | Manifest requirements                                                            |
+| ---------------- | ---------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| `live`           | Yes              | Yes                            | None (optional)                                                                  |
+| `llm_vcr`        | No (replayed)    | Yes                            | Cached model payloads (`llm_vcr` or pass metadata with `llm_text`)               |
+| `full_replay`    | No (replayed)    | No (replayed)                  | Cached model + execute payloads in prior run manifest                            |
 | `partial_replay` | Replayed (model) | Yes (selected passes run live) | Prior manifest recommended; pass list from `--partial-replay-passes` or manifest |
 
 For `partial_replay`, `--partial-replay-passes` takes precedence; if omitted, pass selection falls back to the replay manifest.
@@ -544,13 +596,13 @@ Runtime artifacts stay under the same tenant/repo root:
 
 AKC is **fail-closed by default** for real infrastructure. Even if a runtime bundle requests a real deployment provider, the runtime will fall back to the in-memory provider unless the corresponding environment gate is enabled. Source of truth: `src/akc/runtime/providers/factory.py`.
 
-| “I want…” | Minimum bundle metadata (`RuntimeBundle.metadata`) | Minimum env | What happens if missing |
-|---|---|---|---|
-| **Local runtime in CI/tests (no infra, no mutation)** | Omit `deployment_provider` (or set an unknown `kind`) | *(none)* | In-memory provider is used. |
-| **Observe Docker Compose (read-only)** | `deployment_provider.kind: "docker_compose_observe"` | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1` | Falls back to in-memory provider. |
-| **Observe Kubernetes (read-only)** | `deployment_provider.kind: "kubernetes_observe"` | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1` | Falls back to in-memory provider. |
-| **Apply Docker Compose (mutating)** | `deployment_provider.kind: "docker_compose_apply"` | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1` | Falls back to in-memory provider unless bundle opts into full replacement mode. |
-| **Apply Kubernetes (mutating)** | `deployment_provider.kind: "kubernetes_apply"` | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1` | Falls back to in-memory provider unless bundle opts into full replacement mode. |
+| “I want…”                                             | Minimum bundle metadata (`RuntimeBundle.metadata`)                                           | Minimum env                                                             | What happens if missing                                                                                                  |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Local runtime in CI/tests (no infra, no mutation)** | Omit `deployment_provider` (or set an unknown `kind`)                                        | _(none)_                                                                | In-memory provider is used.                                                                                              |
+| **Observe Docker Compose (read-only)**                | `deployment_provider.kind: "docker_compose_observe"`                                         | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider.                                                                                        |
+| **Observe Kubernetes (read-only)**                    | `deployment_provider.kind: "kubernetes_observe"`                                             | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider.                                                                                        |
+| **Apply Docker Compose (mutating)**                   | `deployment_provider.kind: "docker_compose_apply"`                                           | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider unless bundle opts into full replacement mode.                                          |
+| **Apply Kubernetes (mutating)**                       | `deployment_provider.kind: "kubernetes_apply"`                                               | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider unless bundle opts into full replacement mode.                                          |
 | **Full layer replacement (explicit bundle contract)** | `layer_replacement_mode: "full"` **or** `deployment_provider_contract.mutation_mode: "full"` | observe kinds still require `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1` | Apply providers are allowed without `AKC_ENABLE_MUTATING...` when full replacement mode is explicitly set on the bundle. |
 
 Copy/paste templates (drop into runtime bundle `metadata`):
@@ -665,6 +717,7 @@ The document includes `intent_replay_context.effective_partial_replay_passes` an
   - Fix: pass `--replay-manifest-path` explicitly or run a baseline compile first.
 
 These contracts are useful for:
+
 - regression tests (stable IR and stable manifest hashing),
 - auditing compile behavior,
 - deterministic debugging/replay in CI.
