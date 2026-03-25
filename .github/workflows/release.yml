@@ -110,8 +110,21 @@ jobs:
       - name: Install OPA
         run: |
           set -euo pipefail
-          curl -fsSL -o "${RUNNER_TEMP}/opa" \
-            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          # The openpolicyagent.org endpoint occasionally flakes in CI (curl: (56)).
+          # Use retries and a GitHub Releases fallback to reduce release pipeline noise.
+          for url in \
+            "https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static" \
+            "https://github.com/open-policy-agent/opa/releases/latest/download/opa_linux_amd64_static"
+          do
+            echo "Downloading OPA from: $url"
+            if curl -fL --retry 6 --retry-delay 2 --retry-all-errors --max-time 120 \
+              -o "${RUNNER_TEMP}/opa" \
+              "$url"
+            then
+              break
+            fi
+          done
+          test -s "${RUNNER_TEMP}/opa" || (echo "Failed to download OPA" && exit 1)
           sudo install -m 0755 "${RUNNER_TEMP}/opa" /usr/local/bin/opa
           opa version
 
