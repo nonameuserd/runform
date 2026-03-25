@@ -17,6 +17,9 @@ classifiers = [
 ]
 dependencies = [
     "jsonschema>=4.22",
+    # Used by compile MCP adapter (AnyUrl) and other typed surfaces; must be core so
+    # minimal images (`uv sync` without extras) still import the compile stack.
+    "pydantic>=2.10",
 ]
 
 [project.optional-dependencies]

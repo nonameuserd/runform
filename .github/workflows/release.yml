@@ -52,11 +52,15 @@ jobs:
             --no-hashes \
             -o ./.tmp/requirements.txt
           # Vulnerability scanning gate before any release publishing.
+          #
+          # Documented exception — Pygments GHSA-5239-wwwm-4pmq / CVE-2026-4539: see ci.yml
+          # Security gate comment. Remove --ignore-vuln after locking a fixed pygments release.
           uv run pip-audit \
             -r ./.tmp/requirements.txt \
             -f cyclonedx-json \
             -o ./.tmp/python-deps-vuln.sbom.cdx.json \
-            --progress-spinner off
+            --progress-spinner off \
+            --ignore-vuln GHSA-5239-wwwm-4pmq
 
       - name: Verify Docker capability
         run: |
