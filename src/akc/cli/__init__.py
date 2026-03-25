@@ -2248,6 +2248,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     view_web = view_sub.add_parser("web", help="Generate a static HTML viewer bundle")
     view_web.add_argument("--out-dir", help="Output directory for the static viewer bundle")
+    view_web.add_argument(
+        "--serve",
+        action="store_true",
+        help=(
+            "After writing the bundle, serve it over HTTP on 127.0.0.1 only (developer "
+            "convenience; not for remote exposure)"
+        ),
+    )
+    view_web.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        dest="serve_port",
+        metavar="PORT",
+        help="TCP port when using --serve (default: ephemeral port)",
+    )
     view_web.set_defaults(func=cmd_view)
 
     view_export = view_sub.add_parser("export", help="Export a portable evidence bundle (dir + zip)")

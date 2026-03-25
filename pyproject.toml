@@ -103,6 +103,9 @@ packages = ["src/akc"]
 "src/akc/control/operator_dashboard/app.js" = "akc/control/operator_dashboard/app.js"
 "src/akc/control/operator_dashboard/README.md" = "akc/control/operator_dashboard/README.md"
 "src/akc/cli/compile_tools_policy_stub.rego" = "akc/cli/compile_tools_policy_stub.rego"
+"src/akc/viewer/static/index.html" = "akc/viewer/static/index.html"
+"src/akc/viewer/static/viewer.css" = "akc/viewer/static/viewer.css"
+"src/akc/viewer/static/viewer.js" = "akc/viewer/static/viewer.js"
 # Bundled Agent Skills default (explicit so wheels/sdists always ship SKILL.md with the package).
 "src/akc/compile/skills/bundled/akc_default/SKILL.md" = "akc/compile/skills/bundled/akc_default/SKILL.md"
 

@@ -46,6 +46,16 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy src/akc && uv
 
 CI runs the same checks on every PR.
 
+### Manual check: `akc view … tui`
+
+Automated tests cover **pure helpers** only (scroll math, filters, preflight). After changing `src/akc/viewer/tui.py`, smoke the real TUI locally:
+
+1. Run `uv run akc view --tenant-id … --repo-id … --outputs-root … tui` in a normal terminal (not piped).
+2. Confirm fixed **header** stays visible while scrolling long **knowledge** or **profile** text.
+3. In **evidence** mode, confirm **split preview** updates as you move `↑`/`↓`, and `v` still opens fullscreen preview.
+4. Press `/`, type a substring, Enter — confirm **n** / **N** jump between matching steps.
+5. Resize to a very short window or use `TERM=dumb` and confirm the CLI **skips curses** with a clear message and prints the text fallback.
+
 ## Pull request process
 
 1. Update tests and docs as needed for your change.

@@ -43,8 +43,23 @@ uv run akc view --tenant-id TENANT --repo-id REPO --outputs-root /path/to/output
 uv run akc view --tenant-id TENANT --repo-id REPO --outputs-root /path/to/outputs tui
 ```
 
-- Uses a curses UI to navigate steps and evidence paths.
-- Press `v` to preview a text file (read-only).
+Uses **stdlib curses** only. If the terminal is too small, `TERM=dumb`, or stdin/stdout is not a TTY, the CLI prints a short message and falls back to a plain-text summary (same as when curses fails to initialize).
+
+| Keys | Action |
+|------|--------|
+| `↑` / `↓` | Move selection (steps or evidence list) or scroll the body (knowledge / profile) |
+| `Enter` | Open **evidence** view for the selected step |
+| `b` | Back to **steps** from evidence, knowledge, or profile |
+| `h` / `l` or `[` / `]` | Cycle modes: steps → evidence → knowledge → profile |
+| `/` | Edit a **substring filter** on step titles (Enter apply, Esc cancel) |
+| `n` / `N` | Next / previous step matching the current filter |
+| `o` / `p` | Jump to **knowledge** / **profile** |
+| `v` | **Fullscreen** text preview of the selected evidence file (then any key except arrows/PgUp/PgDn to close; arrows scroll) |
+| `,` / `.` | Scroll the **split** evidence preview pane |
+| `PgUp` / `PgDn` | Page scroll (body, preview, or fullscreen preview) |
+| `q` / `Esc` | Quit |
+
+In **evidence** mode, the pane is split (~40% list, ~60% live preview) so you can scan files without blocking on a separate preview screen. Status badges use color when the terminal supports it.
 
 ### Static web viewer (generated HTML)
 
@@ -52,6 +67,14 @@ uv run akc view --tenant-id TENANT --repo-id REPO --outputs-root /path/to/output
 uv run akc view --tenant-id TENANT --repo-id REPO --outputs-root /path/to/outputs web --out-dir ./viewer
 open ./viewer/index.html
 ```
+
+To serve the same bundle over HTTP on **127.0.0.1** only (optional; useful when the browser blocks `fetch` on `file://`), add **`--serve`** and optionally **`--port`** (default is an ephemeral port):
+
+```bash
+uv run akc view --tenant-id TENANT --repo-id REPO --outputs-root /path/to/outputs web --out-dir ./viewer --serve
+```
+
+Security and scope are documented in **`docs/viewer-trust-boundary.md`** (*Local HTTP serve*).
 
 If you omit **`--out-dir`**, the CLI writes under  
 `<outputs_root>/<tenant>/<repo>/.akc/viewer/web/<timestamp>/`.

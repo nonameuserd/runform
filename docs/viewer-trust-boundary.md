@@ -40,6 +40,17 @@ The viewer must remain **local-first** for artifact bytes:
 - no hosted execution mode by default;
 - no remote execution integration inside the OSS filesystem viewer.
 
+### Local HTTP serve (`akc view … web --serve`) — out-of-band helper
+
+`akc view … web --serve` is an **optional developer convenience**: after generating a static bundle, the CLI can start a **stdlib** HTTP server that serves **only** that bundle directory.
+
+- **Not a product surface for remote access.** The server binds **`127.0.0.1` only** (no LAN/WAN exposure from this mode). Do not use it as a substitute for the fleet operator dashboard or any authenticated service.
+- **Path confinement:** Requests are resolved under the bundle root; paths that escape the root (including via normalization) are not served.
+- **Response headers:** Responses include `X-Content-Type-Options: nosniff` to reduce MIME-sniffing risk for local browsing.
+- **Why it exists:** Some browsers restrict `fetch()` and related APIs on `file://` pages; serving the same files over `http://127.0.0.1:…` avoids that limitation when debugging the static viewer.
+
+Trust boundary unchanged: the helper **only serves files already written** to the bundle; it does not widen read scope beyond that directory or execute artifact content.
+
 ## Prohibited actions (out of scope)
 
 The viewer must not:
@@ -70,7 +81,7 @@ If a future viewer needs more capability, treat that as a **security boundary ch
 | Plan persistence (JSON + SQLite backends) | `src/akc/memory/plan_state.py` (`JsonFilePlanStateStore`, `SQLitePlanStateStore`) |
 | Viewer snapshot assembly | `src/akc/viewer/snapshot.py` (`load_viewer_snapshot`), `models.py` |
 | Operator panel discovery (read-only summaries) | `src/akc/viewer/control_panels.py` |
-| Static web / export bundles | `src/akc/viewer/web.py`, `export.py`, `tui.py` |
+| Static web / export bundles | `src/akc/viewer/web.py`, `export.py`, `tui.py`, `serve.py` (optional local HTTP helper for bundles) |
 | CLI entrypoint | `src/akc/cli/view.py` (`akc view`; optional `--plan-base-dir` for `.akc/plan` root) |
 | Output emission and `manifest.json` | `src/akc/outputs/emitters.py` (`JsonManifestEmitter`, under-root writes); compile path binds session + emitter in `src/akc/compile/session.py` |
 | Schema kinds used by the viewer | `manifest`, `plan_state` via `validate_obj` in `src/akc/artifacts/validate.py`; contract narrative in `docs/artifact-contracts.md` |
