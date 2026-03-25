@@ -441,7 +441,7 @@ jobs:
 
       - name: Install cosign (optional)
         if: vars.COSIGN_KEYLESS == 'true' || env.COSIGN_PRIVATE_KEY != ''
-        uses: sigstore/cosign-installer@d7f1a0c78d3cf34f2c9a0cb6fa4b3c41098c5c7f # v3.9.1
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
 
       - name: Cosign bundle (optional, keyless)
         if: vars.COSIGN_KEYLESS == 'true'
