@@ -490,8 +490,7 @@ def run_budgeted_generate_execute_repair_loop(
                 smoke_res.stage == smoke_stage_name
                 and int(exec_result.exit_code) == 5
                 and (
-                    "collected 0 items" in str(exec_result.stdout)
-                    or "no tests ran" in str(exec_result.stdout).lower()
+                    "collected 0 items" in str(exec_result.stdout) or "no tests ran" in str(exec_result.stdout).lower()
                 )
             ):
                 # pytest exit code 5 means "no tests collected". In constrained/sandboxed
@@ -580,8 +579,7 @@ def run_budgeted_generate_execute_repair_loop(
                 full_res.stage == full_stage_name
                 and int(exec_result.exit_code) == 5
                 and (
-                    "collected 0 items" in str(exec_result.stdout)
-                    or "no tests ran" in str(exec_result.stdout).lower()
+                    "collected 0 items" in str(exec_result.stdout) or "no tests ran" in str(exec_result.stdout).lower()
                 )
             ):
                 exec_result = ExecutionResult(

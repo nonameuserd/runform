@@ -108,4 +108,3 @@ def verify_akc_nuitka_data_includes(*, repo_root: Path) -> list[str]:
         if not item.src_dir.is_dir():
             errors.append(f"missing dir include source: {item.src_dir}")
     return errors
-
