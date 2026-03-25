@@ -35,6 +35,7 @@ from akc.living.automation_profile import LivingAutomationProfile, resolve_livin
 from akc.memory.models import PlanState, normalize_repo_id, normalize_tenant_id, require_non_empty
 from akc.outputs.drift import DriftFinding, drift_report, extend_drift_report, write_baseline, write_drift_artifacts
 from akc.outputs.fingerprints import IngestStateFingerprint, stable_json_fingerprint
+from akc.path_security import expanduser_resolve_trusted_invoker
 from akc.run.loader import find_latest_run_manifest, load_run_manifest
 from akc.run.recompile_triggers import (
     evaluate_recompile_triggers,
@@ -635,15 +636,15 @@ def safe_recompile_on_drift(
     tenant_id = normalize_tenant_id(str(tenant_id))
     repo_id = normalize_repo_id(str(repo_id))
     try:
-        outputs_root_p = Path(outputs_root).expanduser().resolve()
+        outputs_root_p = expanduser_resolve_trusted_invoker(outputs_root)
     except OSError as e:
         raise ValueError("invalid outputs_root") from e
-    ingest_state_p = Path(ingest_state_path).expanduser().resolve()
+    ingest_state_p = expanduser_resolve_trusted_invoker(ingest_state_path)
     if baseline_path is None:
         baseline_path_p = outputs_root_p / tenant_id / repo_id / ".akc" / "living" / "baseline.json"
     else:
         try:
-            baseline_path_p = Path(baseline_path).expanduser().resolve()
+            baseline_path_p = expanduser_resolve_trusted_invoker(baseline_path)
         except OSError as e:
             raise ValueError("invalid baseline_path") from e
         if not baseline_path_p.is_relative_to(outputs_root_p):
@@ -714,7 +715,7 @@ def safe_recompile_on_drift(
     )
     try:
         eval_suite_obj = _read_json_object(
-            Path(eval_suite_path).expanduser().resolve(),
+            expanduser_resolve_trusted_invoker(eval_suite_path),
             what="eval_suite",
         )
         maybe = eval_suite_obj.get("regression_thresholds")
@@ -997,7 +998,7 @@ def safe_recompile_on_drift(
     if canary_manifest_path is None:
         return 2
 
-    canary_manifest_abs = Path(canary_manifest_path).expanduser().resolve()
+    canary_manifest_abs = expanduser_resolve_trusted_invoker(canary_manifest_path)
     canary_suite: dict[str, Any] = {
         "suite_version": "living-canary-v1",
         "tasks": [

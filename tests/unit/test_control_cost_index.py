@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 from akc.control.cost_index import CostIndex, RunCostRecord
 
@@ -94,7 +95,13 @@ def test_cost_index_list_runs_orders_by_latest_upsert(tmp_path: Path, monkeypatc
     idx = CostIndex(sqlite_path=db)
 
     times = iter([1.0, 1.5, 2.0])
-    monkeypatch.setattr(cost_index_mod.time, "time", lambda: next(times))
+    # Patch only ``cost_index``'s ``time`` binding — replacing ``time.time`` on the
+    # stdlib module would affect sqlite/logging/pytest and exhaust this iterator.
+    monkeypatch.setattr(
+        cost_index_mod,
+        "time",
+        SimpleNamespace(time=lambda: next(times)),
+    )
 
     tenant_id = "t1"
     repo_id = "repo-a"

@@ -20,6 +20,8 @@ dependencies = [
     # Used by compile MCP adapter (AnyUrl) and other typed surfaces; must be core so
     # minimal images (`uv sync` without extras) still import the compile stack.
     "pydantic>=2.10",
+    # Windows terminals do not ship a stdlib `curses` module; this provides it.
+    "windows-curses>=2.4.0; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

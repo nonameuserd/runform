@@ -516,29 +516,36 @@ def run_compile_loop(
         deployable_intent = intent_declares_deployable_objective(intent=intent_spec)
         if auto_seed_deployable and profile_mode == "emerging" and deployable_intent:
             seeded_step_id = "step_emerging_bootstrap"
-            seeded_inputs: dict[str, Any] = {"intent_id": intent_id}
-            if plan_step_intent_ref is not None:
-                seeded_inputs["intent_ref"] = dict(plan_step_intent_ref)
+            existing = next((s for s in plan.steps if s.id == seeded_step_id), None)
+            if existing is not None:
+                # Resume the seeded step rather than duplicating it (id is stable).
+                plan = replace(plan, next_step_id=seeded_step_id, updated_at_ms=now_ms())
+                plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                step_id = seeded_step_id
             else:
-                seeded_inputs["active_objectives"] = list(active_objectives_for_steps)
-                seeded_inputs["linked_constraints"] = list(linked_constraints_for_steps)
-                seeded_inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
-            seeded_step = PlanStep(
-                id=seeded_step_id,
-                title="Implement intent",
-                status="pending",
-                order_idx=len(plan.steps),
-                inputs=seeded_inputs,
-                outputs={},
-            )
-            plan = replace(
-                plan,
-                steps=tuple(list(plan.steps) + [seeded_step]),
-                next_step_id=seeded_step_id,
-                updated_at_ms=now_ms(),
-            )
-            plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-            step_id = seeded_step_id
+                seeded_inputs: dict[str, Any] = {"intent_id": intent_id}
+                if plan_step_intent_ref is not None:
+                    seeded_inputs["intent_ref"] = dict(plan_step_intent_ref)
+                else:
+                    seeded_inputs["active_objectives"] = list(active_objectives_for_steps)
+                    seeded_inputs["linked_constraints"] = list(linked_constraints_for_steps)
+                    seeded_inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
+                seeded_step = PlanStep(
+                    id=seeded_step_id,
+                    title="Implement intent",
+                    status="pending",
+                    order_idx=len(plan.steps),
+                    inputs=seeded_inputs,
+                    outputs={},
+                )
+                plan = replace(
+                    plan,
+                    steps=tuple(list(plan.steps) + [seeded_step]),
+                    next_step_id=seeded_step_id,
+                    updated_at_ms=now_ms(),
+                )
+                plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                step_id = seeded_step_id
         else:
             if require_deployable_steps and deployable_intent:
                 fail_accounting: dict[str, Any] = {
