@@ -12,9 +12,7 @@ from akc.utils.fingerprint import stable_json_fingerprint
 TargetClass = str
 EnvironmentClass = str
 
-_DEPLOYABLE_NODE_KINDS: frozenset[str] = frozenset(
-    {"service", "integration", "infrastructure", "agent", "workflow"}
-)
+_DEPLOYABLE_NODE_KINDS: frozenset[str] = frozenset({"service", "integration", "infrastructure", "agent", "workflow"})
 _V1_ENVIRONMENTS: tuple[EnvironmentClass, EnvironmentClass, EnvironmentClass] = (
     "local",
     "staging",
@@ -266,9 +264,7 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                     "ui_prompt": {
                         "audience": "non_technical",
                         "title": "Public web address",
-                        "question": (
-                            "What DNS hostname should people use to reach the public part of this system?"
-                        ),
+                        "question": ("What DNS hostname should people use to reach the public part of this system?"),
                         "help_text": (
                             "You can enter a hostname such as app.example.com. "
                             "AKC stores this on the affected components in the compile model "
@@ -339,7 +335,7 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                         ),
                         "help_text": (
                             "Enter a path such as /healthz or /ready. This updates the component record in the "
-                            "compile model so probes and \"healthy\" checks match your app."
+                            'compile model so probes and "healthy" checks match your app.'
                         ),
                         "value_kind": "url_path",
                         "sensitive": False,
@@ -365,8 +361,7 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                     "reason": "Declared secret keys must exist in the platform secret store before remote deploy.",
                     "context": {
                         "secret_requirements_by_target": {
-                            tid: list(secret_names_by_target.get(tid, []))
-                            for tid in sorted(set(secrets_unacked_for))
+                            tid: list(secret_names_by_target.get(tid, [])) for tid in sorted(set(secrets_unacked_for))
                         },
                     },
                     "ui_prompt": {
@@ -406,8 +401,7 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                     "reason": "Declared non-secret environment keys need platform configuration before remote deploy.",
                     "context": {
                         "env_requirements_by_target": {
-                            tid: list(env_keys_by_target.get(tid, []))
-                            for tid in sorted(set(env_unacked_for))
+                            tid: list(env_keys_by_target.get(tid, [])) for tid in sorted(set(env_unacked_for))
                         },
                     },
                     "ui_prompt": {
@@ -448,9 +442,7 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                     "ui_prompt": {
                         "audience": "non_technical",
                         "title": "App store presence",
-                        "question": (
-                            "Which Apple/Google developer or store enrollment should mobile releases use?"
-                        ),
+                        "question": ("Which Apple/Google developer or store enrollment should mobile releases use?"),
                         "help_text": (
                             "Mobile packaging is modeled-only in this step; capturing the account ties future "
                             "store workflows to your org."
@@ -504,9 +496,7 @@ def build_delivery_plan(
             "secrets_provisioned_in_store": _as_bool(
                 node.properties.get("secrets_provisioned_in_store"), default=False
             ),
-            "env_config_provisioned": _as_bool(
-                node.properties.get("env_config_provisioned"), default=False
-            ),
+            "env_config_provisioned": _as_bool(node.properties.get("env_config_provisioned"), default=False),
         }
         targets.append(target)
 
@@ -657,9 +647,7 @@ def render_delivery_summary_markdown(*, run_id: str, delivery_plan: Mapping[str,
             readiness = bool(row.get("readiness_checks_required"))
             lines.append(f"### {env or 'environment'}")
             lines.append("")
-            lines.append(
-                f"- **Preferred runtime:** {pref_rt or '—'} — **default delivery path:** {pref_dp or '—'}."
-            )
+            lines.append(f"- **Preferred runtime:** {pref_rt or '—'} — **default delivery path:** {pref_dp or '—'}.")
             lines.append(
                 f"- **Human approvals:** {'required before changes apply' if approvals else 'not required by model'}."
             )
@@ -714,9 +702,7 @@ def render_delivery_summary_markdown(*, run_id: str, delivery_plan: Mapping[str,
     lines.append(
         "- **Staging:** typically fast feedback with direct apply; human approval gates are not required by default."
     )
-    lines.append(
-        "- **Local:** direct apply on a developer machine or local engine; no production-style approval gate."
-    )
+    lines.append("- **Local:** direct apply on a developer machine or local engine; no production-style approval gate.")
     lines.append("")
 
     reqs = delivery_plan.get("required_human_inputs")
@@ -765,9 +751,7 @@ def render_delivery_summary_markdown(*, run_id: str, delivery_plan: Mapping[str,
             if isinstance(ctx, Mapping):
                 sbt = ctx.get("secret_requirements_by_target")
                 if isinstance(sbt, Mapping) and sbt:
-                    lines.append(
-                        "  - **Secret names** (create in your org secret store; AKC only tracks names + ack):"
-                    )
+                    lines.append("  - **Secret names** (create in your org secret store; AKC only tracks names + ack):")
                     for comp_id in sorted(sbt.keys(), key=str):
                         raw_names = sbt.get(comp_id)
                         if isinstance(raw_names, Sequence) and not isinstance(raw_names, (str, bytes)):
@@ -775,19 +759,13 @@ def render_delivery_summary_markdown(*, run_id: str, delivery_plan: Mapping[str,
                         else:
                             labels = ""
                         disp = next(
-                            (
-                                _s(t.get("name"))
-                                for t in targets
-                                if _s(t.get("target_id")) == _s(comp_id)
-                            ),
+                            (_s(t.get("name")) for t in targets if _s(t.get("target_id")) == _s(comp_id)),
                             _s(comp_id),
                         )
                         lines.append(f"    - **{disp}** (`{_s(comp_id)}`): {labels or '—'}")
                 ebt = ctx.get("env_requirements_by_target")
                 if isinstance(ebt, Mapping) and ebt:
-                    lines.append(
-                        "  - **Non-secret env keys** (set values in your platform; AKC tracks names + ack):"
-                    )
+                    lines.append("  - **Non-secret env keys** (set values in your platform; AKC tracks names + ack):")
                     for comp_id in sorted(ebt.keys(), key=str):
                         raw_keys = ebt.get(comp_id)
                         if isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (str, bytes)):
@@ -795,11 +773,7 @@ def render_delivery_summary_markdown(*, run_id: str, delivery_plan: Mapping[str,
                         else:
                             labels = ""
                         disp = next(
-                            (
-                                _s(t.get("name"))
-                                for t in targets
-                                if _s(t.get("target_id")) == _s(comp_id)
-                            ),
+                            (_s(t.get("name")) for t in targets if _s(t.get("target_id")) == _s(comp_id)),
                             _s(comp_id),
                         )
                         lines.append(f"    - **{disp}** (`{_s(comp_id)}`): {labels or '—'}")

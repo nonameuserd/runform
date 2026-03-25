@@ -352,9 +352,7 @@ def test_run_deployment_config_pass_emits_hardened_configs() -> None:
     assert ".akc/deployment/compose/docker-compose.production.yml" in additional_paths
     assert ".akc/deployment/k8s/base/kustomization.yml" in additional_paths
     assert ".akc/deployment/k8s/secrets.yml" not in additional_paths
-    kustom_txt = next(
-        a.text() for a in res.additional_artifacts if a.path.endswith("k8s/base/kustomization.yml")
-    )
+    kustom_txt = next(a.text() for a in res.additional_artifacts if a.path.endswith("k8s/base/kustomization.yml"))
     assert "secrets.yml" not in kustom_txt
     assert res.metadata.get("k8s_secret_manifest_count") == 0
     assert ".akc/deployment/k8s/overlays/staging/kustomization.yml" in additional_paths

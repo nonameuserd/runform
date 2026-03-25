@@ -1416,9 +1416,7 @@ class CompileSession:
             }
             skills_active = result.accounting.get("compile_skills_active")
             if isinstance(skills_active, list):
-                generate_metadata["compile_skills_active"] = [
-                    dict(x) for x in skills_active if isinstance(x, dict)
-                ]
+                generate_metadata["compile_skills_active"] = [dict(x) for x in skills_active if isinstance(x, dict)]
             skills_mode = result.accounting.get("compile_skills_mode")
             if skills_mode is not None:
                 generate_metadata["compile_skills_mode"] = str(skills_mode)

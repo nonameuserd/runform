@@ -25,9 +25,7 @@ def _intent(tenant: str, repo: str) -> IntentSpecV1:
         goal_statement="Ship three-tier system",
         operating_bounds=OperatingBound(allow_network=False, max_output_tokens=256),
         policies=(PolicyRef(id="policy.net", source="security", requirement="egress"),),
-        success_criteria=(
-            SuccessCriterion(id="sc1", evaluation_mode="tests", description="tests"),
-        ),
+        success_criteria=(SuccessCriterion(id="sc1", evaluation_mode="tests", description="tests"),),
     )
 
 
@@ -197,9 +195,7 @@ def test_staging_compose_provider_ingests_bundle_with_delivery_handoff(tmp_path:
     )
     client = create_deployment_provider(bundle)
     assert isinstance(client, DockerComposeObserveProvider)
-    assert client.delivery_handoff_context.get("delivery_plan_ref", {}).get("path", "").endswith(
-        ".delivery_plan.json"
-    )
+    assert client.delivery_handoff_context.get("delivery_plan_ref", {}).get("path", "").endswith(".delivery_plan.json")
     assert client.compose_files == (
         ".akc/deployment/docker-compose.yml",
         ".akc/deployment/compose/docker-compose.staging.yml",

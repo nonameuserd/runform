@@ -130,14 +130,22 @@ def test_platform_build_spec_rejects_unsafe_delivery_id() -> None:
 def test_distribution_adapter_fake() -> None:
     ad = _FakeAdapter()
     assert ad.kind == "fake"
-    assert ad.preflight(project_dir=Path("."), tenant_id="t", repo_id="r", spec=PlatformBuildSpec(
-        tenant_id="t",
-        repo_id="r",
-        delivery_id="d1",
-        platform="web",
-        delivery_version="1",
-        release_lanes=("beta",),
-    )) == []
+    assert (
+        ad.preflight(
+            project_dir=Path("."),
+            tenant_id="t",
+            repo_id="r",
+            spec=PlatformBuildSpec(
+                tenant_id="t",
+                repo_id="r",
+                delivery_id="d1",
+                platform="web",
+                delivery_version="1",
+                release_lanes=("beta",),
+            ),
+        )
+        == []
+    )
 
 
 def test_create_delivery_session_loads_as_typed_models(

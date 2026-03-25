@@ -316,11 +316,7 @@ def test_selection_auto_includes_when_explicitly_allowlisted(tmp_path: Path) -> 
     skill_dir = tmp_path / ".akc" / "skills" / "manual_only"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\n"
-        "name: manual-only\n"
-        "description: x\n"
-        "disable-model-invocation: true\n"
-        "---\n\nBody.\n",
+        "---\nname: manual-only\ndescription: x\ndisable-model-invocation: true\n---\n\nBody.\n",
         encoding="utf-8",
     )
     cfg = ControllerConfig(

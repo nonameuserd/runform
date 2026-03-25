@@ -425,8 +425,7 @@ class DeliverySession:
         plat_list = _platforms_tuple(_as_list_str(d["platforms"], ctx="platforms"), ctx="platforms")
         pipe_raw = _as_mapping(d["pipeline"], ctx="pipeline")
         pipeline = {
-            k: PipelineStage.from_mapping(cast(Mapping[str, Any], v), ctx=f"pipeline.{k}")
-            for k, v in pipe_raw.items()
+            k: PipelineStage.from_mapping(cast(Mapping[str, Any], v), ctx=f"pipeline.{k}") for k, v in pipe_raw.items()
         }
         pp_raw = _as_mapping(d["per_platform"], ctx="per_platform")
         per_platform: dict[str, PlatformChannels] = {}

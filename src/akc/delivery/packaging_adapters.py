@@ -74,9 +74,7 @@ class BaseStubPackagingAdapter(PackagingAdapter):
 class WebBundlePackagingAdapter(BaseStubPackagingAdapter):
     """Deployable web / PWA output; URL binding happens in distribution/runtime substrate."""
 
-    _strict_reason = (
-        "web packaging: deploy target and static hosting binding are not configured (v1 stub)"
-    )
+    _strict_reason = "web packaging: deploy target and static hosting binding are not configured (v1 stub)"
 
     @property
     def lane(self) -> str:
@@ -124,9 +122,7 @@ class WebBundlePackagingAdapter(BaseStubPackagingAdapter):
 class IosBuildPackagingAdapter(BaseStubPackagingAdapter):
     """Archive, sign, export; upload is handled by distribution adapters (TestFlight / ASC)."""
 
-    _strict_reason = (
-        "iOS packaging: Xcode workspace, signing, and export options are not configured (v1 stub)"
-    )
+    _strict_reason = "iOS packaging: Xcode workspace, signing, and export options are not configured (v1 stub)"
 
     @property
     def lane(self) -> str:
@@ -170,9 +166,7 @@ class IosBuildPackagingAdapter(BaseStubPackagingAdapter):
 class AndroidBuildPackagingAdapter(BaseStubPackagingAdapter):
     """Sign APK/AAB; upload targets Firebase App Distribution / Play in distribution phase."""
 
-    _strict_reason = (
-        "Android packaging: Gradle bundle, signing, and artifact outputs are not configured (v1 stub)"
-    )
+    _strict_reason = "Android packaging: Gradle bundle, signing, and artifact outputs are not configured (v1 stub)"
 
     @property
     def lane(self) -> str:

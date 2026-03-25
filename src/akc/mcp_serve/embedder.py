@@ -38,6 +38,8 @@ def build_embedder(
         if api_key is None:
             raise ValueError("Gemini embedder requires --gemini-api-key or AKC_GEMINI_API_KEY")
         model = gemini_model or os.environ.get("AKC_GEMINI_EMBED_MODEL") or "text-embedding-004"
-        base_url = gemini_base_url or os.environ.get("AKC_GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com"
+        base_url = (
+            gemini_base_url or os.environ.get("AKC_GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com"
+        )
         return GeminiEmbedder(api_key=api_key, model=model, base_url=base_url)
     raise ValueError(f"Unknown embedder: {name!r}")

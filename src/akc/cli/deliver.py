@@ -450,7 +450,7 @@ def register_deliver_parsers(sub: Any) -> None:
         type=Path,
         default=None,
         help=(
-            "JSON {\"recipients\": [...]} / {\"emails\": [...]} or one email per line "
+            'JSON {"recipients": [...]} / {"emails": [...]} or one email per line '
             "(merged with --recipient; authoritative list)"
         ),
     )

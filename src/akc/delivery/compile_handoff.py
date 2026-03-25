@@ -135,11 +135,7 @@ def load_compile_handoff(*, project_dir: Path, compile_run_id: str | None) -> di
         }
 
     derived: dict[str, str] | None = None
-    if (
-        manifest.stable_intent_sha256
-        and manifest.intent_semantic_fingerprint
-        and manifest.intent_goal_text_fingerprint
-    ):
+    if manifest.stable_intent_sha256 and manifest.intent_semantic_fingerprint and manifest.intent_goal_text_fingerprint:
         derived = {
             "intent_id": rid,
             "stable_intent_sha256": manifest.stable_intent_sha256,

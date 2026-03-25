@@ -1275,10 +1275,7 @@ def run_runtime_bundle_pass(
                 "contract_id": node.contract.contract_id if node.contract is not None else None,
                 "target_class": (str(projected.get("target_class")) if isinstance(projected, Mapping) else "unknown"),
                 "environment_support": (
-                    sorted(
-                        str(k)
-                        for k in cast(dict[str, Any], projected.get("supported_delivery_paths", {}))
-                    )
+                    sorted(str(k) for k in cast(dict[str, Any], projected.get("supported_delivery_paths", {})))
                     if isinstance(projected, Mapping)
                     else ["local", "staging", "production"]
                 ),
@@ -2031,7 +2028,7 @@ def run_deployment_config_pass(
                         "name": "Publish image",
                         "run": "echo 'Publish ${IMAGE} using short-lived OIDC credentials'",
                         "env": {"IMAGE": image_name},
-                    }
+                    },
                 ],
             },
             "deploy_staging": {

@@ -63,9 +63,7 @@ def test_sanitize_outbound_header_value_strips_crlf_and_nul() -> None:
     assert _sanitize_outbound_header_value("ab\rc\nd\x00e") == "abcde"
 
 
-def test_cors_allow_origin_cannot_split_response_headers(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_cors_allow_origin_cannot_split_response_headers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "AKC_FLEET_CORS_ALLOW_ORIGIN",
         "http://evil.example\r\nX-Injected: 1",

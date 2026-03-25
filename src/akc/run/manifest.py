@@ -145,11 +145,7 @@ class McpReplayEvent:
             raise ValueError(f"mcp_replay_event.kind must be one of {ALLOWED_MCP_REPLAY_EVENT_KINDS}")
         action_raw = str(obj.get("action", "")).strip()
         if not action_raw:
-            action_raw = (
-                _DEFAULT_MCP_TOOL_CALL_ACTION
-                if kind_raw == "tool.call"
-                else _DEFAULT_MCP_RESOURCE_READ_ACTION
-            )
+            action_raw = _DEFAULT_MCP_TOOL_CALL_ACTION if kind_raw == "tool.call" else _DEFAULT_MCP_RESOURCE_READ_ACTION
         return McpReplayEvent(
             kind=cast(McpReplayEventKind, kind_raw),
             server=str(obj.get("server", "")),

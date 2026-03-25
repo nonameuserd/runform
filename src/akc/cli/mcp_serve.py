@@ -18,8 +18,7 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
         from akc.mcp_serve.runner import run_mcp_serve
     except ImportError as e:
         print(
-            "The `mcp` package is required for `akc mcp serve`. "
-            "Install with: uv sync --extra mcp-serve",
+            "The `mcp` package is required for `akc mcp serve`. Install with: uv sync --extra mcp-serve",
             file=sys.stderr,
         )
         print(str(e), file=sys.stderr)

@@ -482,12 +482,8 @@ def _migrate_ops_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_delivery_sessions_updated ON delivery_sessions(updated_at_ms)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_delivery_sessions_repo ON delivery_sessions(tenant_id, repo_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_sessions_updated ON delivery_sessions(updated_at_ms)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_sessions_repo ON delivery_sessions(tenant_id, repo_id)")
 
 
 def _pass_counts(manifest: RunManifest) -> tuple[int, int, int]:

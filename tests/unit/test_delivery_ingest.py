@@ -17,10 +17,7 @@ def test_load_recipients_from_file_json_and_lines(tmp_path: Path) -> None:
 
 
 def test_extract_app_goal_strips_send_tail() -> None:
-    assert (
-        ingest.extract_app_goal("build a dog walking app and send it to these 3 users")
-        == "build a dog walking app"
-    )
+    assert ingest.extract_app_goal("build a dog walking app and send it to these 3 users") == "build a dog walking app"
 
 
 def test_build_parsed_warns_when_text_mentions_platforms_not_on_cli() -> None:
