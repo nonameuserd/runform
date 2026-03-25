@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -133,6 +133,11 @@ def resolve_patch_candidate_from_prompt(
     repair_prompt_pass: IRRepairPromptPass,
     # NOTE: keep the signature compatible in one place; this is intentionally
     # long but explicit to preserve tenant isolation boundaries.
+    system_preamble: str | None = None,
+    skill_blocks: Sequence[str] | None = None,
+    skill_system_append: str | None = None,
+    compile_skills_active: Sequence[Mapping[str, Any]] | None = None,
+    compile_skills_mode: str | None = None,
     # user_prompt override for debugging is intentionally omitted.
 ) -> ModelCallNeeded | ResolvedPatch | None:
     # Build the user-facing prompt string via IR-first prompt passes.
@@ -179,6 +184,11 @@ def resolve_patch_candidate_from_prompt(
         replay_mode=replay_mode,
         temperature=float(temperature),
         max_output_tokens=int(max_output_tokens) if max_output_tokens is not None else None,
+        system_preamble=system_preamble,
+        skill_blocks=skill_blocks,
+        skill_system_append=skill_system_append,
+        compile_skills_active=compile_skills_active,
+        compile_skills_mode=compile_skills_mode,
     )
     llm_request: LLMRequest = envelope.llm_request
     prompt_key = envelope.prompt_key

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from akc.memory.models import normalize_repo_id, require_non_empty
+from akc.memory.models import normalize_repo_id, normalize_tenant_id
 from akc.run.manifest import RunManifest
 
 
@@ -26,10 +26,20 @@ def find_latest_run_manifest(
     tenant_id: str,
     repo_id: str,
 ) -> Path | None:
-    require_non_empty(tenant_id, name="tenant_id")
-    require_non_empty(repo_id, name="repo_id")
-    base = Path(outputs_root) / tenant_id / normalize_repo_id(repo_id) / ".akc" / "run"
-    if not base.exists():
+    try:
+        root = Path(outputs_root).expanduser().resolve()
+    except OSError:
         return None
-    files = sorted(base.glob("*.manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    tenant_seg = normalize_tenant_id(tenant_id)
+    repo_seg = normalize_repo_id(repo_id)
+    base = root / tenant_seg / repo_seg / ".akc" / "run"
+    try:
+        base_resolved = base.resolve()
+    except OSError:
+        return None
+    if not base_resolved.is_relative_to(root):
+        return None
+    if not base_resolved.exists():
+        return None
+    files = sorted(base_resolved.glob("*.manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     return files[0] if files else None

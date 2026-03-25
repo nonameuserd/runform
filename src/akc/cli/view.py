@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 from akc.viewer import ViewerInputs, load_viewer_snapshot
 from akc.viewer.export import export_bundle
+from akc.viewer.models import ViewerSnapshot
 from akc.viewer.web import build_static_viewer
+
+
+def _print_view_tui_text_fallback(snap: ViewerSnapshot) -> None:
+    """Plain-text plan summary when the curses TUI cannot run."""
+
+    plan = snap.plan
+    print(f"{plan.tenant_id}/{plan.repo_id} — {plan.status}")
+    print(plan.goal)
+    for s in sorted(plan.steps, key=lambda st: st.order_idx):
+        ev = snap.evidence.by_step.get(s.id, [])
+        print(f"- {s.status:>11}  {s.title}  (evidence={len(ev)})")
 
 
 def _default_out_dir(*, outputs_root: Path, tenant_id: str, repo_id: str, kind: str) -> Path:
@@ -30,24 +43,26 @@ def cmd_view(args: argparse.Namespace) -> int:
     sub = str(getattr(args, "view_command", "") or "")
     if sub == "tui":
         try:
-            from akc.viewer.tui import TuiError, run_tui
+            from akc.viewer.tui import TuiError, run_tui, tui_environment_ok
         except ModuleNotFoundError as e:
             print(f"ERROR: TUI viewer is unavailable on this platform: {e}")
             return 2
+        ok, reason = tui_environment_ok()
+        if not ok:
+            print(f"ERROR: TUI needs a capable terminal ({reason}). Showing text view instead.")
+            _print_view_tui_text_fallback(snap)
+            return 0
         try:
             return int(run_tui(snap))
         except TuiError as e:
             print(f"ERROR: {e}")
-            # Fallback: minimal text output
-            plan = snap.plan
-            print(f"{plan.tenant_id}/{plan.repo_id} — {plan.status}")
-            print(plan.goal)
-            for s in sorted(plan.steps, key=lambda st: st.order_idx):
-                ev = snap.evidence.by_step.get(s.id, [])
-                print(f"- {s.status:>11}  {s.title}  (evidence={len(ev)})")
+            _print_view_tui_text_fallback(snap)
             return 0
 
     if sub == "web":
+        if getattr(args, "serve_port", None) is not None and not bool(getattr(args, "serve", False)):
+            print("ERROR: --port requires --serve", file=sys.stderr)
+            return 2
         out_dir = (
             Path(args.out_dir).expanduser()
             if args.out_dir
@@ -61,6 +76,10 @@ def cmd_view(args: argparse.Namespace) -> int:
         web_res = build_static_viewer(snapshot=snap, out_dir=out_dir)
         print(f"Wrote static viewer: {web_res.index_html}")
         print(f"Copied evidence files: {web_res.copied_files}")
+        if bool(getattr(args, "serve", False)):
+            from akc.viewer.serve import serve_viewer_bundle
+
+            return int(serve_viewer_bundle(web_res.root, port=getattr(args, "serve_port", None)))
         return 0
 
     if sub == "export":

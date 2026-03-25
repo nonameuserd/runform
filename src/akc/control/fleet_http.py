@@ -4,6 +4,10 @@ Run listing merges per-shard ``operations.sqlite`` indexes; artifact bytes are n
 Bounded writes (e.g. run labels) map to the same mutations as the control CLI and append
 to :mod:`akc.control.control_audit`.
 
+**Delivery sessions:** ``GET /v1/deliveries`` and ``GET /v1/deliveries/<tenant>/<repo>/<delivery_id>``
+read merged ``delivery_sessions`` rows from the same per-tenant ``operations.sqlite`` indexes
+(artifact paths only; no compile/run replacement).
+
 For trace analytics, combine this discovery API with :mod:`akc.control.otel_export` files on
 the same ``outputs_root`` trees (Grafana/Loki/OTel collectors).
 
@@ -43,7 +47,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 from akc.control.control_audit import append_control_audit_event
 from akc.control.fleet_auth import auth_allows_tenant, fleet_read_auth_result, fleet_write_auth_result
 from akc.control.fleet_catalog import (
+    fleet_get_delivery,
     fleet_get_run,
+    fleet_list_deliveries_merged,
     fleet_list_runs_merged,
     fleet_resolve_label_write_shard,
 )
@@ -58,6 +64,21 @@ _WRITE_RATE_WINDOW_SECONDS = 60
 _WRITE_RATE_MAX_REQUESTS_PER_WINDOW = 30
 _IDEMPOTENCY_CACHE_TTL_SECONDS = 600
 _IDEMPOTENCY_CACHE_MAX_ENTRIES = 2000
+
+# Characters that must not appear in a single logical header line (response splitting / injection).
+_OUTBOUND_HEADER_STRIP = str.maketrans("", "", "\r\n\x00")
+
+
+def _sanitize_outbound_header_token(name: str) -> str:
+    """Strip CR/LF/NUL from header field-names before ``send_header``."""
+
+    return str(name).translate(_OUTBOUND_HEADER_STRIP)
+
+
+def _sanitize_outbound_header_value(value: str) -> str:
+    """Strip CR/LF/NUL from header field-values before ``send_header``."""
+
+    return str(value).translate(_OUTBOUND_HEADER_STRIP)
 
 
 def _stable_labels_etag(*, tenant_id: str, repo_id: str, run_id: str, labels: dict[str, str]) -> str:
@@ -97,9 +118,11 @@ def _cors_preflight_path_allowed(path: str) -> bool:
     if p == "/health":
         return True
     parts = [x for x in p.split("/") if x]
-    if len(parts) == 2 and parts[0] == "v1" and parts[1] == "runs":
+    if len(parts) == 2 and parts[0] == "v1" and parts[1] in ("runs", "deliveries"):
         return True
     if len(parts) == 5 and parts[0] == "v1" and parts[1] == "runs":
+        return True
+    if len(parts) == 5 and parts[0] == "v1" and parts[1] == "deliveries":
         return True
     return bool(len(parts) == 6 and parts[0] == "v1" and parts[1] == "runs" and parts[5] == "labels")
 
@@ -125,7 +148,7 @@ class FleetHTTPRequestHandler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, headers: dict[str, str]) -> None:
         self.send_response(status)
         for k, v in _headers_with_cors(headers).items():
-            self.send_header(k, v)
+            self.send_header(_sanitize_outbound_header_token(k), _sanitize_outbound_header_value(v))
         self.end_headers()
         self.wfile.write(body)
 
@@ -192,7 +215,7 @@ class FleetHTTPRequestHandler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         for k, v in _headers_with_cors({"Content-Length": "0"}).items():
-            self.send_header(k, v)
+            self.send_header(_sanitize_outbound_header_token(k), _sanitize_outbound_header_value(v))
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
@@ -283,7 +306,69 @@ class FleetHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send(st, body, hdrs)
             return
 
+        if path == "/v1/deliveries":
+            qs = parse_qs(parsed.query)
+            tenant_list = qs.get("tenant_id", [])
+            tenant_id = str(tenant_list[0]).strip() if tenant_list else ""
+            if not tenant_id:
+                st, body, hdrs = _json_bytes({"error": "tenant_id query parameter required"}, status=400)
+                self._send(st, body, hdrs)
+                return
+            if not auth_allows_tenant(ctx, tenant_id=tenant_id, cfg=cfg, enforce_allowlist=False):
+                st, body, hdrs = _json_bytes({"error": "tenant not allowed for this token"}, status=403)
+                self._send(st, body, hdrs)
+                return
+
+            repo_list = qs.get("repo_id", [])
+            repo_id = str(repo_list[0]).strip() if repo_list else None
+            if repo_id == "":
+                repo_id = None
+
+            def _opt_int_d(key: str) -> int | None:
+                v = qs.get(key, [])
+                if not v:
+                    return None
+                try:
+                    return int(str(v[0]).strip())
+                except ValueError:
+                    return None
+
+            limit_raw = qs.get("limit", ["50"])
+            try:
+                dlim = int(str(limit_raw[0]).strip()) if limit_raw else 50
+            except ValueError:
+                dlim = 50
+
+            deliveries = fleet_list_deliveries_merged(
+                cfg.shards,
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                since_ms=_opt_int_d("since_ms"),
+                until_ms=_opt_int_d("until_ms"),
+                limit=dlim,
+            )
+            st, body, hdrs = _json_bytes({"tenant_id": tenant_id, "deliveries": deliveries})
+            self._send(st, body, hdrs)
+            return
+
         parts = path.split("/")
+        # /v1/deliveries/<tenant>/<repo>/<delivery_id>
+        if len(parts) == 6 and parts[1] == "v1" and parts[2] == "deliveries":
+            tenant_id = unquote(parts[3])
+            repo_id = unquote(parts[4])
+            delivery_id = unquote(parts[5])
+            if not auth_allows_tenant(ctx, tenant_id=tenant_id, cfg=cfg, enforce_allowlist=False):
+                st, body, hdrs = _json_bytes({"error": "tenant not allowed for this token"}, status=403)
+                self._send(st, body, hdrs)
+                return
+            drow = fleet_get_delivery(cfg.shards, tenant_id=tenant_id, repo_id=repo_id, delivery_id=delivery_id)
+            if drow is None:
+                st, body, hdrs = _json_bytes({"error": "not_found"}, status=404)
+            else:
+                st, body, hdrs = _json_bytes({"delivery": drow})
+            self._send(st, body, hdrs)
+            return
+
         # /v1/runs/<tenant>/<repo>/<run_id>
         if len(parts) == 6 and parts[1] == "v1" and parts[2] == "runs":
             tenant_id = unquote(parts[3])

@@ -181,6 +181,37 @@ def _parse_tenant_allowlist_frozen(cli_value: str | None, env: Mapping[str, str]
     return frozenset(parts) if parts else frozenset({"*"})
 
 
+def _parse_living_webhook_outputs_root_allowlist(
+    *,
+    cli_value: str | None,
+    env: Mapping[str, str],
+    cwd: Path,
+    project_outputs_root: str | None,
+) -> frozenset[Path]:
+    """Filesystem roots that webhook payload ``outputs_root`` may resolve under."""
+
+    raw = (str(cli_value).strip() if cli_value is not None else "") or str(
+        env.get("AKC_LIVING_WEBHOOK_OUTPUTS_ROOT_ALLOWLIST", "") or ""
+    ).strip()
+    paths: list[Path] = []
+    if raw:
+        for part in raw.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            pp = Path(p)
+            paths.append((cwd / pp).resolve() if not pp.is_absolute() else pp.resolve())
+    elif project_outputs_root and str(project_outputs_root).strip():
+        pp = Path(str(project_outputs_root).strip())
+        paths.append((cwd / pp).resolve() if not pp.is_absolute() else pp.resolve())
+    if not paths:
+        raise SystemExit(
+            "Missing webhook outputs root allowlist: use --outputs-root-allowlist, set "
+            "AKC_LIVING_WEBHOOK_OUTPUTS_ROOT_ALLOWLIST, or set outputs_root in .akc/project.json"
+        )
+    return frozenset(paths)
+
+
 def cmd_living_webhook_serve(args: argparse.Namespace) -> int:
     """Run an HMAC-authenticated HTTP receiver that maps fleet webhook payloads to ``living_recompile_execute``."""
 
@@ -248,6 +279,12 @@ def cmd_living_webhook_serve(args: argparse.Namespace) -> int:
             raise SystemExit(f"failed to load custom llm backend: {e}") from e
 
     allowlist = _parse_tenant_allowlist_frozen(getattr(args, "tenant_allowlist", None), os.environ)
+    outputs_allow = _parse_living_webhook_outputs_root_allowlist(
+        cli_value=getattr(args, "outputs_root_allowlist", None),
+        env=os.environ,
+        cwd=cwd,
+        project_outputs_root=proj.outputs_root if proj is not None else None,
+    )
 
     eval_suite_s = str(getattr(args, "eval_suite_path", "configs/evals/intent_system_v1.json")).strip()
     eval_suite_p = Path(eval_suite_s)
@@ -260,6 +297,7 @@ def cmd_living_webhook_serve(args: argparse.Namespace) -> int:
         secret=secret,
         ingest_state_path=ingest_path,
         tenant_allowlist=allowlist,
+        outputs_root_allowlist=outputs_allow,
         living_automation_profile=living_profile,
         opa_policy_path=opa_policy_effective,
         opa_decision_path=opa_decision_effective,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://akc.dev/schemas/agent_coordination_spec.v1.json",
   "title": "AKC agent coordination spec (v1 schema id; spec_version 1–2)",
-  "description": "JSON Schema for agent coordination artifacts. The file id remains v1 for backward compatibility. Use spec_version: 2 or coordination_spec_version: 2 for reserved edge kinds (parallel, barrier, delegate, handoff). When both spec_version and coordination_spec_version are present, they must be equal. Normative lowering and determinism: docs/coordination-semantics.md.",
+  "description": "JSON Schema for agent coordination artifacts. The file id remains v1 for backward compatibility. Use spec_version: 2 or coordination_spec_version: 2 for reserved edge kinds (parallel, barrier, delegate, handoff). When both spec_version and coordination_spec_version are present, they must be equal. Scheduling implementations: Python akc.coordination.models (parse_coordination_obj, CoordinationScheduler, schedule_coordination_layers), optional re-export akc.runtime.coordination.models; TypeScript src/akc/coordination/static/coordination_sdk.ts; CLI akc runtime coordination-plan. After lowering reserved kinds to precedence, multiple edges that share the same (src_step_id, dst_step_id) collapse to a single precedence arc for topological layering; schedule outputs may record merged provenance in lowered_precedence_edges. Normative rules for lowering, deduplication, determinism, and errors: docs/coordination-semantics.md.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -32,6 +32,7 @@
     "repo_id": { "type": "string", "minLength": 1 },
     "coordination_graph": {
       "type": "object",
+      "description": "Directed coordination graph. Scheduling semantics: step set, lowering, deduplication of (src_step_id, dst_step_id) precedence arcs, deterministic Kahn layers — docs/coordination-semantics.md.",
       "required": ["nodes", "edges"],
       "properties": {
         "nodes": {
@@ -57,7 +58,7 @@
               "edge_id": { "type": "string" },
               "kind": {
                 "type": "string",
-                "description": "v1: depends_on. v2: depends_on | parallel | barrier | delegate | handoff (all v2 kinds lower to precedence for layer scheduling; see docs/coordination-semantics.md)."
+                "description": "v1: depends_on. v2: depends_on | parallel | barrier | delegate | handoff (all v2 kinds lower to precedence for layer scheduling). Multiple edges with the same ordered pair (src_step_id, dst_step_id) merge to one precedence arc for layering. See docs/coordination-semantics.md."
               },
               "src_step_id": { "type": "string" },
               "dst_step_id": { "type": "string" },

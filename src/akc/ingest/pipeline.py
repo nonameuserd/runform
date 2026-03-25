@@ -24,6 +24,7 @@ from akc.compile.rust_bridge import RustExecConfig
 from akc.ingest.chunking import ChunkingConfig, chunk_documents, normalize_documents
 from akc.ingest.connectors.base import Connector
 from akc.ingest.connectors.docs import build_docs_connector
+from akc.ingest.connectors.mcp.connector import build_mcp_connector, mcp_incremental_can_skip
 from akc.ingest.connectors.messaging.slack import build_slack_connector
 from akc.ingest.connectors.openapi import build_openapi_connector
 from akc.ingest.embedding import Embedder, embed_documents
@@ -34,7 +35,7 @@ from akc.memory.models import normalize_repo_id
 
 logger = logging.getLogger(__name__)
 
-ConnectorName = Literal["docs", "openapi", "slack"]
+ConnectorName = Literal["docs", "openapi", "slack", "mcp"]
 IndexBackend = Literal["memory", "sqlite", "pgvector"]
 
 
@@ -154,6 +155,25 @@ def _get_connector(
             max_answers=max_answers,
             include_bot_answers=include_bot_answers,
         )
+    if connector == "mcp":
+        opts_m: dict[str, str] = dict(connector_options or {})
+        cfg_path = opts_m.get("mcp_config_path") or ".akc/mcp-ingest.json"
+        uri_prefix = opts_m.get("mcp_uri_prefix") or None
+        static_prompt = opts_m.get("mcp_static_prompt") or None
+        timeout_raw = opts_m.get("mcp_timeout_s", "120")
+        try:
+            timeout_parsed = float(timeout_raw)
+        except ValueError:
+            timeout_parsed = 120.0
+        timeout_s: float | None = None if timeout_parsed <= 0 else timeout_parsed
+        return build_mcp_connector(
+            tenant_id=tenant_id,
+            input_value=input_value,
+            config_path=cfg_path,
+            uri_prefix=uri_prefix,
+            static_prompt=static_prompt,
+            timeout_s=timeout_s,
+        )
     raise ValueError(f"unknown connector: {connector}")
 
 
@@ -216,6 +236,12 @@ def _fingerprint_source(connector: Connector, source_id: str) -> dict[str, Any]:
             "size": int(st.st_size),
         }
 
+    if connector.source_type == "mcp":
+        list_fp = getattr(connector, "listing_fingerprint", None)
+        if callable(list_fp):
+            return dict(list_fp(source_id))
+        return {"kind": "mcp", "server_id": getattr(connector, "server_id", ""), "source_id": source_id}
+
     return {"kind": connector.source_type, "source_id": source_id}
 
 
@@ -226,6 +252,7 @@ def _state_key(*, tenant_id: str, connector_name: str, source_id: str) -> str:
 
 def _should_skip(
     *,
+    connector: Connector,
     previous_state: Mapping[str, Any],
     key: str,
     fingerprint: Mapping[str, Any],
@@ -236,6 +263,8 @@ def _should_skip(
     prev = previous_state.get(key)
     if not isinstance(prev, dict):
         return False
+    if connector.source_type == "mcp":
+        return mcp_incremental_can_skip(prev, fingerprint)
     # Dict equality is stable for JSON-loaded objects.
     return dict(prev) == dict(fingerprint)
 
@@ -295,7 +324,13 @@ def run_ingest(
         sources_seen += 1
         fp = _fingerprint_source(connector, source_id)
         key = _state_key(tenant_id=tenant_id, connector_name=connector_name, source_id=source_id)
-        if _should_skip(previous_state=state, key=key, fingerprint=fp, allow_incremental=incremental):
+        if _should_skip(
+            connector=connector,
+            previous_state=state,
+            key=key,
+            fingerprint=fp,
+            allow_incremental=incremental,
+        ):
             sources_skipped += 1
             continue
         chunked: list[Any] | None = None
@@ -333,6 +368,11 @@ def run_ingest(
                     _source_error(source_id, e)
                     continue
                 raise
+
+            if connector.source_type == "mcp":
+                fin = getattr(connector, "finalize_fingerprint_after_fetch", None)
+                if callable(fin):
+                    fp = dict(fin(fp, docs))
 
             documents_fetched += len(docs)
 

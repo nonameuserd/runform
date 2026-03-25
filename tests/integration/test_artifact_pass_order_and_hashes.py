@@ -72,6 +72,10 @@ def test_seeded_compile_manifest_artifact_pass_order_matches_registry(
         hashes = md.get("artifact_hashes")
         assert isinstance(paths, list) and paths
         assert isinstance(hashes, dict)
+        if pass_name == "delivery_plan":
+            joined = " ".join(str(p) for p in paths)
+            assert ".delivery_plan.json" in joined
+            assert ".delivery_summary.md" in joined
         for rel in paths:
             rel_s = str(rel).strip()
             assert rel_s in out_hashes

@@ -9,6 +9,7 @@ from akc.compile import Budget, CompileSession, ControllerConfig, TierConfig
 from akc.compile.controller import ControllerResult
 from akc.compile.executors import SubprocessExecutor
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.pass_registry import ARTIFACT_PASS_ORDER
 from akc.run import RunManifest
 
 
@@ -150,17 +151,8 @@ def test_compile_session_run_integration_light_uses_isolated_workdir(tmp_path: P
     t1_run_manifest_obj = json.loads(t1_run_manifest_files[0].read_text(encoding="utf-8"))
     pass_names = [str(p.get("name", "")) for p in t1_run_manifest_obj.get("passes", [])]
     assert "deployment_config" in pass_names
-    artifact_pass_names = [
-        name
-        for name in pass_names
-        if name in {"system_design", "orchestration_spec", "agent_coordination", "deployment_config"}
-    ]
-    assert artifact_pass_names == [
-        "system_design",
-        "orchestration_spec",
-        "agent_coordination",
-        "deployment_config",
-    ]
+    artifact_pass_names = [name for name in pass_names if name in ARTIFACT_PASS_ORDER]
+    assert artifact_pass_names == list(ARTIFACT_PASS_ORDER)
     pass_by_name = {str(pass_obj.get("name", "")): pass_obj for pass_obj in t1_run_manifest_obj.get("passes", [])}
     for artifact_pass in artifact_pass_names:
         md = pass_by_name[artifact_pass].get("metadata", {})
@@ -170,29 +162,17 @@ def test_compile_session_run_integration_light_uses_isolated_workdir(tmp_path: P
         for artifact_path, digest in md["artifact_hashes"].items():
             assert t1_run_manifest_obj["output_hashes"][artifact_path] == digest
     trace_span_names = {str(span.get("name", "")) for span in t1_run_manifest_obj.get("trace_spans", [])}
-    assert {
-        "compile.artifact.system_design",
-        "compile.artifact.orchestration_spec",
-        "compile.artifact.agent_coordination",
-        "compile.artifact.runtime_bundle",
-        "compile.artifact.deployment_config",
-    }.issubset(trace_span_names)
+    assert {f"compile.artifact.{n}" for n in ARTIFACT_PASS_ORDER}.issubset(trace_span_names)
 
     bundle_manifest_obj = json.loads((tmp_path / "t1" / "repo1" / "manifest.json").read_text(encoding="utf-8"))
     artifact_pass_md = bundle_manifest_obj.get("metadata", {}).get("artifact_passes", {})
-    assert artifact_pass_md.get("order") == [
-        "system_design",
-        "orchestration_spec",
-        "agent_coordination",
-        "runtime_bundle",
-        "deployment_config",
-    ]
+    assert artifact_pass_md.get("order") == list(ARTIFACT_PASS_ORDER)
     assert artifact_pass_md.get("groups", {}).get("specs") == [
         "system_design",
         "orchestration_spec",
         "agent_coordination",
     ]
-    assert artifact_pass_md.get("groups", {}).get("deployment_configs") == ["deployment_config"]
+    assert artifact_pass_md.get("groups", {}).get("deployment_configs") == ["delivery_plan", "deployment_config"]
     assert isinstance(artifact_pass_md.get("output_hashes"), dict)
 
     # IntentStore integration: active intent pointers should be scoped tenant+repo.
@@ -371,6 +351,8 @@ def test_compile_session_full_replay_reuses_artifact_pass_outputs(
     monkeypatch.setattr("akc.compile.session.run_system_design_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_orchestration_spec_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_agent_coordination_pass", _unexpected)
+    monkeypatch.setattr("akc.compile.session.run_delivery_plan_pass", _unexpected)
+    monkeypatch.setattr("akc.compile.session.run_runtime_bundle_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_deployment_config_pass", _unexpected)
 
     replay_result = replay.run(
@@ -393,6 +375,8 @@ def test_compile_session_full_replay_reuses_artifact_pass_outputs(
         "system_design",
         "orchestration_spec",
         "agent_coordination",
+        "delivery_plan",
+        "runtime_bundle",
         "deployment_config",
     ):
         metadata = by_name[pass_name].get("metadata", {})

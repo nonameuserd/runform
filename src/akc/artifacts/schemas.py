@@ -13,6 +13,13 @@ SchemaKind = Literal[
     "operational_assurance_result",
     "operational_evidence_window",
     "runtime_bundle",
+    "delivery_plan",
+    "delivery_request",
+    "delivery_session",
+    "delivery_recipients",
+    "delivery_events",
+    "delivery_provider_state",
+    "delivery_activation_evidence",
     "runtime_evidence_stream",
     "run_trace_spans",
     "run_cost_attribution",
@@ -507,6 +514,677 @@ RUNTIME_BUNDLE_V4: Final[dict[str, Any]] = {
 # Default schema_version for newly emitted runtime bundles (compile/runtime handoff).
 RUNTIME_BUNDLE_SCHEMA_VERSION: Final[int] = 4
 
+# Structured questions for non-technical / guided UIs: only `status: "missing"` rows are emitted
+# today; bindings point at IR properties so re-compile stays authoritative (no parallel plan model).
+_DELIVERY_PLAN_UI_PROMPT_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "audience": {
+            "type": "string",
+            "description": "Who the copy is written for (UI may vary tone).",
+            "enum": ["non_technical", "operator", "developer"],
+        },
+        "title": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1},
+        "help_text": {"type": "string"},
+        "value_kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque hint for input widgets (e.g. hostname, url_path).",
+        },
+        "sensitive": {"type": "boolean"},
+    },
+    "required": ["audience", "title", "question", "value_kind", "sensitive"],
+}
+
+_DELIVERY_PLAN_ANSWER_BINDING_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "kind": {
+            "type": "string",
+            "description": "Where answers are written on re-ingest / re-compile.",
+            "enum": ["ir_node_property"],
+        },
+        "property": {"type": "string", "minLength": 1},
+        "scope": {
+            "type": "string",
+            "enum": ["listed_targets", "repo", "tenant"],
+        },
+        "target_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+    "required": ["kind", "property", "scope"],
+}
+
+_DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {
+            "type": "string",
+            "description": "Emit step lists only missing items; satisfied rows are omitted.",
+            "enum": ["missing", "satisfied"],
+        },
+        "blocking_for": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "description": "Environments where this gap blocks promotion-style rollout.",
+        },
+        "reason": {"type": "string"},
+        "ask_order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Stable ordering for question wizards (lower first).",
+        },
+        "context": {
+            "type": "object",
+            "additionalProperties": True,
+            "description": "UI-only detail (e.g. secret name lists); compile remains driven by IR + plan JSON.",
+        },
+        "ui_prompt": _DELIVERY_PLAN_UI_PROMPT_V1,
+        "answer_binding": _DELIVERY_PLAN_ANSWER_BINDING_V1,
+    },
+    "required": ["id", "status", "ui_prompt", "answer_binding"],
+}
+
+DELIVERY_PLAN_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_plan", version=1),
+    "title": "AKC delivery plan",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_plan"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "inputs_fingerprint": {"type": "string", "minLength": 1},
+        "targets": {"type": "array", "items": {"type": "object"}},
+        "environments": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "environment_model": {"type": "array", "items": {"type": "object"}},
+        "delivery_paths": {"type": "object"},
+        "operational_profiles": {"type": "object"},
+        "required_human_inputs": {
+            "type": "array",
+            "items": _DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1,
+        },
+        "promotion_readiness": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "status": {"type": "string", "enum": ["ready", "blocked"]},
+                "blocking_inputs": {"type": "array", "items": {"type": "string"}},
+                "promotion_blockers": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "description": "Human input ids plus compile-time gates (e.g. production_manual_approval_gate).",
+                },
+                "production_manual_approval_required": {
+                    "type": "boolean",
+                    "description": "True when the production environment model requires manual approval before deploy.",
+                },
+                "is_promotion_ready": {"type": "boolean"},
+                "default_promotion_environment": {"type": "string", "minLength": 1},
+            },
+            "required": ["status"],
+        },
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "targets",
+        "environments",
+        "delivery_paths",
+        "required_human_inputs",
+        "promotion_readiness",
+    ],
+}
+
+
+_DELIVERY_REQUEST_PARSED_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "app_goal": {"type": "string", "minLength": 1},
+        "requested_platforms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "delivery_mode": {"type": "string", "enum": ["beta", "store", "both"]},
+        "recipient_set": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+        },
+        "release_lanes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": ["beta", "store"]},
+        },
+        "request_mentions_platforms": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+    "required": [
+        "app_goal",
+        "requested_platforms",
+        "delivery_mode",
+        "recipient_set",
+        "release_lanes",
+    ],
+}
+
+DELIVERY_REQUEST_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_request", version=1),
+    "title": "AKC named-recipient delivery request (input artifact)",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_request"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "request_text": {"type": "string", "minLength": 1},
+        "platforms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "recipients": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+        },
+        "release_mode": {"type": "string", "enum": ["beta", "store", "both"]},
+        "app_stack": {"type": "string", "minLength": 1},
+        "delivery_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Logical semver (or semver-like) version for the session; drives platform build numbers.",
+        },
+        "derived_intent_ref": {"anyOf": [{"type": "null"}, _INTENT_REF_SCHEMA]},
+        "required_accounts": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+        },
+        "parsed": _DELIVERY_REQUEST_PARSED_V1,
+        "required_human_inputs": {
+            "type": "array",
+            "items": _DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1,
+        },
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "request_text",
+        "platforms",
+        "recipients",
+        "release_mode",
+        "app_stack",
+        "delivery_version",
+        "derived_intent_ref",
+        "required_accounts",
+        "parsed",
+        "required_human_inputs",
+        "created_at_unix_ms",
+    ],
+}
+
+
+_DELIVERY_PIPELINE_STAGE_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "skipped",
+                "blocked",
+            ],
+        },
+        "started_at_unix_ms": {"type": ["integer", "null"], "minimum": 0},
+        "completed_at_unix_ms": {"type": ["integer", "null"], "minimum": 0},
+        "error": {"type": ["string", "null"]},
+        "run_id": {"type": ["string", "null"]},
+    },
+    "required": ["status"],
+}
+
+_DELIVERY_CHANNEL_STATE_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "not_applicable",
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "skipped",
+                "blocked",
+            ],
+        },
+        "details": {"type": "object"},
+    },
+    "required": ["status"],
+}
+
+_DELIVERY_PLATFORM_CHANNELS_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "channels": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "beta": _DELIVERY_CHANNEL_STATE_V1,
+                "store": _DELIVERY_CHANNEL_STATE_V1,
+            },
+            "required": ["beta", "store"],
+        },
+    },
+    "required": ["channels"],
+}
+
+_DELIVERY_RECIPIENT_ACTIVATION_PROOF_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["pending", "partial", "satisfied", "blocked"],
+        },
+        "provider_proof": {
+            "type": "string",
+            "enum": ["pending", "satisfied", "not_applicable"],
+        },
+        "app_proof": {"type": "string", "enum": ["pending", "satisfied"]},
+    },
+    "required": ["status", "provider_proof", "app_proof"],
+}
+
+_DELIVERY_PER_RECIPIENT_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["pending", "invited", "installed", "active", "failed", "blocked"],
+        },
+        "invite_token_id": {"type": ["string", "null"]},
+        "platforms": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "activation_proof": _DELIVERY_RECIPIENT_ACTIVATION_PROOF_V1,
+    },
+    "required": ["status", "invite_token_id", "activation_proof"],
+}
+
+_DELIVERY_STORE_PLATFORM_LANE_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "not_applicable",
+                "pending",
+                "in_progress",
+                "submitted",
+                "live",
+                "failed",
+                "blocked",
+            ],
+        },
+        "external_ref": {"type": ["string", "null"]},
+        "notes": {"type": ["string", "null"]},
+    },
+    "required": ["status"],
+}
+
+_DELIVERY_SESSION_STORE_RELEASE_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "pending",
+                "promotion_requested",
+                "in_progress",
+                "submitted",
+                "live",
+                "failed",
+                "blocked",
+            ],
+        },
+        "active_promotion_lane": {
+            "anyOf": [{"type": "null"}, {"type": "string", "enum": ["beta", "store"]}],
+        },
+        "last_promotion_requested_at_unix_ms": {"type": ["integer", "null"], "minimum": 0},
+        "ios": _DELIVERY_STORE_PLATFORM_LANE_V1,
+        "android": _DELIVERY_STORE_PLATFORM_LANE_V1,
+    },
+    "required": ["status", "active_promotion_lane", "ios", "android"],
+}
+
+_DELIVERY_SESSION_ACTIVATION_PROOF_ROLLUP_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["pending", "partial", "complete", "blocked"],
+        },
+        "recipients_total": {"type": "integer", "minimum": 0},
+        "recipients_provider_satisfied": {"type": "integer", "minimum": 0},
+        "recipients_fully_satisfied": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "status",
+        "recipients_total",
+        "recipients_provider_satisfied",
+        "recipients_fully_satisfied",
+    ],
+}
+
+DELIVERY_SESSION_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_session", version=1),
+    "title": "AKC named-recipient delivery session (control-plane artifact)",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_session"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "session_phase": {
+            "type": "string",
+            "enum": [
+                "accepted",
+                "compiling",
+                "building",
+                "packaging",
+                "distributing",
+                "releasing",
+                "completed",
+                "failed",
+                "blocked",
+            ],
+        },
+        "release_mode": {"type": "string", "enum": ["beta", "store", "both"]},
+        "platforms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "compile_run_id": {"type": ["string", "null"]},
+        "delivery_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Same logical version as delivery_request.delivery_version for this session.",
+        },
+        "pipeline": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "compile": _DELIVERY_PIPELINE_STAGE_V1,
+                "build": _DELIVERY_PIPELINE_STAGE_V1,
+                "package": _DELIVERY_PIPELINE_STAGE_V1,
+                "distribution": _DELIVERY_PIPELINE_STAGE_V1,
+                "release": _DELIVERY_PIPELINE_STAGE_V1,
+            },
+            "required": ["compile", "build", "package", "distribution", "release"],
+        },
+        "per_platform": {
+            "type": "object",
+            "propertyNames": {"pattern": "^(web|ios|android)$"},
+            "additionalProperties": _DELIVERY_PLATFORM_CHANNELS_V1,
+        },
+        "per_recipient": {
+            "type": "object",
+            "propertyNames": {"pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+            "additionalProperties": _DELIVERY_PER_RECIPIENT_V1,
+        },
+        "activation_proof": _DELIVERY_SESSION_ACTIVATION_PROOF_ROLLUP_V1,
+        "store_release": _DELIVERY_SESSION_STORE_RELEASE_V1,
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+        "updated_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "session_phase",
+        "release_mode",
+        "platforms",
+        "compile_run_id",
+        "delivery_version",
+        "pipeline",
+        "per_platform",
+        "per_recipient",
+        "activation_proof",
+        "store_release",
+        "created_at_unix_ms",
+        "updated_at_unix_ms",
+    ],
+}
+
+
+_DELIVERY_SIDE_CAR_RECIPIENT_ROW_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "email": {"type": "string", "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+        "platforms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        },
+        "invite_token_id": {"type": ["string", "null"]},
+        "status": {
+            "type": "string",
+            "enum": ["pending", "invited", "installed", "active", "failed", "blocked"],
+        },
+        "last_invite_sent_at_unix_ms": {"type": ["integer", "null"], "minimum": 0},
+        "resend_count": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "email",
+        "platforms",
+        "invite_token_id",
+        "status",
+        "last_invite_sent_at_unix_ms",
+        "resend_count",
+    ],
+}
+
+DELIVERY_RECIPIENTS_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_recipients", version=1),
+    "title": "AKC delivery per-recipient sidecar (invite / resend bookkeeping)",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_recipients"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "recipients": {
+            "type": "object",
+            "propertyNames": {"pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+            "additionalProperties": _DELIVERY_SIDE_CAR_RECIPIENT_ROW_V1,
+        },
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+        "updated_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "recipients",
+        "created_at_unix_ms",
+        "updated_at_unix_ms",
+    ],
+}
+
+_DELIVERY_EVENT_ROW_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "schema": {"type": "string", "minLength": 1},
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "event_type": {"type": "string", "minLength": 1},
+        "occurred_at_unix_ms": {"type": "integer", "minimum": 0},
+        "payload": {"type": "object"},
+    },
+    "required": ["event_type", "occurred_at_unix_ms", "payload"],
+}
+
+DELIVERY_EVENTS_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_events", version=1),
+    "title": "AKC delivery event log sidecar",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_events"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "events": {
+            "type": "array",
+            "items": _DELIVERY_EVENT_ROW_V1,
+        },
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+        "updated_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "events",
+        "created_at_unix_ms",
+        "updated_at_unix_ms",
+    ],
+}
+
+_DELIVERY_PROVIDER_PLATFORM_ROW_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "not_applicable",
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "skipped",
+                "blocked",
+            ],
+        },
+        "adapter_kind": {"type": ["string", "null"]},
+        "external_refs": {"type": "object"},
+        "details": {"type": "object"},
+        "last_error": {"type": ["string", "null"]},
+        "last_updated_at_unix_ms": {"type": ["integer", "null"], "minimum": 0},
+    },
+    "required": ["status"],
+}
+
+DELIVERY_PROVIDER_STATE_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_provider_state", version=1),
+    "title": "AKC delivery per-platform provider adapter state sidecar",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_provider_state"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "platforms": {
+            "type": "object",
+            "propertyNames": {"pattern": "^(web|ios|android)$"},
+            "additionalProperties": _DELIVERY_PROVIDER_PLATFORM_ROW_V1,
+        },
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+        "updated_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "platforms",
+        "created_at_unix_ms",
+        "updated_at_unix_ms",
+    ],
+}
+
+_DELIVERY_ACTIVATION_EVIDENCE_RECORD_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "record_id": {"type": "string", "minLength": 1},
+        "recipient_email": {
+            "type": "string",
+            "pattern": r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        },
+        "recipient_token_id": {"type": ["string", "null"]},
+        "platform": {"type": "string", "enum": sorted(["web", "ios", "android"])},
+        "evidence_kind": {
+            "type": "string",
+            "enum": [
+                "provider_install",
+                "app_first_run",
+                "heartbeat",
+                "invite_opened",
+                "other",
+            ],
+        },
+        "occurred_at_unix_ms": {"type": "integer", "minimum": 0},
+        "payload": {"type": "object"},
+    },
+    "required": [
+        "record_id",
+        "recipient_email",
+        "platform",
+        "evidence_kind",
+        "occurred_at_unix_ms",
+        "payload",
+    ],
+}
+
+DELIVERY_ACTIVATION_EVIDENCE_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="delivery_activation_evidence", version=1),
+    "title": "AKC delivery activation evidence ledger (provider + app proofs)",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="delivery_activation_evidence"),
+        "delivery_id": {"type": "string", "pattern": r"^[a-zA-Z0-9_.-]+$"},
+        "records": {
+            "type": "array",
+            "items": _DELIVERY_ACTIVATION_EVIDENCE_RECORD_V1,
+        },
+        "created_at_unix_ms": {"type": "integer", "minimum": 0},
+        "updated_at_unix_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "delivery_id",
+        "records",
+        "created_at_unix_ms",
+        "updated_at_unix_ms",
+    ],
+}
+
 
 _TRACE_SPAN_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
@@ -678,6 +1356,10 @@ RUNTIME_EVIDENCE_STREAM_V1: Final[dict[str, Any]] = {
                     "policy_mode",
                     "converged",
                 ],
+            ),
+            _runtime_evidence_item_schema(
+                evidence_type="delivery_lifecycle",
+                required_payload_keys=["event"],
             ),
         ]
     },
@@ -1169,6 +1851,34 @@ def get_schema(*, kind: SchemaKind, version: int = ARTIFACT_SCHEMA_VERSION) -> d
         if int(version) == 4:
             return RUNTIME_BUNDLE_V4
         raise ValueError(f"unsupported runtime_bundle schema version: {version}")
+    if kind == "delivery_plan":
+        if int(version) == 1:
+            return DELIVERY_PLAN_V1
+        raise ValueError(f"unsupported delivery_plan schema version: {version}")
+    if kind == "delivery_request":
+        if int(version) == 1:
+            return DELIVERY_REQUEST_V1
+        raise ValueError(f"unsupported delivery_request schema version: {version}")
+    if kind == "delivery_session":
+        if int(version) == 1:
+            return DELIVERY_SESSION_V1
+        raise ValueError(f"unsupported delivery_session schema version: {version}")
+    if kind == "delivery_recipients":
+        if int(version) == 1:
+            return DELIVERY_RECIPIENTS_V1
+        raise ValueError(f"unsupported delivery_recipients schema version: {version}")
+    if kind == "delivery_events":
+        if int(version) == 1:
+            return DELIVERY_EVENTS_V1
+        raise ValueError(f"unsupported delivery_events schema version: {version}")
+    if kind == "delivery_provider_state":
+        if int(version) == 1:
+            return DELIVERY_PROVIDER_STATE_V1
+        raise ValueError(f"unsupported delivery_provider_state schema version: {version}")
+    if kind == "delivery_activation_evidence":
+        if int(version) == 1:
+            return DELIVERY_ACTIVATION_EVIDENCE_V1
+        raise ValueError(f"unsupported delivery_activation_evidence schema version: {version}")
     if int(version) != 1:
         raise ValueError(f"unsupported schema version: {version}")
     if kind == "manifest":

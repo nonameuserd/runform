@@ -145,6 +145,18 @@ def goal_fingerprint(goal: str) -> str:
     return h[:16]
 
 
+def normalize_tenant_id(tenant_id: str) -> str:
+    """Normalize tenant_id into a single path segment under ``outputs_root`` (no traversal)."""
+
+    require_non_empty(tenant_id, name="tenant_id")
+    s = tenant_id.strip()
+    if os.sep in s or (os.altsep is not None and os.altsep in s):
+        raise ValueError("tenant_id must not contain path separators")
+    if ".." in s:
+        raise ValueError("tenant_id must not contain '..'")
+    return s
+
+
 def normalize_repo_id(repo_id: str) -> str:
     """Normalize a repo_id into a safe, stable identifier.
 

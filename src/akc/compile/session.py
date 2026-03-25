@@ -24,6 +24,7 @@ from akc.compile.artifact_consistency import (
 )
 from akc.compile.artifact_passes import (
     run_agent_coordination_pass,
+    run_delivery_plan_pass,
     run_deployment_config_pass,
     run_orchestration_spec_pass,
     run_runtime_bundle_pass,
@@ -32,6 +33,7 @@ from akc.compile.artifact_passes import (
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import ControllerConfig
 from akc.compile.controller_policy_runtime import COMPILE_PATCH_APPLY_ACTION
+from akc.compile.delivery_projection import parse_json_artifact_text, render_delivery_summary_markdown
 from akc.compile.executors import SubprocessExecutor
 from akc.compile.interfaces import Executor, Index, LLMBackend, TenantRepoScope
 from akc.compile.ir_builder import build_ir_document_from_plan
@@ -83,6 +85,7 @@ from akc.promotion import (
 )
 from akc.run import (
     ArtifactPointer,
+    McpReplayEvent,
     PassRecord,
     ReplayMode,
     RetrievalSnapshot,
@@ -276,6 +279,7 @@ class CompileSession:
         partial_replay_passes: tuple[str, ...] | None = None,
         developer_role_profile: str = "classic",
         developer_profile_decisions: Mapping[str, JSONValue] | None = None,
+        skills_project_root: str | Path | None = None,
     ) -> ControllerResult:
         """Run the Phase 3 compile loop for this tenant+repo scope."""
         compile_started_at_ms = int(time.time() * 1000)
@@ -507,6 +511,7 @@ class CompileSession:
             intent_file=intent_file,
             intent_store=intent_store_for_controller,
             knowledge_artifact_root=knowledge_artifact_root,
+            skills_project_root=skills_project_root,
         )
 
         # Phase 4 Outputs integration (minimal): on success, emit a scoped manifest
@@ -1384,9 +1389,17 @@ class CompileSession:
         top_k = int(payload.get("top_k") or 20)
         item_ids_raw = payload.get("item_ids")
         item_ids = tuple(str(x) for x in item_ids_raw) if isinstance(item_ids_raw, list) else ()
+        mcp_raw = payload.get("mcp_events")
+        mcp_events: tuple[McpReplayEvent, ...] = ()
+        if isinstance(mcp_raw, list) and mcp_raw:
+            parsed: list[McpReplayEvent] = []
+            for item in mcp_raw:
+                if isinstance(item, dict):
+                    parsed.append(McpReplayEvent.from_json_obj(item))
+            mcp_events = tuple(parsed)
         if not query or top_k <= 0:
             return []
-        return [RetrievalSnapshot(source=source, query=query, top_k=top_k, item_ids=item_ids)]
+        return [RetrievalSnapshot(source=source, query=query, top_k=top_k, item_ids=item_ids, mcp_events=mcp_events)]
 
     def _build_pass_records(self, *, result: ControllerResult, step_outputs: dict[str, Any]) -> list[PassRecord]:
         compile_status: Literal["succeeded", "failed"] = (
@@ -1395,6 +1408,19 @@ class CompileSession:
         best_hash: str | None = None
         if result.best_candidate is not None and result.best_candidate.llm_text.strip():
             best_hash = stable_json_fingerprint({"patch": result.best_candidate.llm_text})
+        generate_metadata: dict[str, Any] | None = None
+        if result.best_candidate is not None:
+            generate_metadata = {
+                "llm_text": result.best_candidate.llm_text,
+                "prompt_key": str(step_outputs.get("last_prompt_key") or ""),
+            }
+            skills_active = result.accounting.get("compile_skills_active")
+            if isinstance(skills_active, list):
+                generate_metadata["compile_skills_active"] = [dict(x) for x in skills_active if isinstance(x, dict)]
+            skills_mode = result.accounting.get("compile_skills_mode")
+            if skills_mode is not None:
+                generate_metadata["compile_skills_mode"] = str(skills_mode)
+
         out: list[PassRecord] = [
             PassRecord(name="plan", status="succeeded"),
             PassRecord(name="retrieve", status="succeeded"),
@@ -1406,14 +1432,7 @@ class CompileSession:
                     else "skipped"
                 ),
                 output_sha256=best_hash,
-                metadata=(
-                    {
-                        "llm_text": result.best_candidate.llm_text,
-                        "prompt_key": str(step_outputs.get("last_prompt_key") or ""),
-                    }
-                    if result.best_candidate is not None
-                    else None
-                ),
+                metadata=generate_metadata,
             ),
         ]
         exec_payload = step_outputs.get("last_tests_full") or step_outputs.get("last_tests_smoke")
@@ -1596,6 +1615,8 @@ class CompileSession:
                                 if artifact_path.endswith(".json")
                                 else "application/yaml; charset=utf-8"
                                 if artifact_path.endswith((".yml", ".yaml"))
+                                else "text/markdown; charset=utf-8"
+                                if artifact_path.endswith(".md")
                                 else "text/plain; charset=utf-8"
                             ),
                             metadata=None,
@@ -1664,16 +1685,26 @@ class CompileSession:
                 output_hashes[artifact.path] = artifact.sha256_hex()
             pass_order.append(name)
             groups[group].append(name)
-            metadata: dict[str, JSONValue] = {
-                "artifact_group": group,
-                "artifact_paths": list(artifact_paths),
-                "artifact_hashes": dict(artifact_hashes),
-            }
-            if base_metadata:
-                metadata.update(base_metadata)
+            # Base metadata first (replay markers, counts, …); paths/hashes must match `pass_artifacts`
+            # so baselines cannot clobber expanded artifact lists (e.g. delivery summary companion).
+            metadata: dict[str, JSONValue] = dict(base_metadata) if base_metadata else {}
             if replay_source_run_id is not None:
                 metadata["replay_source_run_id"] = replay_source_run_id
                 metadata["reused_from_replay_manifest"] = True
+            metadata["artifact_group"] = group
+            metadata["artifact_paths"] = list(artifact_paths)
+            metadata["artifact_hashes"] = dict(artifact_hashes)
+            if name == "runtime_bundle":
+                rb_path = next((p for p in artifact_paths if str(p).endswith(".runtime_bundle.json")), None)
+                if rb_path is not None:
+                    metadata["runtime_bundle_path"] = rb_path
+            if name == "delivery_plan":
+                dp_path = next((p for p in artifact_paths if str(p).endswith(".delivery_plan.json")), None)
+                if dp_path is not None:
+                    metadata["delivery_plan_path"] = dp_path
+                ds_path = next((p for p in artifact_paths if str(p).endswith(".delivery_summary.md")), None)
+                if ds_path is not None:
+                    metadata["delivery_summary_path"] = ds_path
             pass_records.append(
                 PassRecord(
                     name=name,
@@ -1845,6 +1876,61 @@ class CompileSession:
                 span_start_ns=coordination_span_start_ns,
             )
 
+        delivery_plan_json_text: str
+        delivery_plan_replayed = _maybe_load_replay_pass("delivery_plan")
+        if delivery_plan_replayed is not None:
+            delivery_plan_span_start_ns = now_unix_nano()
+            previous, delivery_plan_artifacts = delivery_plan_replayed
+            delivery_plan_artifacts = list(delivery_plan_artifacts)
+            delivery_plan_json_artifact = next(
+                artifact for artifact in delivery_plan_artifacts if artifact.path.endswith(".json")
+            )
+            delivery_plan_json_text = delivery_plan_json_artifact.text()
+            if not any(str(a.path).endswith(".delivery_summary.md") for a in delivery_plan_artifacts):
+                plan_obj = parse_json_artifact_text(delivery_plan_json_text)
+                summary_text = render_delivery_summary_markdown(run_id=run_id, delivery_plan=plan_obj)
+                delivery_plan_artifacts.append(
+                    OutputArtifact.from_text(
+                        path=f".akc/design/{run_id}.delivery_summary.md",
+                        text=summary_text,
+                        media_type="text/markdown; charset=utf-8",
+                        metadata={
+                            "run_id": run_id,
+                            "kind": "delivery_summary_markdown",
+                            "companion_of": delivery_plan_json_artifact.path,
+                            "synthesized_from_replay": True,
+                        },
+                    )
+                )
+            _register_pass(
+                name="delivery_plan",
+                pass_artifacts=delivery_plan_artifacts,
+                group="deployment_configs",
+                base_metadata={
+                    **dict(previous.metadata or {}),
+                    **({"replay_mode": replay_manifest.replay_mode} if replay_manifest else {}),
+                },
+                replay_source_run_id=replay_manifest.run_id if replay_manifest else None,
+                span_start_ns=delivery_plan_span_start_ns,
+            )
+        else:
+            delivery_plan_span_start_ns = now_unix_nano()
+            delivery_plan_result = run_delivery_plan_pass(
+                run_id=run_id,
+                ir_document=ir_doc,
+                intent_spec=intent_spec,
+                orchestration_spec_text=orchestration_json_text,
+                coordination_spec_text=coordination_json_text,
+            )
+            delivery_plan_json_text = delivery_plan_result.artifact_json.text()
+            _register_pass(
+                name="delivery_plan",
+                pass_artifacts=[delivery_plan_result.artifact_json, delivery_plan_result.artifact_summary_md],
+                group="deployment_configs",
+                base_metadata=dict(delivery_plan_result.metadata),
+                span_start_ns=delivery_plan_span_start_ns,
+            )
+
         runtime_bundle_replayed = _maybe_load_replay_pass("runtime_bundle")
         if runtime_bundle_replayed is not None:
             runtime_bundle_span_start_ns = now_unix_nano()
@@ -1871,6 +1957,7 @@ class CompileSession:
                 intent_spec=intent_spec,
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
+                delivery_plan_text=delivery_plan_json_text,
                 embed_system_ir=bool(runtime_bundle_embed_system_ir),
                 runtime_bundle_schema_version=int(runtime_bundle_schema_version),
                 reconcile_deploy_targets_from_ir_only=bool(reconcile_deploy_targets_from_ir_only),
@@ -1913,6 +2000,7 @@ class CompileSession:
                 intent_spec=intent_spec,
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
+                delivery_plan_text=delivery_plan_json_text,
             )
             deployment_docker_compose_text = deployment_result.artifact_docker_compose.text()
             _register_pass(
@@ -1923,6 +2011,7 @@ class CompileSession:
                     deployment_result.artifact_k8s_service,
                     deployment_result.artifact_k8s_configmap,
                     deployment_result.artifact_github_actions,
+                    *deployment_result.additional_artifacts,
                 ],
                 group="deployment_configs",
                 base_metadata=dict(deployment_result.metadata),
@@ -2019,6 +2108,7 @@ class CompileSession:
             "pricing_version": str(config.cost_rates.pricing_version),
             "llm_calls": int(accounting.get("llm_calls", 0)),
             "tool_calls": int(accounting.get("tool_calls", 0)),
+            "mcp_calls": int(accounting.get("mcp_calls", 0)),
             "input_tokens": int(accounting.get("input_tokens", 0)),
             "output_tokens": int(accounting.get("output_tokens", 0)),
             "total_tokens": int(accounting.get("total_tokens", 0)),

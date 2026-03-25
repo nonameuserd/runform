@@ -1,0 +1,73 @@
+{
+  "format_version": "2.0",
+  "nodes": [
+    {
+      "depends_on": [
+        "4_redis"
+      ],
+      "id": "1_api",
+      "kind": "service",
+      "name": "api backend",
+      "properties": {
+        "cloud_account": "acct-demo",
+        "cpu_limit": "750m",
+        "cpu_request": "300m",
+        "domain": "api.example.com",
+        "health_path": "/ready",
+        "memory_limit": "768Mi",
+        "memory_request": "384Mi",
+        "port": 8080,
+        "public": true,
+        "replicas": 2
+      },
+      "tenant_id": "tenant_golden"
+    },
+    {
+      "depends_on": [
+        "1_api"
+      ],
+      "id": "2_web",
+      "kind": "service",
+      "name": "web frontend",
+      "properties": {
+        "cloud_account": "acct-demo",
+        "domain": "app.example.com",
+        "health_path": "/healthz",
+        "port": 3000,
+        "public": true
+      },
+      "tenant_id": "tenant_golden"
+    },
+    {
+      "depends_on": [
+        "1_api"
+      ],
+      "id": "3_worker",
+      "kind": "service",
+      "name": "background worker",
+      "properties": {
+        "cloud_account": "acct-demo",
+        "health_path": "/worker-health",
+        "port": 9090,
+        "public": false
+      },
+      "tenant_id": "tenant_golden"
+    },
+    {
+      "depends_on": [],
+      "id": "4_redis",
+      "kind": "infrastructure",
+      "name": "redis cache",
+      "properties": {
+        "cloud_account": "acct-demo",
+        "port": 6379,
+        "public": false
+      },
+      "tenant_id": "tenant_golden"
+    }
+  ],
+  "repo_id": "repo_golden",
+  "schema_kind": "akc_ir",
+  "schema_version": 2,
+  "tenant_id": "tenant_golden"
+}

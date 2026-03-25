@@ -1,6 +1,6 @@
-## Artifact contracts (Phase 3)
+## Artifact contracts
 
-This document freezes the **viewer-facing** artifact formats so we can evolve internals without changing the viewer trust boundary.
+This document freezes the **viewer-facing** artifact formats (compile outputs, optional delivery sessions, and control-plane sidecars such as autopilot) so we can evolve internals without changing the viewer trust boundary. Machine-checkable JSON Schemas are defined in `src/akc/artifacts/schemas.py` (`SchemaKind`); a few NDJSON or sidecar formats use standalone schema files under `src/akc/artifacts/schemas/` or `src/akc/control/schemas/`.
 
 ### Stability goals
 
@@ -26,8 +26,19 @@ All compile outputs are scoped under:
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/agents/*.coordination_protocol.py|*.coordination_protocol.ts`
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/deployment/docker-compose.yml`
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/deployment/k8s/{deployment,service,configmap}.yml`
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/deployment/<run_id>.delivery_plan.json` (compile-time `delivery_plan` pass; authoritative JSON) and optional companion `.akc/deployment/<run_id>.delivery_summary.md` (human-readable; not a schema substitute)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/promotion/<plan_id>_<step_id>.packet.json` (signed **promotion packet** when compile emits one; referenced from `RunManifest.control_plane.promotion_packet_ref` when present)
 - `<output_dir>/<tenant_id>/<repo_id>/.github/workflows/akc_deploy_<run_id>.yml`
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/knowledge/snapshot.json`, `.akc/knowledge/snapshot.fingerprint.json`, `.akc/knowledge/mediation.json`, and optional `.akc/knowledge/decisions.json` (knowledge-layer envelopes use **`schema_kind`** + **`schema_version`**, not `schema_id`—see [below](#knowledge-layer-envelopes-not-schemakind))
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/delivery/<delivery_id>/{request,session,recipients,events,provider_state,activation_evidence}.json` (named-recipient delivery control plane; `delivery_id` is a path-safe token)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/delivery/operator_prereqs.json` (optional local-only operator prerequisite hints for adapters)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/scoreboards/<window_start_ms>-<window_end_ms>.reliability_scoreboard.v1.json`
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/decisions/<decision_at_ms>.<attempt_id>.decision.json`
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/escalations/<generated_at_ms>.<reason>.json` (e.g. `reason=autonomy_budget_escalation`; content is schema `autopilot_human_escalation` v1)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/history.jsonl` (append-only controller history for scoreboard inputs; JSON lines, not a `SchemaKind` envelope)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/leases/<scope_name>.json` (filesystem lease metadata for single-writer controllers)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/runtime/<run_id>.runtime_bundle.json`
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.manifest.json` (per-run manifest; additive compile/runtime fields on top of the bundle manifest contract)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.spans.json`
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.otel.jsonl` (NDJSON trace export for external telemetry; runtime may append after compile)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.otel_metrics.jsonl` (optional NDJSON metric export for offline operational checks)
@@ -52,7 +63,7 @@ Enforcement:
 Cross-run discovery uses **SQLite indexes** next to per-tenant outputs (same layout family as the cost/metrics index):
 
 - `<output_dir>/<tenant_id>/.akc/control/metrics.sqlite` — cost rollups (`akc metrics`)
-- `<output_dir>/<tenant_id>/.akc/control/operations.sqlite` — run catalog: identity, pass summary, `stable_intent_sha256`, recompile-trigger counts, runtime-evidence presence, aggregate health, optional `run_labels` synced from manifest `control_plane.run_labels` when that key is present, operator tags via `akc control runs label set`, and indexed sidecar pointers (`akc control runs …`)
+- `<output_dir>/<tenant_id>/.akc/control/operations.sqlite` — run catalog: identity, pass summary, `stable_intent_sha256`, recompile-trigger counts, runtime-evidence presence, aggregate health, optional `run_labels` synced from manifest `control_plane.run_labels` when that key is present, operator tags via `akc control runs label set`, indexed sidecar pointers (`akc control runs …`), and a **`delivery_sessions`** table for named-recipient delivery rows (synced from `.akc/delivery/<id>/` JSON when delivery commands update the session)
 - `<output_dir>/<tenant_id>/.akc/control/control_audit.jsonl` — optional append-only JSON lines for operator accountability (e.g. `akc policy explain --record-audit`); one object per line with `ts_ms`, `actor`, `action`, `tenant_id`, `details`
 
 **Freshness:** The operations index is updated on a **best-effort** basis when compile emits a run manifest and when the runtime CLI refreshes a compile manifest with runtime control-plane links. It is **eventually consistent** with the JSON artifacts: if a manifest is copied in without going through those writers, run `akc control index rebuild --tenant-id … --outputs-root …` to rescan `<tenant_id>/*/.akc/run/*.manifest.json`. All queries are scoped by `tenant_id` (one database file per tenant under that tree); optional `repo_id` filters apply within the tenant. There are no cross-tenant reads. When `control_plane.run_labels` is **omitted** on a manifest upsert, existing index labels for that run are left unchanged; when `run_labels` is present (including `{}`), the index replaces labels for that run from the manifest.
@@ -76,7 +87,7 @@ Machine-checkable schemas live in `src/akc/artifacts/schemas.py`:
 - **AKC metric export (NDJSON line)**: `src/akc/control/schemas/akc_metric_export.v1.schema.json` (one object per line in `.otel_metrics.jsonl`; used for offline `operational_spec` metric signals and composite ratio predicates — see `docs/runtime-execution.md`)
 - **Convergence certificate payload (runtime evidence item)**: `src/akc/artifacts/schemas/convergence_certificate.v1.schema.json` (versioned payload for `runtime_evidence_stream` rows where `evidence_type=convergence_certificate`)
 
-- **manifest**: emitted `manifest.json`
+- **manifest**: emitted top-level `manifest.json` (bundle index); per-run manifests use `.akc/run/<run_id>.manifest.json` and share the same `manifest` schema shape where applicable
 - **plan_state**: serialized `PlanState` JSON objects
 - **execution_stage**: `.akc/tests/*.json` stage evidence records
 - **verifier_result**: `.akc/verification/*.json` verifier decisions/findings
@@ -84,18 +95,38 @@ Machine-checkable schemas live in `src/akc/artifacts/schemas.py`:
 - **operational_assurance_result**: `.akc/verification/<run_id>.operational_assurance.json` coupled operational verifier outcome (`advisory`/`blocking`) plus telemetry-provider result rows for `otel_query_stub` bindings
 - **operational_evidence_window**: operator-authored rollup under `.akc/verification/*.json` (recommended naming: `<window_id>.operational_evidence_window.json`) listing `window_start_ms` / `window_end_ms` and `runtime_evidence_exports[]` of `{path, sha256}` pointers to exported `runtime_evidence_stream` JSON arrays (paths relative to the tenant/repo outputs root). Used when intent `operational_spec.params.window` is **`rolling_ms`** together with `rolling_window_ms` and `evidence_rollup_rel_path` (see `docs/runtime-execution.md`). Schema: `src/akc/artifacts/schemas/operational_evidence_window.v1.schema.json` (also in `schemas.py`).
 - **runtime_bundle**: `.akc/runtime/*.runtime_bundle.json` compile-to-runtime handoff contract (current default envelope is **v4**; v1–v3 remain accepted for older bundles)
+- **delivery_plan**: `.akc/deployment/<run_id>.delivery_plan.json` — compile-time packaging/distribution projection (targets, required human inputs, promotion readiness); see [delivery-architecture.md](delivery-architecture.md) for how `akc deliver` consumes compile handoff
+- **delivery_request**, **delivery_session**, **delivery_recipients**, **delivery_events**, **delivery_provider_state**, **delivery_activation_evidence**: under `.akc/delivery/<delivery_id>/*.json` (named-recipient delivery control plane); same `SchemaKind` names in `schemas.py`
+- **promotion_packet**: `.akc/promotion/<plan_id>_<step_id>.packet.json` when compile emits a packet; mirrored JSON Schema: `src/akc/artifacts/schemas/promotion_packet.v1.schema.json`
 - **runtime_evidence_stream**: `.akc/runtime/<run_id>/<runtime_run_id>/runtime_evidence.json` runtime control-plane evidence stream
 - **run_trace_spans**: `.akc/run/*.spans.json` compile/run trace sidecar
 - **run_cost_attribution**: `.akc/run/*.costs.json` immutable per-run cost rollup
 - **replay_decisions**: `.akc/run/*.replay_decisions.json` per-pass replay/model/tool decisions
 - **recompile_triggers**: `.akc/run/*.recompile_triggers.json` and `.akc/living/*.triggers.json` trigger snapshots
 - **living_drift_report**: `.akc/living/*.drift.json` structured drift findings
+- **reliability_scoreboard**: `.akc/autopilot/scoreboards/*.reliability_scoreboard.v1.json` — controller KPI window rollup
+- **autopilot_decision**: `.akc/autopilot/decisions/*.decision.json`
+- **autopilot_human_escalation**: `.akc/autopilot/escalations/*.json` when the controller records a human-required state
 - **control_plane_envelope**: `RunManifest.control_plane` committed keys (`stable_intent_sha256`, `policy_decisions`, `runtime_evidence_ref`, `policy_decisions_ref`, `replay_decisions_ref`, `recompile_triggers_ref`, runtime replay hints)
-- Additional optional refs include `operational_assurance_ref` and `governance_profile_ref` (tenant-scoped pointer+sha entries, additive-only).
+- Additional optional refs include `promotion_packet_ref`, `operational_assurance_ref`, and `governance_profile_ref` (tenant-scoped pointer+sha entries, additive-only), plus optional policy-as-code fields such as `policy_bundle_id`, `policy_git_sha`, and `rego_pack_version` on `control_plane` when present
+
+### Knowledge-layer envelopes (not SchemaKind)
+
+Artifacts under `.akc/knowledge/` are **not** registered in `SchemaKind` / `schema_id_for`. They use a parallel convention: **`schema_kind`** (string) and **`schema_version`** (integer, currently **1** for all rows below). Authoritative constants live in `src/akc/knowledge/persistence.py` and `src/akc/knowledge/operator_decisions.py`.
+
+| Relative path | `schema_kind` | `schema_version` |
+| --- | --- | --- |
+| `.akc/knowledge/snapshot.json` | `akc_knowledge_snapshot` | `1` |
+| `.akc/knowledge/snapshot.fingerprint.json` | `akc_knowledge_snapshot_fingerprint` | `1` |
+| `.akc/knowledge/mediation.json` | `akc_knowledge_mediation_report` | `1` |
+| `.akc/knowledge/decisions.json` (optional) | `akc_operator_knowledge_decisions` | `1` |
+
+Loaders validate `schema_kind` / `schema_version` for snapshots; operator decisions are ignored when the envelope does not match. Evolution remains additive-only in the inner `snapshot`, `mediation_report`, and `decisions` payloads unless the knowledge subsystem intentionally bumps `schema_version`.
 
 ### `manifest.json` stability rules
 
 - Must remain a JSON object with required keys: `tenant_id`, `repo_id`, `name`, `artifacts`.
+- Per-run manifests at `.akc/run/<run_id>.manifest.json` use the same base shape for the indexed artifact list and add **additive** compile/runtime fields (for example `passes`, `stable_intent_sha256`, `control_plane`, `runtime_bundle`).
 - Artifact entries must include: `path`, `media_type`, `sha256`, `size_bytes`.
 - Additive fields are allowed (top-level and per-artifact) to avoid breaking older viewers.
 - `metadata.artifact_passes` is stable when present and may include:
@@ -119,7 +150,8 @@ The artifact-pass surface is now part of the viewer contract:
 
 - **Path conventions are stable**:
   - run-scoped specs/stubs use `<run_id>` in filename
-  - deployment hardening files use stable fixed paths under `.akc/deployment/`
+  - deployment hardening files use stable fixed paths under `.akc/deployment/`, including `delivery_plan` at `.akc/deployment/<run_id>.delivery_plan.json` and optional `.akc/deployment/<run_id>.delivery_summary.md`
+  - promotion packets (when emitted) use `.akc/promotion/<plan_id>_<step_id>.packet.json`
   - generated GitHub workflow uses `akc_deploy_<run_id>.yml`
   - run control-plane sidecars live under `.akc/run/<run_id>.*.json`
   - living drift artifacts live under `.akc/living/<check_id>.*.json` and the accepted baseline remains `.akc/living/baseline.json`
@@ -127,6 +159,7 @@ The artifact-pass surface is now part of the viewer contract:
   - system design (`.akc/design/*.system_design.json`)
   - orchestration (`.akc/orchestration/*.orchestration.json`)
   - coordination (`.akc/agents/*.coordination.json`)
+  - delivery plan (`.akc/deployment/<run_id>.delivery_plan.json`; `SchemaKind` `delivery_plan`)
 - **Tenant isolation fields are required** in JSON specs:
   - `tenant_id`
   - `repo_id`
@@ -141,7 +174,7 @@ The artifact-pass surface is now part of the viewer contract:
   - `system_ir_ref` and optional `embed_system_ir` follow the IR spine rules already used by the reconciler
   - `runtime_policy_envelope` must exist, remain additive-only, and represent the runtime baseline intersected with the intent-derived policy projection
 
-See also [runtime-execution.md](runtime-execution.md) for how the runtime loads coordination, schedules steps, and writes audit evidence.
+See also [runtime-execution.md](runtime-execution.md) for how the runtime loads coordination, schedules steps, and writes audit evidence, and [delivery-architecture.md](delivery-architecture.md) for the `akc deliver` session layout and compile handoff.
 
 ### Runtime evidence stability rules
 
@@ -185,6 +218,9 @@ The hardened artifact-pass outputs are covered by tests and CI policy checks:
 
 - `tests/unit/test_artifact_passes.py` validates emitted deployment and workflow hardening rules.
 - `tests/unit/test_compile_session_end_to_end_light.py` validates tenant-scoped emission paths and run-manifest pass metadata.
+- `tests/unit/test_artifact_schemas.py` exercises frozen `SchemaKind` validation (including `promotion_packet` and operational schemas).
+- `tests/unit/test_delivery_*` and `tests/integration/test_delivery_*` cover delivery `SchemaKind` JSON and `.akc/delivery/` store layout.
+- `tests/unit/test_runtime_autopilot_scoreboard.py` and related autopilot tests cover reliability scoreboard and decision artifacts.
 - `scripts/ci_policy_test.py` enforces workflow safety patterns over `.github/workflows/*.yml`.
 
 ### Security/correctness tie-in

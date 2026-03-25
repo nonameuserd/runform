@@ -32,7 +32,7 @@ from akc.intent.models import stable_intent_sha256
 from akc.ir import IRDocument
 from akc.knowledge import knowledge_provenance_fingerprint, knowledge_semantic_fingerprint
 from akc.living.automation_profile import LivingAutomationProfile, resolve_living_automation_profile
-from akc.memory.models import PlanState, normalize_repo_id, require_non_empty
+from akc.memory.models import PlanState, normalize_repo_id, normalize_tenant_id, require_non_empty
 from akc.outputs.drift import DriftFinding, drift_report, extend_drift_report, write_baseline, write_drift_artifacts
 from akc.outputs.fingerprints import IngestStateFingerprint, stable_json_fingerprint
 from akc.run.loader import find_latest_run_manifest, load_run_manifest
@@ -623,8 +623,6 @@ def safe_recompile_on_drift(
     acceptance triggers by default and record time-compression baselines on emitted manifests.
     """
 
-    tenant_id = str(tenant_id).strip()
-    require_non_empty(tenant_id, name="tenant_id")
     profile = (
         living_automation_profile
         if living_automation_profile is not None
@@ -634,15 +632,30 @@ def safe_recompile_on_drift(
             project_value=project_living_automation_profile,
         )
     )
+    tenant_id = normalize_tenant_id(str(tenant_id))
     repo_id = normalize_repo_id(str(repo_id))
-    outputs_root_p = Path(outputs_root).expanduser().resolve()
+    try:
+        outputs_root_p = Path(outputs_root).expanduser().resolve()
+    except OSError as e:
+        raise ValueError("invalid outputs_root") from e
     ingest_state_p = Path(ingest_state_path).expanduser().resolve()
     if baseline_path is None:
         baseline_path_p = outputs_root_p / tenant_id / repo_id / ".akc" / "living" / "baseline.json"
     else:
-        baseline_path_p = Path(baseline_path).expanduser().resolve()
+        try:
+            baseline_path_p = Path(baseline_path).expanduser().resolve()
+        except OSError as e:
+            raise ValueError("invalid baseline_path") from e
+        if not baseline_path_p.is_relative_to(outputs_root_p):
+            raise ValueError("baseline_path must be under outputs_root")
 
     standard_base = outputs_root_p / tenant_id / repo_id
+    try:
+        scope_resolved = standard_base.resolve()
+    except OSError as e:
+        raise ValueError("invalid tenant/repo scope under outputs_root") from e
+    if not scope_resolved.is_relative_to(outputs_root_p):
+        raise ValueError("tenant/repo scope escapes outputs_root")
     memory_db = standard_base / ".akc" / "memory.sqlite"
     memory_db.parent.mkdir(parents=True, exist_ok=True)
 
