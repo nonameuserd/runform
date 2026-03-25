@@ -119,8 +119,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--connector",
         required=True,
-        choices=["docs", "openapi", "slack", "mcp"],
-        help="Connector: docs, openapi, slack, mcp (mcp requires ingest-mcp extra)",
+        choices=["docs", "openapi", "slack", "discord", "telegram", "mcp"],
+        help="Connector: docs, openapi, slack, discord, telegram, mcp (mcp requires ingest-mcp extra)",
     )
     ingest.add_argument(
         "--input",
@@ -241,6 +241,93 @@ def _build_parser() -> argparse.ArgumentParser:
         "--slack-include-bot-answers",
         action="store_true",
         help="Allow bot messages as answers (default: false)",
+    )
+
+    ingest.add_argument("--discord-token", help="Discord bot token (or set AKC_DISCORD_TOKEN)")
+    ingest.add_argument("--discord-guild-id", help="Discord guild id (only used for list-channels utilities)")
+    ingest.add_argument("--discord-oldest", help="Oldest Discord message id boundary (treated as `after`)")
+    ingest.add_argument("--discord-latest", help="Latest Discord message id boundary (treated as `before`)")
+    ingest.add_argument(
+        "--discord-history-limit",
+        type=int,
+        default=200,
+        help="Discord history/replies fetch limit (default: 200)",
+    )
+    ingest.add_argument(
+        "--discord-max-threads",
+        type=int,
+        default=200,
+        help="Cap number of thread roots processed (default: 200)",
+    )
+    ingest.add_argument(
+        "--discord-max-answers",
+        type=int,
+        default=3,
+        help="Max answers included per thread (default: 3)",
+    )
+    ingest.add_argument(
+        "--discord-include-bot-answers",
+        action="store_true",
+        help="Allow bot messages as answers (default: false)",
+    )
+    ingest.add_argument(
+        "--discord-timeout-s",
+        type=float,
+        default=30.0,
+        help="Discord API request timeout seconds (default: 30)",
+    )
+    ingest.add_argument(
+        "--discord-max-retries",
+        type=int,
+        default=3,
+        help="Discord API max retries for 429/5xx (default: 3)",
+    )
+
+    ingest.add_argument("--telegram-token", help="Telegram bot token (or set AKC_TELEGRAM_TOKEN)")
+    ingest.add_argument(
+        "--telegram-allowed-updates",
+        default=None,
+        help='Comma-separated allowed_updates forwarded to getUpdates (e.g. "message,edited_message")',
+    )
+    ingest.add_argument(
+        "--telegram-chat-ids",
+        default=None,
+        help='Comma-separated chat id allowlist (e.g. "123,-456")',
+    )
+    ingest.add_argument(
+        "--telegram-max-updates",
+        type=int,
+        default=1000,
+        help="Max updates drained per run (default: 1000)",
+    )
+    ingest.add_argument(
+        "--telegram-timeout-s",
+        type=int,
+        default=50,
+        help="Telegram getUpdates long-poll timeout seconds (default: 50)",
+    )
+    ingest.add_argument(
+        "--telegram-request-timeout-s",
+        type=float,
+        default=70.0,
+        help="Telegram HTTP request timeout seconds (default: 70)",
+    )
+    ingest.add_argument(
+        "--telegram-max-retries",
+        type=int,
+        default=3,
+        help="Telegram API max retries for transient errors (default: 3)",
+    )
+    ingest.add_argument(
+        "--telegram-offset-state-path",
+        default=None,
+        help="Optional explicit path for Telegram offset state JSON (separate from --state-path)",
+    )
+    ingest.add_argument(
+        "--telegram-initial-offset",
+        type=int,
+        default=None,
+        help="Optional initial update_id offset when no Telegram offset state exists",
     )
     ingest.add_argument(
         "--mcp-config",

@@ -7,6 +7,7 @@ This document describes the high-level architecture of the Agentic Knowledge Com
 AKC turns messy inputs (docs, messaging, APIs) into executable artifacts and runtime bundles through a pipeline: **Ingestion → Memory → Compilation → Runtime → Evidence/Outputs**, with an optional **Delivery** path for named-recipient app distribution that consumes compile-time `delivery_plan` and related artifacts (not the core LLM controller loop). The compile phase is a loop: Plan → Retrieve → Generate → Execute → Repair, with retrieval from both the structured index and code memory to keep outputs grounded and correct.
 
 Phase A hardening introduces two compiler contracts:
+
 - **Versioned IR (`src/akc/ir/`)**: a typed, stable intermediate representation (nodes, dependencies, effect annotations, provenance pointers) that becomes the pass boundary between ingestion and compilation.
 - **Run manifest (`src/akc/run/`)**: a replay/audit artifact with IR fingerprint, retrieval snapshots, per-pass records, and replay mode.
 
@@ -14,25 +15,25 @@ Phase A hardening introduces two compiler contracts:
 
 The Python implementation is split into first-class packages (plus a few root modules) that mirror the pipeline and control-plane concerns:
 
-| Package | Role |
-|--------|------|
-| `ingest/` | Connectors (`connectors/`: docs, OpenAPI, Slack), chunking, embeddings, structured index (`index/`: vector store + optional graph) |
-| `memory/` | Code memory, plan state, why-graph / conflict surfaces (e.g. SQLite-backed stores) |
-| `ir/` | Versioned IR (`IRDocument` / `IRNode`), diffing, workflow ordering |
-| `run/` | Run manifest, replay mode resolution, VCR helpers, delivery lifecycle projection hooks |
-| `intent/` | `IntentSpec` models, JSON/SQLite intent stores, resolution and policy projection for compile/runtime |
-| `compile/` | Controller (tiered generate/repair), planner, retriever, verifier, artifact lowering passes (`artifact_passes.py`), scoped apply, patch utilities |
-| `outputs/` | Emitters, workflow and system-spec helpers, drift/fingerprint helpers |
-| `runtime/` | Kernel, scheduler, reconciler, state store, adapter registry, providers (local, compose, k8s), bundle/delivery handoff helpers |
-| `delivery/` | Named-recipient delivery sessions (artifacts under `.akc/delivery/`), packaging adapters (iOS/Android/Web builds), distribution adapters (e.g. TestFlight, Play, Firebase App Distribution, web invites), dispatch and provider clients |
-| `control/` | OPA/Rego policy evaluation, capability tokens, operations and cost indexes, trace span types, fleet automation helpers |
-| `living/` | Drift-driven safe recompile, webhook receiver, runtime bridge, automation profiles |
-| `coordination/` | Coordination graph parse/schedule shared by compile and runtime (no heavy I/O) |
-| `knowledge/` | Canonical knowledge snapshot models, persistence envelopes, fingerprints |
-| `artifacts/` | Schema envelopes and validation helpers for tenant-scoped emitted JSON |
-| `execute/` | Executor factory, sandbox/strong execution, secrets hooks for the execute phase |
-| `viewer/` | TUI and static HTML snapshot/export helpers |
-| `evals/` | Evaluation harness |
+| Package         | Role                                                                                                                                                                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ingest/`       | Connectors (`connectors/`: docs, OpenAPI, Slack, Discord, Telegram, MCP), chunking, embeddings, structured index (`index/`: vector store + optional graph)                                                                              |
+| `memory/`       | Code memory, plan state, why-graph / conflict surfaces (e.g. SQLite-backed stores)                                                                                                                                                      |
+| `ir/`           | Versioned IR (`IRDocument` / `IRNode`), diffing, workflow ordering                                                                                                                                                                      |
+| `run/`          | Run manifest, replay mode resolution, VCR helpers, delivery lifecycle projection hooks                                                                                                                                                  |
+| `intent/`       | `IntentSpec` models, JSON/SQLite intent stores, resolution and policy projection for compile/runtime                                                                                                                                    |
+| `compile/`      | Controller (tiered generate/repair), planner, retriever, verifier, artifact lowering passes (`artifact_passes.py`), scoped apply, patch utilities                                                                                       |
+| `outputs/`      | Emitters, workflow and system-spec helpers, drift/fingerprint helpers                                                                                                                                                                   |
+| `runtime/`      | Kernel, scheduler, reconciler, state store, adapter registry, providers (local, compose, k8s), bundle/delivery handoff helpers                                                                                                          |
+| `delivery/`     | Named-recipient delivery sessions (artifacts under `.akc/delivery/`), packaging adapters (iOS/Android/Web builds), distribution adapters (e.g. TestFlight, Play, Firebase App Distribution, web invites), dispatch and provider clients |
+| `control/`      | OPA/Rego policy evaluation, capability tokens, operations and cost indexes, trace span types, fleet automation helpers                                                                                                                  |
+| `living/`       | Drift-driven safe recompile, webhook receiver, runtime bridge, automation profiles                                                                                                                                                      |
+| `coordination/` | Coordination graph parse/schedule shared by compile and runtime (no heavy I/O)                                                                                                                                                          |
+| `knowledge/`    | Canonical knowledge snapshot models, persistence envelopes, fingerprints                                                                                                                                                                |
+| `artifacts/`    | Schema envelopes and validation helpers for tenant-scoped emitted JSON                                                                                                                                                                  |
+| `execute/`      | Executor factory, sandbox/strong execution, secrets hooks for the execute phase                                                                                                                                                         |
+| `viewer/`       | TUI and static HTML snapshot/export helpers                                                                                                                                                                                             |
+| `evals/`        | Evaluation harness                                                                                                                                                                                                                      |
 
 Root modules such as `pass_registry.py` (controller vs artifact pass ordering) and `promotion.py` (promotion gates) tie compile and runtime contracts together without importing cycles.
 
@@ -108,7 +109,7 @@ flowchart LR
 ### 2. Ingestion (`src/akc/ingest/`)
 
 - **Connectors:** Plugins per source type (docs, API, messaging). Each connector fetches and normalizes into a common shape.
-- **Scope:** The maintained Python connectors are **docs**, **OpenAPI**, and **Slack** (under `src/akc/ingest/connectors/`). Alignment and “executable knowledge” proof do not require additional connector types as long as those three suffice for representative chunk shapes; add a new connector when a product need requires **new normalization or chunk semantics** the existing three cannot cover. Follow `.cursor/skills/akc-add-connector/SKILL.md` and add at least **one fixture and one integration test** per new connector so CI keeps coverage explicit.
+- **Scope:** The maintained Python connectors include **docs**, **OpenAPI**, **Slack**, **Discord**, **Telegram**, and **MCP** (under `src/akc/ingest/connectors/`). Add a new connector when a product need add at least **one fixture and one integration test** per new connector so CI keeps coverage explicit.
 - **Chunk / Normalize:** Chunking for retrieval with overlap; connectors and chunking must preserve **tenant isolation** via `tenant_id` in metadata.
 - **Embedding:** Optional step that converts chunks into vectors for similarity search (remote providers or local/deterministic embeddings for tests).
 - **Structured Index:** Vector store (and optional graph) for retrieval during compilation. CLI/index backends include **memory** (ephemeral), **sqlite**, and **pgvector** (persistent). All search APIs are tenant-scoped to prevent cross-tenant retrieval. Enables “retrieve before generate” (ARCS/DeepCode-style).
@@ -165,35 +166,41 @@ Compile emits control-plane-friendly artifacts under:
 `<outputs-root>/<tenant-id>/<repo-id>/`
 
 Run-level artifacts:
+
 - `.akc/run/<run_id>.manifest.json`
 - `.akc/run/<run_id>.spans.json`
 - `.akc/run/<run_id>.costs.json`
 - `.akc/run/<run_id>.log.txt`
 
 IR and policy artifacts:
+
 - `.akc/ir/<run_id>.json`
 - `.akc/ir/<run_id>.diff.json` (when a prior IR exists)
 - `.akc/policy/<run_id>_<step_id>.decisions.json` (when policy decisions exist)
 
 Execution/test artifacts:
+
 - `.akc/tests/<run_id>_<step_id>.smoke.json`
 - `.akc/tests/<run_id>_<step_id>.full.json`
 - `.akc/tests/<run_id>_<step_id>.stdout.txt`
 - `.akc/tests/<run_id>_<step_id>.stderr.txt`
 
 Trace span contract (OpenTelemetry-compatible shape):
+
 - **Hierarchy:** `compile.run` -> `compile.step` -> `compile.retrieve` / `compile.llm.complete` / `compile.executor.*` / `compile.verify`
 - **Fields:** `trace_id`, `span_id`, `parent_span_id`, `name`, `kind`,
   `start_time_unix_nano`, `end_time_unix_nano`, `attributes`, `status`
 - **Compatibility note:** Span JSON is stored as plain objects so control planes can ingest directly into OTel pipelines or transform to OTLP.
 
 Cost attribution contract:
+
 - **Scope fields:** `tenant_id`, `repo_id`, `run_id`
 - **Usage fields:** `llm_calls`, `tool_calls`, `input_tokens`, `output_tokens`, `total_tokens`
 - **Loop fields:** `repair_iterations`, `wall_time_ms`
 - **Budget echo:** `budget` from `ControllerConfig` for per-run budget auditability
 
 Tenant-isolation impact:
+
 - All artifact paths are scoped by tenant+repo.
 - Trace and cost records include tenant+repo identifiers.
 - Policy decisions and run manifests are never shared across scopes, so control-plane attribution remains tenant-safe by construction.
@@ -202,10 +209,10 @@ Tenant-isolation impact:
 
 By default, compile uses **`scoped_apply`**: a **scoped working-tree apply** of the strict unified-diff patch after preflight, subject to policy. **`artifact_only`** is opt-in: compile stops at **validated artifacts** with no working-tree writes. This is the AKC boundary for “intent → system” without bypassing safety gates.
 
-| Mode (`--compile-realization-mode`) | Behavior | Typical use |
-|-------------------------------------|----------|-------------|
-| `scoped_apply` (default) | After preflight (path allowlist, scope-root confinement, strict patch parse), apply the patch under `--apply-scope-root` or resolved `--work-root` / outputs scope; requires policy allow for `compile.patch.apply`. | Intent→filesystem flow; controlled realization when policy and promotion/runtime gates allow. |
-| `artifact_only` (opt-in) | No working-tree writes from compile; patches and test results are artifacts under the outputs tree. | CI, audits, replay-first workflows, or environments where surprise writes are unacceptable. |
+| Mode (`--compile-realization-mode`) | Behavior                                                                                                                                                                                                             | Typical use                                                                                   |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `scoped_apply` (default)            | After preflight (path allowlist, scope-root confinement, strict patch parse), apply the patch under `--apply-scope-root` or resolved `--work-root` / outputs scope; requires policy allow for `compile.patch.apply`. | Intent→filesystem flow; controlled realization when policy and promotion/runtime gates allow. |
+| `artifact_only` (opt-in)            | No working-tree writes from compile; patches and test results are artifacts under the outputs tree.                                                                                                                  | CI, audits, replay-first workflows, or environments where surprise writes are unacceptable.   |
 
 **Risk profile guidance**
 
@@ -267,7 +274,7 @@ Cross-cutting **policy and observability** for automation: OPA/Rego evaluation (
 
 ### 9. CLI surface (summary)
 
-Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), and **`akc slack`** utilities.
+Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack, discord, telegram, mcp), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), and **`akc slack`** utilities.
 
 ## Rust Optional Components
 
@@ -277,10 +284,12 @@ AKC can optionally delegate two security/performance-sensitive responsibilities 
 - `akc_ingest`: a high-throughput ingestion/normalization CLI used by the ingest pipeline (currently supports the `docs` ingest kind; `messaging`/`api` kinds are protocol-defined but not yet implemented in Rust).
 
 Invocation surfaces (same request/response schema):
+
 - Subprocess JSON CLI boundary (auditability and reproducibility).
 - PyO3 module embedding (low overhead when running inside the Python process).
 
 Security model alignment:
+
 - Every request includes `tenant_id` and `run_id`.
 - Execution is defense-in-depth with two sandbox lanes:
   - WASM (Wasmtime + WASI Preview 1) with capability-based host interfaces.
