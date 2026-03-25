@@ -38,10 +38,6 @@ def akc_nuitka_data_includes(*, repo_root: Path) -> tuple[tuple[DataFileInclude,
             dst_rel="akc/coordination/static/coordination_sdk.ts",
         ),
         DataFileInclude(
-            src=root / "src/akc/coordination/schemas/agent_coordination_spec.v1.schema.json",
-            dst_rel="akc/coordination/schemas/agent_coordination_spec.v1.schema.json",
-        ),
-        DataFileInclude(
             src=root / "src/akc/control/operator_dashboard/index.html",
             dst_rel="akc/control/operator_dashboard/index.html",
         ),

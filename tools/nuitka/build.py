@@ -47,13 +47,14 @@ def nuitka_data_args(*, repo_root: Path) -> list[str]:
 def nuitka_akc_args(*, repo_root: Path, output_name: str) -> list[str]:
     """Full Nuitka args list for building the `akc` CLI."""
 
-    base = nuitka_base_args(output_name=output_name)
+    base = [*nuitka_base_args(output_name=output_name), "--python-flag=-m"]
     data = nuitka_data_args(repo_root=repo_root)
 
-    # Build target:
-    # We compile the module entrypoint and rely on `--output-filename` to name the executable.
-    # (CI/workflow can wrap this script and add OS-specific flags.)
-    target = ["-m", "akc.cli"]
+    # Nuitka 4.x rejects a trailing `-m akc.cli` (parses `-m` as an invalid option). Use the
+    # package directory plus `--python-flag=-m` so `__main__.py` is the entry (see Nuitka
+    # warning when pointing `--main` at `__main__.py` directly).
+    entry = (repo_root / "src/akc/cli").resolve()
+    target = [f"--main={entry}"]
     return [*base, *data, *target]
 
 
