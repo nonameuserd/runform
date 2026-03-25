@@ -17,6 +17,7 @@ out/
 node_modules/
 
 # Tooling and cache
+.nuitka-ci-cache/
 __pycache__/
 *.pyc
 .pytest_cache/

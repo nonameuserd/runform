@@ -8,16 +8,33 @@ from pathlib import Path
 from tools.nuitka.nuitka_includes import akc_nuitka_data_includes, verify_akc_nuitka_data_includes
 
 
+def standalone_output_filename(output_name: str) -> str:
+    """Path segment(s) for Nuitka ``--output-filename`` (relative to the ``*.dist`` folder).
+
+    Package data is bundled alongside the executable under a top-level ``akc/`` tree.
+    On POSIX, an executable named ``akc`` would collide with that directory; use
+    ``bin/<name>`` instead. Windows emits ``akc.exe``, which does not collide.
+    """
+
+    if sys.platform in {"win32", "cygwin"}:
+        return output_name
+    normalized = output_name.replace("\\", "/").strip("/")
+    if "/" in normalized:
+        return output_name
+    return f"bin/{normalized}"
+
+
 def nuitka_base_args(*, output_name: str) -> list[str]:
     """Conservative defaults for shipping `akc` as a standalone terminal executable."""
 
+    out = standalone_output_filename(output_name)
     args: list[str] = [
         sys.executable,
         "-m",
         "nuitka",
         "--standalone",
         "--assume-yes-for-downloads",
-        "--output-filename=" + output_name,
+        "--output-filename=" + out,
         "--follow-imports",
         "--warn-implicit-exceptions",
         "--warn-unusual-code",
@@ -53,8 +70,10 @@ def nuitka_akc_args(*, repo_root: Path, output_name: str) -> list[str]:
     # Nuitka 4.x rejects a trailing `-m akc.cli` (parses `-m` as an invalid option). Use the
     # package directory plus `--python-flag=-m` so `__main__.py` is the entry (see Nuitka
     # warning when pointing `--main` at `__main__.py` directly).
+    # Without this, the standalone folder defaults to the main module basename (`cli.dist`),
+    # while CI and signing expect `akc.dist`.
     entry = (repo_root / "src/akc/cli").resolve()
-    target = [f"--main={entry}"]
+    target = ["--output-folder-name=akc", f"--main={entry}"]
     return [*base, *data, *target]
 
 
