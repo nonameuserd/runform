@@ -95,6 +95,12 @@ delivery-providers = [
 [project.scripts]
 akc = "akc.cli:main"
 
+[tool.uv]
+constraint-dependencies = [
+    # GHSA-gc5v-m9x4-r6x2: fixed in 2.33.0 (transitive via pip-audit, semantic-release, etc.).
+    "requests>=2.33.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
