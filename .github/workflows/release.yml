@@ -203,7 +203,7 @@ jobs:
             platform: macos_arm64
             archive_ext: tar.gz
             exe_name: akc
-          - runs_on: macos-13
+          - runs_on: macos-15-intel
             platform: macos_x64
             archive_ext: tar.gz
             exe_name: akc
@@ -269,10 +269,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x "akc.dist/akc" || (echo "Expected executable akc.dist/akc not found or not executable" && exit 1)
-          ./akc.dist/akc --help >/dev/null
-          ./akc.dist/akc view --help >/dev/null
-          ./akc.dist/akc view tui --help >/dev/null
+          test -x "akc.dist/bin/akc" || (echo "Expected executable akc.dist/bin/akc not found or not executable" && exit 1)
+          ./akc.dist/bin/akc --help >/dev/null
+          ./akc.dist/bin/akc view --help >/dev/null
+          ./akc.dist/bin/akc view tui --help >/dev/null
 
       - name: Smoke check built binary (Windows)
         if: runner.os == 'Windows'
@@ -309,7 +309,7 @@ jobs:
           fi
 
           test -d "akc.dist" || (echo "Expected Nuitka output dir akc.dist not found" && exit 1)
-          test -f "akc.dist/akc" || (echo "Expected akc.dist/akc not found" && exit 1)
+          test -f "akc.dist/bin/akc" || (echo "Expected akc.dist/bin/akc not found" && exit 1)
 
           keychain_path="${RUNNER_TEMP}/akc-signing.keychain-db"
           keychain_pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
@@ -328,15 +328,15 @@ jobs:
           sign_id="${APPLE_SIGNING_IDENTITY}"
           sign_args=(codesign --force --options runtime --timestamp --sign "${sign_id}")
 
-          "${sign_args[@]}" "akc.dist/akc"
+          "${sign_args[@]}" "akc.dist/bin/akc"
 
           # Best-effort: sign native libs if present (avoid failing on empty matches).
           while IFS= read -r -d '' f; do
             "${sign_args[@]}" "${f}"
           done < <(find "akc.dist" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 || true)
 
-          codesign --verify --deep --strict --verbose=2 "akc.dist/akc"
-          spctl -a -t exec -vv "akc.dist/akc" || true
+          codesign --verify --deep --strict --verbose=2 "akc.dist/bin/akc"
+          spctl -a -t exec -vv "akc.dist/bin/akc" || true
 
           # Notarize a zip of the standalone bundle directory (Developer ID notarization).
           notary_zip="${RUNNER_TEMP}/akc-notary.zip"

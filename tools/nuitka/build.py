@@ -8,16 +8,33 @@ from pathlib import Path
 from tools.nuitka.nuitka_includes import akc_nuitka_data_includes, verify_akc_nuitka_data_includes
 
 
+def standalone_output_filename(output_name: str) -> str:
+    """Path segment(s) for Nuitka ``--output-filename`` (relative to the ``*.dist`` folder).
+
+    Package data is bundled alongside the executable under a top-level ``akc/`` tree.
+    On POSIX, an executable named ``akc`` would collide with that directory; use
+    ``bin/<name>`` instead. Windows emits ``akc.exe``, which does not collide.
+    """
+
+    if sys.platform in {"win32", "cygwin"}:
+        return output_name
+    normalized = output_name.replace("\\", "/").strip("/")
+    if "/" in normalized:
+        return output_name
+    return f"bin/{normalized}"
+
+
 def nuitka_base_args(*, output_name: str) -> list[str]:
     """Conservative defaults for shipping `akc` as a standalone terminal executable."""
 
+    out = standalone_output_filename(output_name)
     args: list[str] = [
         sys.executable,
         "-m",
         "nuitka",
         "--standalone",
         "--assume-yes-for-downloads",
-        "--output-filename=" + output_name,
+        "--output-filename=" + out,
         "--follow-imports",
         "--warn-implicit-exceptions",
         "--warn-unusual-code",
