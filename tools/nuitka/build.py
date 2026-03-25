@@ -9,19 +9,22 @@ from tools.nuitka.nuitka_includes import akc_nuitka_data_includes, verify_akc_nu
 
 
 def standalone_output_filename(output_name: str) -> str:
-    """Path segment(s) for Nuitka ``--output-filename`` (relative to the ``*.dist`` folder).
+    """Basename-only value for Nuitka ``--output-filename`` (no ``/`` segments).
 
-    Package data is bundled alongside the executable under a top-level ``akc/`` tree.
-    On POSIX, an executable named ``akc`` would collide with that directory; use
-    ``bin/<name>`` instead. Windows emits ``akc.exe``, which does not collide.
+    Standalone mode rejects ``--output-filename`` paths that include a directory part.
+    Package data lives under a top-level ``akc/`` tree in the ``*.dist`` folder; on POSIX,
+    an executable literally named ``akc`` would collide with that directory. Use
+    ``<name>.bin`` at the dist root instead. Windows emits ``akc.exe``, which does not
+    collide with the ``akc/`` directory.
     """
 
     if sys.platform in {"win32", "cygwin"}:
         return output_name
     normalized = output_name.replace("\\", "/").strip("/")
-    if "/" in normalized:
-        return output_name
-    return f"bin/{normalized}"
+    base = normalized.split("/")[-1]
+    if base.lower().endswith(".exe"):
+        base = base[:-4]
+    return f"{base}.bin"
 
 
 def nuitka_base_args(*, output_name: str) -> list[str]:

@@ -4,7 +4,7 @@ This repo’s release workflow (`.github/workflows/release.yml`) publishes Nuitk
 
 - If signing secrets are **not** configured, builds are still produced and uploaded, but are **unsigned / not notarized**.
 - If signing secrets **are** configured, CI will:
-  - macOS: **codesign** the produced `bin/akc` binary inside the standalone bundle (Developer ID) and **notarize** a zip of that bundle with `notarytool`
+  - macOS: **codesign** the produced `akc.bin` binary at the root of the standalone bundle (Developer ID) and **notarize** a zip of that bundle with `notarytool`
   - Windows: sign `akc.exe` using **`signtool.exe`** with an RFC3161 timestamp
 
 ### Checksums
