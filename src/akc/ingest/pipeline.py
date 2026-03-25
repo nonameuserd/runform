@@ -134,7 +134,7 @@ def _get_connector(
 ) -> Connector:
     if connector == "docs":
         return build_docs_connector(tenant_id=tenant_id, root_path=input_value)
-    if connector == "openapi":
+    elif connector == "openapi":
         opts_o: dict[str, str] = dict(connector_options or {})
         emit_soft = opts_o.get("emit_soft_assertion_chunks", "false").lower() in {"1", "true", "yes"}
         return build_openapi_connector(
@@ -142,7 +142,7 @@ def _get_connector(
             spec=input_value,
             emit_soft_assertion_chunks=emit_soft,
         )
-    if connector == "slack":
+    elif connector == "slack":
         opts: dict[str, str] = dict(connector_options or {})
         token = opts.get("token", "")
         oldest = opts.get("oldest")
@@ -166,7 +166,7 @@ def _get_connector(
             max_answers=max_answers,
             include_bot_answers=include_bot_answers,
         )
-    if connector == "discord":
+    elif connector == "discord":
         opts_d: dict[str, str] = dict(connector_options or {})
         token = opts_d.get("token", "")
         guild_id = opts_d.get("guild_id") or None
@@ -196,7 +196,7 @@ def _get_connector(
             timeout_s=timeout_s,
             max_retries=max_retries,
         )
-    if connector == "telegram":
+    elif connector == "telegram":
         opts_t: dict[str, str] = dict(connector_options or {})
         token = opts_t.get("token", "")
         allowed_updates_raw = opts_t.get("allowed_updates")
@@ -234,7 +234,7 @@ def _get_connector(
             state_path=offset_state_path,
             initial_offset=initial_offset,
         )
-    if connector == "mcp":
+    elif connector == "mcp":
         opts_m: dict[str, str] = dict(connector_options or {})
         cfg_path = opts_m.get("mcp_config_path") or ".akc/mcp-ingest.json"
         uri_prefix = opts_m.get("mcp_uri_prefix") or None
@@ -244,14 +244,14 @@ def _get_connector(
             timeout_parsed = float(timeout_raw)
         except ValueError:
             timeout_parsed = 120.0
-        timeout_s: float | None = None if timeout_parsed <= 0 else timeout_parsed
+        mcp_timeout_s: float | None = None if timeout_parsed <= 0 else timeout_parsed
         return build_mcp_connector(
             tenant_id=tenant_id,
             input_value=input_value,
             config_path=cfg_path,
             uri_prefix=uri_prefix,
             static_prompt=static_prompt,
-            timeout_s=timeout_s,
+            timeout_s=mcp_timeout_s,
         )
     raise ValueError(f"unknown connector: {connector}")
 
