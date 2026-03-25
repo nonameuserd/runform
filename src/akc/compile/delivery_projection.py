@@ -192,9 +192,7 @@ def _build_target_contract(*, node: IRNode, target_class: TargetClass) -> dict[s
                 "metrics_enabled": metrics_enabled,
             },
             "environment_variables": cast(JSONValue, env_keys),
-            "secrets_placeholders": cast(
-                JSONValue, [f"{key}=<set-in-secret-store>" for key in secret_keys]
-            ),
+            "secrets_placeholders": cast(JSONValue, [f"{key}=<set-in-secret-store>" for key in secret_keys]),
             "alert_health_expectations": {
                 "staging": "No sustained readiness failures for 10m before production gate.",
                 "production": "Page on liveness failures > 3 in 5m and latency/SLO breaches.",
@@ -538,9 +536,7 @@ def build_delivery_plan(
         "environments": cast(JSONValue, list(_V1_ENVIRONMENTS)),
         "environment_model": cast(JSONValue, list(env_model_rows)),
         "delivery_paths": cast(JSONValue, delivery_paths),
-        "operational_profiles": cast(
-            JSONValue, {"default": {"rollout_strategy": "rolling", "health_required": True}}
-        ),
+        "operational_profiles": cast(JSONValue, {"default": {"rollout_strategy": "rolling", "health_required": True}}),
         "required_human_inputs": cast(JSONValue, required_human_inputs),
         "promotion_readiness": cast(
             JSONValue,
