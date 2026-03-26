@@ -119,15 +119,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--connector",
         required=True,
-        choices=["docs", "openapi", "slack", "discord", "telegram", "mcp"],
-        help="Connector: docs, openapi, slack, discord, telegram, mcp (mcp requires ingest-mcp extra)",
+        choices=["docs", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"],
+        help=(
+            "Connector: docs, openapi, slack, discord, telegram, whatsapp (Cloud API webhook captures), "
+            "mcp (mcp requires ingest-mcp extra)"
+        ),
     )
     ingest.add_argument(
         "--input",
         required=True,
         help=(
-            "Connector input: docs root, OpenAPI spec path/URL, Slack channel id, "
-            "or MCP server name / path to inline MCP server JSON"
+            "Connector input: docs root, OpenAPI spec path/URL, Slack/Discord channel id, Telegram placeholder, "
+            "comma-separated WhatsApp webhook payload file/dir paths, MCP server name / path to MCP JSON"
         ),
     )
 
@@ -329,6 +332,51 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional initial update_id offset when no Telegram offset state exists",
     )
+
+    ingest.add_argument(
+        "--whatsapp-phone-number-id",
+        default=None,
+        help="Optional filter: only ingest messages for this WhatsApp Business phone_number_id",
+    )
+    ingest.add_argument(
+        "--whatsapp-waba-id",
+        default=None,
+        help="Optional filter: only ingest messages for this WhatsApp Business Account id",
+    )
+    ingest.add_argument(
+        "--whatsapp-state-path",
+        default=None,
+        help="Optional JSON path for cross-run WhatsApp message-id dedupe (recommended for incremental runs)",
+    )
+    ingest.add_argument(
+        "--whatsapp-max-seen-ids",
+        type=int,
+        default=5000,
+        help="Max message ids retained in WhatsApp dedupe state (default: 5000)",
+    )
+    ingest.add_argument(
+        "--whatsapp-max-documents",
+        type=int,
+        default=5000,
+        help="Safety cap: max documents emitted per WhatsApp ingest run (default: 5000)",
+    )
+    ingest.add_argument(
+        "--whatsapp-verify-signatures",
+        action="store_true",
+        help=(
+            "Require X-Hub-Signature-256 on stored webhook envelopes (--whatsapp-app-secret or "
+            "AKC_WHATSAPP_APP_SECRET required)"
+        ),
+    )
+    ingest.add_argument(
+        "--whatsapp-app-secret",
+        default=None,
+        help=(
+            "WhatsApp / Meta app secret for Sig Verif (or set AKC_WHATSAPP_APP_SECRET); "
+            "used if --whatsapp-verify-signatures"
+        ),
+    )
+
     ingest.add_argument(
         "--mcp-config",
         default=".akc/mcp-ingest.json",
