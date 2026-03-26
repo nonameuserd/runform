@@ -23,6 +23,7 @@ from .control import (
     cmd_control_runs_list,
     cmd_control_runs_show,
 )
+from .control_bot import cmd_control_bot_serve, cmd_control_bot_validate_config
 from .drift import cmd_drift, cmd_watch
 from .eval import cmd_eval
 from .ingest import cmd_ingest, cmd_slack_list_channels
@@ -69,6 +70,8 @@ __all__ = [
     "cmd_control_runs_label_set",
     "cmd_control_runs_list",
     "cmd_control_runs_show",
+    "cmd_control_bot_validate_config",
+    "cmd_control_bot_serve",
     "cmd_metrics",
     "cmd_policy_explain",
     "cmd_runtime_checkpoint",
@@ -2347,6 +2350,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="stdout format (default: text)",
     )
     pb_write.set_defaults(func=cmd_control_policy_bundle_write)
+
+    control_bot = sub.add_parser(
+        "control-bot",
+        help="Dedicated multi-channel operator gateway service (standalone; not fleet HTTP)",
+    )
+    cb_sub = control_bot.add_subparsers(dest="control_bot_command", required=True)
+
+    cb_validate = cb_sub.add_parser("validate-config", help="Validate control-bot config file (schema + typed checks)")
+    cb_validate.add_argument("--config", required=True, help="Path to control-bot config JSON")
+    cb_validate.add_argument("--print-json", action="store_true", help="Print normalized JSON after validation")
+    cb_validate.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    cb_validate.set_defaults(func=cmd_control_bot_validate_config)
+
+    cb_serve = cb_sub.add_parser("serve", help="Run the control-bot gateway HTTP service")
+    cb_serve.add_argument("--config", required=True, help="Path to control-bot config JSON")
+    cb_serve.add_argument("--bind", default=None, help="Override server.bind from config")
+    cb_serve.add_argument("--port", type=int, default=None, help="Override server.port from config")
+    cb_serve.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    cb_serve.set_defaults(func=cmd_control_bot_serve)
 
     from akc.cli.deliver import register_deliver_parsers
     from akc.cli.fleet import register_fleet_parsers
