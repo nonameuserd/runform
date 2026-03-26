@@ -272,9 +272,23 @@ Named-recipient **delivery sessions** capture a plain-language request, recipien
 
 Cross-cutting **policy and observability** for automation: OPA/Rego evaluation (`PolicyEngine`, `DefaultDenyPolicyEngine`), capability issuance/attenuation, **operations** and **cost** indexes (SQLite-backed helpers for run queries), **trace span** types compatible with stored span JSON, and **fleet** helpers (catalog, webhooks, automation coordinator). These integrate with compile (`PolicyWrappedLLMBackend`, `PolicyWrappedExecutor`) and with operator CLIs under **`akc control`** and **`akc fleet`**.
 
+### 8.1 Multi-channel operator gateway (`src/akc/control_bot/`)
+
+The control-bot service is a dedicated ingress/egress gateway for Slack, Discord, Telegram, and WhatsApp:
+
+- **Ingress hardening:** channel-specific signature/token validation (`ingress_auth.py`) and fast ACK paths (`<3s` for Slack/Discord interaction ACKs).
+- **Canonical envelope:** every inbound webhook is normalized into one `InboundEvent` (`channel`, `event_id`, `principal_id`, `tenant_id`, `raw_text`, `payload_hash`, `received_at_ms`) and persisted before execution.
+- **Deterministic command pipeline:** strict grammar (`akc <group> <verb> ...`) first, deterministic NL fallback second (`command_engine.py`).
+- **Policy + approval gate:** default-deny RBAC/OPA policy checks (`policy_gate.py`) and durable approval lifecycle (`approval_workflow.py`).
+- **Run operations integration:** run reads/mutations reuse the fleet catalog/operations-index patterns used by `fleet_http.py` (`fleet_list_runs_merged`, `fleet_get_run`, `fleet_resolve_label_write_shard`, label validation/audit append).
+- **Audit:** structured control-bot events (`control.bot.command.received|denied|approval_requested|approved|executed|failed`) are written to a dedicated JSONL audit stream and key mutations are mirrored into tenant control audit logs where `outputs_root` is available.
+- **Async execution:** bounded worker queue and async processing keep ingress acknowledgements fast.
+- **Outbound channel adapters:** rich approval/status cards for Slack/Discord/Telegram, and text-first WhatsApp prompts with stable request IDs and command fallback.
+- **Outbound throttling:** per-channel rate limiters protect webhook workers and channel APIs from burst fan-out.
+
 ### 9. CLI surface (summary)
 
-Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack, discord, telegram, whatsapp, mcp), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), **`akc mcp`**, and **`akc slack`** utilities.
+Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack, discord, telegram, whatsapp, mcp), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc control-bot`** (gateway `serve` and `validate-config`), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), **`akc mcp`**, and **`akc slack`** utilities.
 
 ## Rust Optional Components
 

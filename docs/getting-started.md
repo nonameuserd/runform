@@ -59,7 +59,7 @@ Top-level commands (run `akc --help` for the full tree):
 | Ingestion & compile | `ingest`, `compile`, `verify`, `eval`                                                                                                     |
 | Drift & living      | `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor`                                                             |
 | Runtime             | `runtime` (`start`, `stop`, `status`, `events`, `reconcile`, `checkpoint`, `replay`, `autopilot`, `coordination-plan`, and related flags) |
-| Control plane       | `control`, `metrics`, `policy`, `fleet`                                                                                                   |
+| Control plane       | `control`, `control-bot`, `metrics`, `policy`, `fleet`                                                                                    |
 | Delivery            | `deliver` (named-recipient sessions; see [delivery-architecture.md](delivery-architecture.md))                                            |
 | Viewer              | `view` (TUI / static web / export)                                                                                                        |
 | Slack helpers       | `slack list-channels`                                                                                                                     |
@@ -69,6 +69,63 @@ Quick inventory:
 ```bash
 akc --help
 ```
+
+### Multi-channel control-bot gateway
+
+Run the dedicated operator gateway service (separate from fleet HTTP):
+
+```bash
+akc control-bot validate-config --config ./configs/control-bot.example.json
+akc control-bot serve --config ./configs/control-bot.example.json
+```
+
+Minimum config shape:
+
+```json
+{
+  "schema": "control_bot_config.v1",
+  "server": { "bind": "127.0.0.1", "port": 8088, "queue_max": 2048, "worker_threads": 2 },
+  "channels": {
+    "slack": { "enabled": true, "signing_secret": "..." },
+    "discord": { "enabled": true, "public_key": "..." },
+    "telegram": { "enabled": true, "secret_token": "...", "bot_token": "..." },
+    "whatsapp": {
+      "enabled": true,
+      "verify_token": "...",
+      "app_secret": "...",
+      "access_token": "...",
+      "phone_number_id": "..."
+    }
+  },
+  "routing": {
+    "tenants": ["tenant-1"],
+    "workspaces": [
+      { "channel": "slack", "workspace_id": "T123", "tenant_id": "tenant-1" },
+      { "channel": "discord", "workspace_id": "G123", "tenant_id": "tenant-1" },
+      { "channel": "telegram", "workspace_id": "12345", "tenant_id": "tenant-1" },
+      { "channel": "whatsapp", "workspace_id": "PHONE_NUMBER_ID", "tenant_id": "tenant-1" }
+    ]
+  },
+  "identity": { "principal_roles": { "U123": { "tenant_id": "tenant-1", "roles": ["operator"] } } },
+  "policy": { "mode": "enforce", "role_allowlist": { "operator": ["status.*", "approval.*", "incident.*", "mutate.*"] } },
+  "approval": { "default_ttl_ms": 600000, "requires_approval_action_prefixes": ["incident.", "mutate."] },
+  "storage": {
+    "state_dir": "./.akc/control-bot/state",
+    "sqlite_path": "./.akc/control-bot/state/control_bot.sqlite",
+    "audit_log_path": "./.akc/control-bot/state/control_bot.audit.jsonl"
+  }
+}
+```
+
+Webhook endpoints:
+
+- `POST /v1/channels/slack/commands`
+- `POST /v1/channels/slack/interactivity`
+- `POST /v1/channels/discord/interactions`
+- `POST /v1/channels/telegram/webhook`
+- `GET|POST /v1/channels/whatsapp/webhook`
+
+Control-bot execution is asynchronous (`queue_max` bounded), with structured audit events and approval workflow state persisted in sqlite. See [Ops Runbook](ops-runbook.md) for deployment, secrets, policy, and incident handling.
 
 ### Reliability SLO gate (staging/prod soak)
 
