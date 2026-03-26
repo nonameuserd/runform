@@ -532,6 +532,9 @@ jobs:
       contents: write
     needs: [release-version, package-nuitka]
     runs-on: ubuntu-latest
+    # This job has no checkout; `gh` would otherwise infer the repo from `.git` and fail.
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Download Nuitka release assets
         shell: bash
