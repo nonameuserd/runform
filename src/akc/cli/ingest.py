@@ -160,6 +160,31 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             connector_options["offset_state_path"] = str(Path(str(args.telegram_offset_state_path)).expanduser())
         if getattr(args, "telegram_initial_offset", None) is not None:
             connector_options["initial_offset"] = str(int(args.telegram_initial_offset))
+    if connector == "whatsapp":
+        if not input_value.strip():
+            raise SystemExit(
+                "WhatsApp connector requires --input: path or comma-separated paths to "
+                "JSON/JSONL webhook payload files."
+            )
+        w_phone = getattr(args, "whatsapp_phone_number_id", None)
+        if isinstance(w_phone, str) and w_phone.strip():
+            connector_options["phone_number_id"] = w_phone.strip()
+        w_waba = getattr(args, "whatsapp_waba_id", None)
+        if isinstance(w_waba, str) and w_waba.strip():
+            connector_options["waba_id"] = w_waba.strip()
+        w_state = getattr(args, "whatsapp_state_path", None)
+        if isinstance(w_state, str) and w_state.strip():
+            connector_options["state_path"] = str(Path(w_state.strip()).expanduser())
+        connector_options["max_seen_message_ids"] = str(int(getattr(args, "whatsapp_max_seen_ids", 5000)))
+        connector_options["max_documents_per_run"] = str(int(getattr(args, "whatsapp_max_documents", 5000)))
+        if getattr(args, "whatsapp_verify_signatures", False):
+            connector_options["verify_signatures"] = "true"
+            secret = getattr(args, "whatsapp_app_secret", None) or env("AKC_WHATSAPP_APP_SECRET")
+            if not secret or not str(secret).strip():
+                raise SystemExit(
+                    "WhatsApp signature verification requires --whatsapp-app-secret or AKC_WHATSAPP_APP_SECRET."
+                )
+            connector_options["app_secret"] = str(secret).strip()
     if connector == "mcp":
         connector_options["mcp_config_path"] = str(Path(str(args.mcp_config)).expanduser())
         if getattr(args, "mcp_uri_prefix", None) is not None:

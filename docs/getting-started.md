@@ -13,7 +13,7 @@ cd runform
 uv sync
 ```
 
-The core package intentionally stays small (`jsonschema` only in `pyproject.toml`). Add connectors, backends, and delivery signing when you need them:
+The core package stays relatively small: **`jsonschema`**, **`pydantic`**, plus **`windows-curses`** on Windows (TUI). Add connectors, backends, and delivery signing when you need them:
 
 ```bash
 uv sync --extra ingest-all          # docs/OpenAPI/embedding/vector/messaging extras
@@ -82,7 +82,7 @@ For always-on runtime autopilot acceptance, use the reliability scoreboard gate 
 
 ### Extension points and transparency
 
-- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, openapi, slack, discord, telegram, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
+- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, openapi, slack, discord, telegram, whatsapp, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
 - **Embedding defaults to offline:** the default embedder is `none`; use `--embedder hash` for deterministic, key-free indexing. **Cloud providers (OpenAI, Gemini) are opt-in only**—use them only when you explicitly set `--embedder openai` or `--embedder gemini` and provide the corresponding API key.
 - **Compile** uses an offline LLM backend by default; no API keys are required for the standard ingest → compile → verify path. Examples in this guide use offline or generic options; cloud-backed options are explicitly marked as optional.
 
@@ -189,9 +189,27 @@ Notes:
 - Incremental progress is tracked via a tenant-scoped Telegram offset state file (separate from the general ingest state), so repeated runs do not reprocess the same updates.
 - Use `--telegram-chat-ids` to restrict ingestion to specific chats when needed.
 
-### WhatsApp Cloud webhook payload ingestion (library-level)
+### Ingest WhatsApp Cloud API payloads (stored webhooks)
 
-A WhatsApp Cloud webhook payload connector exists in the codebase (JSON/JSONL payload files, dedupe, optional signature verification helper), but it is **not yet exposed via `akc ingest --connector whatsapp_cloud`**. Track progress in `.cursor/plans/messaging_connectors_discord_telegram_whatsapp_9f2c6657.plan.md`.
+WhatsApp Cloud API is **webhook-driven** for inbound events. AKC ingests **JSON or JSONL files** (or directories of them) that your stack has already persisted—raw webhook bodies or envelopes that include a `body` object Meta would POST.
+
+Set **`--input`** to one path or **comma-separated** paths (files or directories). Use **`--whatsapp-state-path`** for cross-run **message id dedupe** (recommended for incremental runs). Optional filters: **`--whatsapp-phone-number-id`**, **`--whatsapp-waba-id`**. To enforce **`X-Hub-Signature-256`** on stored envelopes, pass **`--whatsapp-verify-signatures`** and **`--whatsapp-app-secret`** (or **`AKC_WHATSAPP_APP_SECRET`**).
+
+```bash
+akc ingest \
+  --tenant-id tenant-1 \
+  --connector whatsapp \
+  --input ./captured/whatsapp \
+  --whatsapp-state-path ./.akc/ingest/tenant-1/whatsapp-seen.json \
+  --embedder hash \
+  --index-backend memory \
+  --no-index
+```
+
+Notes:
+
+- There is no live subscription to Meta from this connector; you capture webhooks and point **`--input`** at those files.
+- See `src/akc/ingest/connectors/messaging/whatsapp_cloud.py` for payload shapes, dedupe behavior, and optional signature verification.
 
 ### Compile (Plan → Retrieve → Generate → Execute → Repair)
 

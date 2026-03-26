@@ -28,6 +28,7 @@ from akc.ingest.connectors.mcp.connector import build_mcp_connector, mcp_increme
 from akc.ingest.connectors.messaging.discord import build_discord_connector
 from akc.ingest.connectors.messaging.slack import build_slack_connector
 from akc.ingest.connectors.messaging.telegram import build_telegram_connector
+from akc.ingest.connectors.messaging.whatsapp_cloud import build_whatsapp_cloud_connector
 from akc.ingest.connectors.openapi import build_openapi_connector
 from akc.ingest.embedding import Embedder, embed_documents
 from akc.ingest.exceptions import IngestionError
@@ -37,7 +38,7 @@ from akc.memory.models import normalize_repo_id
 
 logger = logging.getLogger(__name__)
 
-ConnectorName = Literal["docs", "openapi", "slack", "discord", "telegram", "mcp"]
+ConnectorName = Literal["docs", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"]
 IndexBackend = Literal["memory", "sqlite", "pgvector"]
 
 
@@ -233,6 +234,33 @@ def _get_connector(
             max_retries=max_retries,
             state_path=offset_state_path,
             initial_offset=initial_offset,
+        )
+    elif connector == "whatsapp":
+        opts_w: dict[str, str] = dict(connector_options or {})
+        raw_in = input_value.strip()
+        payload_paths = [p.strip() for p in raw_in.split(",") if p.strip()]
+        if not payload_paths:
+            raise ValueError(
+                "whatsapp connector requires non-empty --input "
+                "(path to JSON/JSONL webhook capture(s), or comma-separated paths)"
+            )
+        phone_number_id = opts_w.get("phone_number_id") or None
+        waba_id = opts_w.get("waba_id") or None
+        state_path_w = opts_w.get("state_path") or None
+        max_seen = int(opts_w.get("max_seen_message_ids", "5000"))
+        max_docs = int(opts_w.get("max_documents_per_run", "5000"))
+        verify = opts_w.get("verify_signatures", "").lower() in {"1", "true", "yes"}
+        app_secret = opts_w.get("app_secret") or None
+        return build_whatsapp_cloud_connector(
+            tenant_id=tenant_id,
+            payload_paths=payload_paths,
+            phone_number_id=phone_number_id,
+            waba_id=waba_id,
+            state_path=state_path_w,
+            max_seen_message_ids=max_seen,
+            max_documents_per_run=max_docs,
+            verify_signatures=verify,
+            app_secret=app_secret,
         )
     elif connector == "mcp":
         opts_m: dict[str, str] = dict(connector_options or {})

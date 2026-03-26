@@ -17,7 +17,7 @@ The Python implementation is split into first-class packages (plus a few root mo
 
 | Package         | Role                                                                                                                                                                                                                                    |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingest/`       | Connectors (`connectors/`: docs, OpenAPI, Slack, Discord, Telegram, MCP), chunking, embeddings, structured index (`index/`: vector store + optional graph)                                                                              |
+| `ingest/`       | Connectors (`connectors/`: docs, OpenAPI, Slack, Discord, Telegram, WhatsApp Cloud, MCP), chunking, embeddings, structured index (`index/`: vector store + optional graph)                                                               |
 | `memory/`       | Code memory, plan state, why-graph / conflict surfaces (e.g. SQLite-backed stores)                                                                                                                                                      |
 | `ir/`           | Versioned IR (`IRDocument` / `IRNode`), diffing, workflow ordering                                                                                                                                                                      |
 | `run/`          | Run manifest, replay mode resolution, VCR helpers, delivery lifecycle projection hooks                                                                                                                                                  |
@@ -103,17 +103,17 @@ flowchart LR
 ### 1. Inputs
 
 - **Docs:** Markdown, HTML, and other document formats; living docs and specs.
-- **Messaging:** Slack, Discord, Teams, Matrix, etc., structured as Q&A or threads (with auth and filters).
+- **Messaging:** Slack, Discord, Telegram, **WhatsApp Cloud API** (ingest from persisted webhook JSON/JSONL), Teams, Matrix, etc., structured as Q&A, threads, or chat messages (with auth and filters where applicable).
 - **APIs:** OpenAPI specs and similar; optional schema extraction for API-derived workflows.
 
 ### 2. Ingestion (`src/akc/ingest/`)
 
 - **Connectors:** Plugins per source type (docs, API, messaging). Each connector fetches and normalizes into a common shape.
-- **Scope:** The maintained Python connectors include **docs**, **OpenAPI**, **Slack**, **Discord**, **Telegram**, and **MCP** (under `src/akc/ingest/connectors/`). Add a new connector when a product need add at least **one fixture and one integration test** per new connector so CI keeps coverage explicit.
+- **Scope:** The maintained Python connectors include **docs**, **OpenAPI**, **Slack**, **Discord**, **Telegram**, **WhatsApp Cloud** (webhook payload files), and **MCP** (under `src/akc/ingest/connectors/`). Add a new connector when a product need add at least **one fixture and one integration test** per new connector so CI keeps coverage explicit.
 - **Chunk / Normalize:** Chunking for retrieval with overlap; connectors and chunking must preserve **tenant isolation** via `tenant_id` in metadata.
 - **Embedding:** Optional step that converts chunks into vectors for similarity search (remote providers or local/deterministic embeddings for tests).
 - **Structured Index:** Vector store (and optional graph) for retrieval during compilation. CLI/index backends include **memory** (ephemeral), **sqlite**, and **pgvector** (persistent). All search APIs are tenant-scoped to prevent cross-tenant retrieval. Enables “retrieve before generate” (ARCS/DeepCode-style).
-- **Ingestion state (incremental):** Optional per-tenant state to support incremental re-ingestion (e.g. file mtimes, Slack cursors, OpenAPI ETag) without re-indexing everything.
+- **Ingestion state (incremental):** Optional per-tenant state to support incremental re-ingestion (e.g. file mtimes, Slack cursors, OpenAPI ETag, Telegram update offsets, **WhatsApp message id dedupe**) without re-indexing everything.
 
 ### 3. Memory & State (`src/akc/memory/`)
 
@@ -274,7 +274,7 @@ Cross-cutting **policy and observability** for automation: OPA/Rego evaluation (
 
 ### 9. CLI surface (summary)
 
-Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack, discord, telegram, mcp), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), and **`akc slack`** utilities.
+Top-level commands include **`akc init`**, **`akc ingest`** (connectors: docs, openapi, slack, discord, telegram, whatsapp, mcp), **`akc compile`**, **`akc verify`**, **`akc deliver`**, **`akc runtime`** (start/stop/status/events/reconcile/checkpoint/replay/autopilot/coordination-plan), **`akc control`** (runs, index, manifest diff, replay forensics/plan, incident/forensics export, playbooks, policy bundle), **`akc fleet`** (read-only catalog and webhook delivery), **`akc living`** (recompile, webhook serve, doctor), **`akc drift`** / **`akc watch`**, **`akc eval`**, **`akc metrics`**, **`akc policy explain`**, **`akc view`** (tui/web/export), **`akc mcp`**, and **`akc slack`** utilities.
 
 ## Rust Optional Components
 
