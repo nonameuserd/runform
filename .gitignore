@@ -18,6 +18,8 @@ node_modules/
 
 # Tooling and cache
 .nuitka-ci-cache/
+# Nuitka standalone bundles (e.g. akc.dist, __main__.dist)
+*.dist/
 __pycache__/
 *.pyc
 .pytest_cache/
