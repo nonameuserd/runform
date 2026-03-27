@@ -16,6 +16,7 @@ from akc.control.fleet_webhooks import deliver_operator_playbook_completed_webho
 from akc.control.operations_index import OperationsIndex, operations_sqlite_path
 from akc.control.operator_playbook import run_operator_playbook
 from akc.memory.models import json_value_as_int, normalize_repo_id
+from akc.path_security import safe_resolve_scoped_path
 
 ALLOWED_AUTOMATION_ACTIONS: tuple[str, ...] = (
     "metadata_tag_write",
@@ -84,8 +85,15 @@ def _candidate_allows_action(row: dict[str, Any], action: str) -> bool:
 
 def _dead_letter_path(*, outputs_root: Path, tenant_id: str, dedupe_key: str) -> Path:
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    return (
-        outputs_root / tenant_id.strip() / ".akc" / "control" / "automation" / "dead_letter" / f"{ts}.{dedupe_key}.json"
+    safe_key = "".join(ch for ch in str(dedupe_key).strip().lower() if ch in "0123456789abcdef")[:32] or "dedupe"
+    return safe_resolve_scoped_path(
+        outputs_root,
+        tenant_id.strip(),
+        ".akc",
+        "control",
+        "automation",
+        "dead_letter",
+        f"{ts}.{safe_key}.json",
     )
 
 
@@ -100,7 +108,8 @@ def _write_dead_letter(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     try:
-        return str(target.relative_to(outputs_root / tenant_id.strip())).replace("\\", "/")
+        scope_root = safe_resolve_scoped_path(outputs_root, tenant_id.strip())
+        return str(target.relative_to(scope_root)).replace("\\", "/")
     except ValueError:
         return str(target)
 
