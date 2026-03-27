@@ -5,6 +5,22 @@
     "doc_derived_assertions_mode": "limited",
     "source": "akc.compile.controller_config.ControllerConfig"
   },
+  "quality_contract_defaults": {
+    "enforcement_stage": "advisory",
+    "hard_gate_dimensions": [
+      "domain_knowledge",
+      "judgment",
+      "engineering_discipline"
+    ],
+    "required_dimensions": [
+      "taste",
+      "domain_knowledge",
+      "judgment",
+      "instincts",
+      "user_empathy",
+      "engineering_discipline"
+    ]
+  },
   "domains": [
     {
       "id": "security_network_secrets",
@@ -18,6 +34,14 @@
           "_DESTRUCTIVE_HINTS"
         ],
         "notes": "IR knowledge_constraint summaries produced downstream should mention these themes when mapped to hard forbidden/must_not_use predicates."
+      },
+      "quality_evidence_expectations": {
+        "taste": ["retrieval_documents"],
+        "domain_knowledge": ["retrieval_documents", "code_memory_items"],
+        "judgment": ["policy_decisions", "verifier_passed"],
+        "instincts": ["trace_spans"],
+        "user_empathy": ["retrieval_documents"],
+        "engineering_discipline": ["tests_touched", "execution_passed", "verifier_passed"]
       }
     },
     {
@@ -27,6 +51,14 @@
       "ingest_source_kinds": ["docs"],
       "mediation": {
         "notes": "Pair with intent constraints or deterministic extraction paths as in tests/integration/test_knowledge_mediation_phase2.py; newer metadata can bias tie-breaks when tests set indexed_at_ms / doc_version."
+      },
+      "quality_evidence_expectations": {
+        "taste": ["retrieval_documents"],
+        "domain_knowledge": ["retrieval_documents"],
+        "judgment": ["policy_decisions"],
+        "instincts": ["trace_spans"],
+        "user_empathy": ["retrieval_documents"],
+        "engineering_discipline": ["execution_passed"]
       }
     },
     {
@@ -37,6 +69,14 @@
       "doc_derived_assertions": {
         "mode_off": "No soft assertions from retrieved docs alone when intent has no constraints (see extract_knowledge_snapshot early return).",
         "mode_limited": "Soft assertions from MUST/SHOULD/BCP14-style patterns under doc_derived_max_assertions cap; compile-side patterns default via DocDerivedPatternOptions flags vs ingest DEFAULT_INGEST_DOC_DERIVED_PATTERNS in assertion_index_store."
+      },
+      "quality_evidence_expectations": {
+        "taste": ["retrieval_documents"],
+        "domain_knowledge": ["retrieval_documents", "code_memory_items"],
+        "judgment": ["policy_decisions"],
+        "instincts": ["trace_spans"],
+        "user_empathy": ["retrieval_documents"],
+        "engineering_discipline": ["execution_passed"]
       }
     },
     {
@@ -47,6 +87,14 @@
       "runtime_projection": {
         "regex_classes_exercised": ["_NETWORK_HINTS", "_SECRETS_PII_HINTS", "_DESTRUCTIVE_HINTS"],
         "notes": "Ensure knowledge_runtime_envelope_from_ir emits deny rules for subprocess/http and apply/rollback when summaries mention PII/secrets, external APIs, and destructive ops."
+      },
+      "quality_evidence_expectations": {
+        "taste": ["retrieval_documents"],
+        "domain_knowledge": ["retrieval_documents", "code_memory_items"],
+        "judgment": ["policy_decisions", "verifier_passed"],
+        "instincts": ["trace_spans"],
+        "user_empathy": ["retrieval_documents"],
+        "engineering_discipline": ["tests_touched", "execution_passed", "verifier_passed"]
       }
     },
     {
@@ -57,6 +105,14 @@
       "runtime_projection": {
         "regex_classes_exercised": ["_NETWORK_HINTS", "_DESTRUCTIVE_HINTS"],
         "notes": "Migration wording like drop/wipe/purge/rm -rf should map to destructive deny rules."
+      },
+      "quality_evidence_expectations": {
+        "taste": ["retrieval_documents"],
+        "domain_knowledge": ["retrieval_documents"],
+        "judgment": ["policy_decisions"],
+        "instincts": ["trace_spans"],
+        "user_empathy": ["retrieval_documents"],
+        "engineering_discipline": ["execution_passed"]
       }
     }
   ]

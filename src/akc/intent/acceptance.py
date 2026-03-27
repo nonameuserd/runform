@@ -15,14 +15,17 @@ from akc.compile.interfaces import ExecutionResult
 from akc.intent.models import (
     EvaluationMode,
     OperationalValidityParamsError,
+    QualityContract,
     SuccessCriterion,
     parse_operational_validity_params,
+    quality_contract_fingerprint,
 )
 from akc.intent.operational_eval import (
     evaluate_operational_spec,
     parse_otel_metric_ndjson_slice,
     parse_otel_ndjson_slice,
 )
+from akc.intent.quality import QualityScorecard, evaluate_quality_contract
 from akc.memory.models import JSONValue
 from akc.run.manifest import RuntimeEvidenceRecord
 
@@ -135,14 +138,56 @@ class IntentAcceptance:
     failures: tuple[str, ...]
     evaluated_count: int
     per_criterion: tuple[dict[str, JSONValue], ...]
+    quality_contract_fingerprint: str | None = None
+    quality_scorecard: dict[str, JSONValue] | None = None
+    quality_gate_failed_dimensions: tuple[str, ...] = ()
+    quality_advisory_dimensions: tuple[str, ...] = ()
+    quality_policy_reasons: tuple[str, ...] = ()
 
     def to_step_output_obj(self) -> dict[str, JSONValue]:
-        return {
+        out: dict[str, JSONValue] = {
             "passed": bool(self.passed),
             "failures": list(self.failures),
             "evaluated_success_criteria": int(self.evaluated_count),
             "checks": [dict(x) for x in self.per_criterion],
         }
+        if self.quality_contract_fingerprint is not None:
+            out["quality_contract_fingerprint"] = str(self.quality_contract_fingerprint)
+        if self.quality_scorecard is not None:
+            out["quality_scorecard"] = dict(self.quality_scorecard)
+        if self.quality_gate_failed_dimensions:
+            out["quality_gate_failed_dimensions"] = list(self.quality_gate_failed_dimensions)
+        if self.quality_advisory_dimensions:
+            out["quality_advisory_dimensions"] = list(self.quality_advisory_dimensions)
+        if self.quality_policy_reasons:
+            out["quality_policy_reasons"] = list(self.quality_policy_reasons)
+        return out
+
+
+def _quality_check_obj(
+    *,
+    success_criterion_id: str,
+    scorecard: QualityScorecard | None,
+    quality_contract_present: bool,
+) -> tuple[bool, str, dict[str, JSONValue]]:
+    if not quality_contract_present or scorecard is None:
+        return False, "quality_contract is required for evaluation_mode=quality_contract", {}
+
+    gate_failed = tuple(scorecard.gate_failed_dimensions())
+    advisory = tuple(scorecard.advisory_dimensions())
+    passed = len(gate_failed) == 0
+    if passed:
+        message = "quality_contract evaluated (advisory only)"
+    else:
+        message = "quality_contract gate failed: " + ",".join(gate_failed)
+    evidence: dict[str, JSONValue] = {
+        "quality_contract": scorecard.to_json_obj(),
+        "overall_weighted_score": float(scorecard.overall_weighted_score),
+        "gate_failed_dimensions": list(gate_failed),
+        "advisory_dimensions": list(advisory),
+        "quality_success_criterion_id": str(success_criterion_id),
+    }
+    return passed, message, evidence
 
 
 def evaluate_intent_success_criteria(
@@ -154,6 +199,8 @@ def evaluate_intent_success_criteria(
     accounting: Mapping[str, Any],
     wall_time_ms: int,
     verifier_passed: bool,
+    quality_contract: QualityContract | None = None,
+    retrieved_context: Mapping[str, Any] | None = None,
 ) -> IntentAcceptance:
     """Deterministically evaluate intent `success_criteria`.
 
@@ -166,19 +213,25 @@ def evaluate_intent_success_criteria(
     """
 
     criteria = tuple(success_criteria or ())
-    if not criteria:
-        return IntentAcceptance(
-            passed=True,
-            failures=(),
-            evaluated_count=0,
-            per_criterion=(),
-        )
 
     patch_lower = str(patch_text or "").lower()
     touched_set = {str(x).strip() for x in touched_paths if str(x).strip()}
 
     failures: list[str] = []
     checks: list[dict[str, JSONValue]] = []
+    quality_sc: QualityScorecard | None = None
+    quality_fp = quality_contract_fingerprint(quality_contract=quality_contract)
+    quality_policy_reasons: set[str] = set()
+    if quality_contract is not None:
+        quality_sc = evaluate_quality_contract(
+            quality_contract=quality_contract,
+            patch_text=patch_text,
+            touched_paths=touched_paths,
+            accounting=accounting,
+            retrieved_context=retrieved_context,
+            execution_exit_code=int(execution.exit_code),
+            verifier_passed=bool(verifier_passed),
+        )
 
     for sc in criteria:
         sc_id = str(sc.id)
@@ -394,6 +447,18 @@ def evaluate_intent_success_criteria(
                 message = "human_gate requires approved/auto_approved/pass_in_ci"
                 evidence["approved"] = bool(approved)
 
+        elif mode == "quality_contract":
+            passed, message, evidence = _quality_check_obj(
+                success_criterion_id=sc_id,
+                scorecard=quality_sc,
+                quality_contract_present=quality_contract is not None,
+            )
+            if quality_sc is not None:
+                if not passed:
+                    quality_policy_reasons.add("policy.quality_contract.gate_failed")
+                if quality_sc.advisory_dimensions():
+                    quality_policy_reasons.add("policy.quality_contract.advisory")
+
         else:
             passed = False
             message = f"unsupported evaluation_mode: {mode}"
@@ -413,9 +478,36 @@ def evaluate_intent_success_criteria(
         if not passed:
             failures.append(f"{sc_id} ({mode}): {message or 'failed'}")
 
+    has_explicit_quality_mode = any(str(sc.evaluation_mode) == "quality_contract" for sc in criteria)
+    if quality_sc is not None and not has_explicit_quality_mode:
+        q_passed, q_message, q_evidence = _quality_check_obj(
+            success_criterion_id="quality_contract",
+            scorecard=quality_sc,
+            quality_contract_present=True,
+        )
+        checks.append(
+            {
+                "success_criterion_id": "quality_contract",
+                "evaluation_mode": "quality_contract",
+                "passed": bool(q_passed),
+                "message": q_message,
+                "evidence": q_evidence,
+            }
+        )
+        if not q_passed:
+            failures.append(f"quality_contract (quality_contract): {q_message}")
+            quality_policy_reasons.add("policy.quality_contract.gate_failed")
+        if quality_sc.advisory_dimensions():
+            quality_policy_reasons.add("policy.quality_contract.advisory")
+
     return IntentAcceptance(
         passed=len(failures) == 0,
         failures=tuple(failures),
-        evaluated_count=len(criteria),
+        evaluated_count=len(checks),
         per_criterion=tuple(checks),
+        quality_contract_fingerprint=quality_fp,
+        quality_scorecard=(quality_sc.to_json_obj() if quality_sc is not None else None),
+        quality_gate_failed_dimensions=(quality_sc.gate_failed_dimensions() if quality_sc is not None else ()),
+        quality_advisory_dimensions=(quality_sc.advisory_dimensions() if quality_sc is not None else ()),
+        quality_policy_reasons=tuple(sorted(quality_policy_reasons)),
     )

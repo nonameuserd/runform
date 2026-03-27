@@ -10,16 +10,18 @@ from __future__ import annotations
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 
+from akc.adopt.toolchain import ToolchainProfile
 from akc.compile.interfaces import Stage
 from akc.control.policy import KnowledgeUnresolvedConflictPolicy
 from akc.memory.models import JSONValue, require_non_empty
 
 TierName: TypeAlias = Literal["small", "medium", "large"]
 CompileMcpToolStage: TypeAlias = Literal["generate", "repair"]
-TestMode: TypeAlias = Literal["smoke", "full"]
+TestMode: TypeAlias = Literal["smoke", "full", "native_smoke", "native_full"]
 KnowledgeExtractionMode: TypeAlias = Literal["deterministic", "llm", "hybrid"]
 DocDerivedAssertionsMode: TypeAlias = Literal["off", "limited"]
 StoredAssertionIndexMode: TypeAlias = Literal["off", "merge"]
@@ -27,6 +29,11 @@ CompilePromptIntentContractPolicy: TypeAlias = Literal["auto", "full", "referenc
 OperationalValidityFailedTriggerSeverity: TypeAlias = Literal["block", "advisory"]
 CompileRealizationMode: TypeAlias = Literal["artifact_only", "scoped_apply"]
 CompileSkillsMode: TypeAlias = Literal["off", "default_only", "explicit", "auto"]
+ChangeScopeCategory: TypeAlias = Literal["code", "config", "ci", "infra", "dependency", "docs", "other"]
+
+_VALID_CHANGE_SCOPE_CATEGORIES: frozenset[str] = frozenset(
+    ("code", "config", "ci", "infra", "dependency", "docs", "other")
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +328,9 @@ class ControllerConfig:
     test_command: tuple[str, ...] | None = None
     test_timeout_s: float | None = None
     test_mode: TestMode = "smoke"
+    # When True, resolve smoke/full commands from ``ToolchainProfile`` like native_smoke/native_full,
+    # without changing promotion scheduling (smoke vs full-only still follows ``test_mode``).
+    native_test_mode: bool = False
     # When test_mode="smoke", control how often we run the full test gate.
     #
     # - None: run full tests whenever smoke passes (promotion gate every time).
@@ -394,6 +404,17 @@ class ControllerConfig:
     compile_realization_mode: CompileRealizationMode = "scoped_apply"
     # Absolute path to the repo/working tree allowed to receive patches (tenant/repo scope root).
     apply_scope_root: str | None = None
+    # Safe realization: allowlist of relative path prefixes allowed to mutate under scoped_apply.
+    # Empty tuple means "use default safe allowlist" (deny most sensitive repo roots).
+    mutation_paths: tuple[str, ...] = ("src/", "tests/")
+    # When non-empty, scoped_apply is denied (fail-closed) if any touched path maps to these categories.
+    change_scope_deny_categories: tuple[ChangeScopeCategory, ...] = ()
+    # Safe realization: persist rollback snapshots of touched files before apply.
+    rollback_snapshots_enabled: bool = True
+    # Git-aware realization (optional): create a branch before apply and optionally commit.
+    git_branch_per_run: bool = False
+    git_commit: bool = False
+    git_commit_message: str | None = None
     metadata: Mapping[str, Any] | None = None
     # Shallow-merged into the controller accounting dict after initialization (tests, controlled bridges).
     # Keys such as ``operational_compile_bundle`` / ``operational_verifier_findings`` must already be tenant-scoped.
@@ -414,6 +435,12 @@ class ControllerConfig:
     # UTF-8 byte budgets: per-SKILL.md read from disk and total injected system preamble.
     compile_skill_max_total_bytes: int = 98_304
     compile_skill_max_file_bytes: int = 393_216
+    # Environment preflight (2b): before compile runs against an existing codebase,
+    # validate required toolchain binaries are available and report versions.
+    toolchain_preflight_enabled: bool = True
+    toolchain_preflight_timeout_s: float = 2.0
+    # Optional toolchain override mapping (typically from `.akc/project.json`) or a pre-resolved profile.
+    toolchain: ToolchainProfile | Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.tiers:
@@ -434,6 +461,8 @@ class ControllerConfig:
             raise ValueError("full_test_every_n_iterations must be > 0 when set")
         if not isinstance(self.generate_tests_by_default, bool):
             raise ValueError("generate_tests_by_default must be a bool")
+        if not isinstance(self.native_test_mode, bool):
+            raise ValueError("native_test_mode must be a bool")
         if not isinstance(self.require_tests_for_non_test_changes, bool):
             raise ValueError("require_tests_for_non_test_changes must be a bool")
         if not isinstance(self.verifier_enabled, bool):
@@ -514,6 +543,19 @@ class ControllerConfig:
                 raise ValueError("apply_scope_root must be non-empty when set")
             if not Path(s).expanduser().is_absolute():
                 raise ValueError("apply_scope_root must be an absolute path")
+        if any(not isinstance(p, str) or not p.strip() for p in self.mutation_paths):
+            raise ValueError("mutation_paths must contain only non-empty strings")
+        for cat in self.change_scope_deny_categories:
+            if str(cat) not in _VALID_CHANGE_SCOPE_CATEGORIES:
+                raise ValueError(f"change_scope_deny_categories contains unknown category: {cat!r}")
+        if not isinstance(self.rollback_snapshots_enabled, bool):
+            raise ValueError("rollback_snapshots_enabled must be a bool")
+        if not isinstance(self.git_branch_per_run, bool):
+            raise ValueError("git_branch_per_run must be a bool")
+        if not isinstance(self.git_commit, bool):
+            raise ValueError("git_commit must be a bool")
+        if self.git_commit_message is not None and not str(self.git_commit_message).strip():
+            raise ValueError("git_commit_message must be non-empty when set")
         if self.accounting_overlay is not None and not isinstance(self.accounting_overlay, Mapping):
             raise ValueError("accounting_overlay must be a mapping when set")
         if self.compile_mcp_enabled:
@@ -552,6 +594,12 @@ class ControllerConfig:
                 raise ValueError("compile_skill_extra_roots must not contain empty paths")
             if not exp.is_absolute():
                 raise ValueError("compile_skill_extra_roots entries must be absolute paths")
+        if not isinstance(self.toolchain_preflight_enabled, bool):
+            raise ValueError("toolchain_preflight_enabled must be a bool")
+        if float(self.toolchain_preflight_timeout_s) <= 0.0:
+            raise ValueError("toolchain_preflight_timeout_s must be > 0")
+        if self.toolchain is not None and not isinstance(self.toolchain, (ToolchainProfile, Mapping)):
+            raise ValueError("toolchain must be a ToolchainProfile, a mapping, or None")
 
     def effective_deployment_intents_ir_alignment_policy(self) -> Literal["off", "warn", "error"]:
         """Policy for ``deployment_intents`` vs IR deployable nodes (runtime bundle projection check)."""
@@ -617,63 +665,27 @@ class ControllerConfig:
             sev = "advisory"
         elif ve == "blocking" or (ve == "auto" and stage == "enforce"):
             sev = "block"
-        return ControllerConfig(
-            tiers=self.tiers,
-            stage_tiers=self.stage_tiers,
-            budget=self.budget,
-            generate_tests_by_default=self.generate_tests_by_default,
-            require_tests_for_non_test_changes=self.require_tests_for_non_test_changes,
-            test_command=self.test_command,
-            test_timeout_s=self.test_timeout_s,
-            test_mode=self.test_mode,
-            full_test_every_n_iterations=self.full_test_every_n_iterations,
-            verifier_enabled=self.verifier_enabled,
-            verifier_strict=self.verifier_strict,
-            policy_mode=self.policy_mode,
-            tool_allowlist=self.tool_allowlist,
+        return dc_replace(
+            self,
             operational_validity_failed_trigger_severity=sev,
             governance_assurance_mode=cast(Literal["hybrid", "artifact_only"], am),
             governance_verifier_enforcement=cast(Literal["auto", "advisory", "blocking"], ve),
             governance_provider_allowlist=allow,
             governance_max_errors_before_block=max_err,
-            cost_rates=self.cost_rates,
-            opa_policy_path=self.opa_policy_path,
-            opa_decision_path=self.opa_decision_path,
-            knowledge_extraction_mode=self.knowledge_extraction_mode,
-            doc_derived_assertions_mode=self.doc_derived_assertions_mode,
-            doc_derived_max_assertions=self.doc_derived_max_assertions,
-            doc_derived_patterns=self.doc_derived_patterns,
-            knowledge_evidence_weighting=self.knowledge_evidence_weighting,
-            knowledge_conflict_normalization=self.knowledge_conflict_normalization,
-            knowledge_embedding_clustering_enabled=self.knowledge_embedding_clustering_enabled,
-            knowledge_embedding_clustering_threshold=self.knowledge_embedding_clustering_threshold,
-            knowledge_unresolved_conflict_policy=self.knowledge_unresolved_conflict_policy,
-            stored_assertion_index_mode=self.stored_assertion_index_mode,
-            stored_assertion_index_max_rows=self.stored_assertion_index_max_rows,
-            apply_operator_knowledge_decisions=self.apply_operator_knowledge_decisions,
-            compile_prompt_intent_contract_policy=self.compile_prompt_intent_contract_policy,
-            ir_operational_structure_policy=self.ir_operational_structure_policy,
-            ir_graph_integrity_policy=self.ir_graph_integrity_policy,
-            artifact_consistency_policy=self.artifact_consistency_policy,
-            deployment_intents_ir_alignment_policy=self.deployment_intents_ir_alignment_policy,
-            runtime_bundle_schema_version=self.runtime_bundle_schema_version,
-            runtime_bundle_embed_system_ir=self.runtime_bundle_embed_system_ir,
-            reconcile_deploy_targets_from_ir_only=self.reconcile_deploy_targets_from_ir_only,
-            compile_realization_mode=self.compile_realization_mode,
-            apply_scope_root=self.apply_scope_root,
-            metadata=self.metadata,
-            accounting_overlay=self.accounting_overlay,
-            compile_mcp_enabled=self.compile_mcp_enabled,
-            compile_mcp_config_path=self.compile_mcp_config_path,
-            compile_mcp_server=self.compile_mcp_server,
-            compile_mcp_resource_uris=self.compile_mcp_resource_uris,
-            compile_mcp_session_timeout_s=self.compile_mcp_session_timeout_s,
-            compile_mcp_tools=self.compile_mcp_tools,
-            compile_mcp_tool_stages=self.compile_mcp_tool_stages,
-            compile_skills_mode=self.compile_skills_mode,
-            compile_skill_allowlist=self.compile_skill_allowlist,
-            compile_skill_relative_roots=self.compile_skill_relative_roots,
-            compile_skill_extra_roots=self.compile_skill_extra_roots,
-            compile_skill_max_total_bytes=self.compile_skill_max_total_bytes,
-            compile_skill_max_file_bytes=self.compile_skill_max_file_bytes,
         )
+
+
+def controller_uses_native_toolchain_resolved_commands(config: ControllerConfig) -> bool:
+    """Whether compile should resolve smoke/full commands from ``ToolchainProfile`` (pillar 2)."""
+
+    if config.test_mode in {"native_smoke", "native_full"}:
+        return True
+    return bool(config.native_test_mode) and config.test_mode in {"smoke", "full"}
+
+
+def controller_test_promotion_is_smoke_first(config: ControllerConfig) -> bool:
+    """Whether evaluation uses a smoke gate with optional full-test promotion (vs full-only)."""
+
+    if config.test_mode in {"smoke", "native_smoke"}:
+        return True
+    return bool(config.native_test_mode) and config.test_mode == "smoke"

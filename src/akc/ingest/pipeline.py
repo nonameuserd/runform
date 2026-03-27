@@ -23,6 +23,7 @@ from akc.compile.controller_config import DocDerivedPatternOptions
 from akc.compile.rust_bridge import RustExecConfig
 from akc.ingest.chunking import ChunkingConfig, chunk_documents, normalize_documents
 from akc.ingest.connectors.base import Connector
+from akc.ingest.connectors.codebase import build_codebase_connector
 from akc.ingest.connectors.docs import build_docs_connector
 from akc.ingest.connectors.mcp.connector import build_mcp_connector, mcp_incremental_can_skip
 from akc.ingest.connectors.messaging.discord import build_discord_connector
@@ -38,7 +39,7 @@ from akc.memory.models import normalize_repo_id
 
 logger = logging.getLogger(__name__)
 
-ConnectorName = Literal["docs", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"]
+ConnectorName = Literal["docs", "codebase", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"]
 IndexBackend = Literal["memory", "sqlite", "pgvector"]
 
 
@@ -135,6 +136,9 @@ def _get_connector(
 ) -> Connector:
     if connector == "docs":
         return build_docs_connector(tenant_id=tenant_id, root_path=input_value)
+    elif connector == "codebase":
+        # Phase 1: local filesystem connector; keep options minimal and deterministic.
+        return build_codebase_connector(tenant_id=tenant_id, root_path=input_value)
     elif connector == "openapi":
         opts_o: dict[str, str] = dict(connector_options or {})
         emit_soft = opts_o.get("emit_soft_assertion_chunks", "false").lower() in {"1", "true", "yes"}
@@ -311,15 +315,15 @@ def _fingerprint_source(connector: Connector, source_id: str) -> dict[str, Any]:
     """Compute a best-effort fingerprint for a source_id."""
 
     # Docs sources are local paths.
-    if connector.source_type == "docs":
+    if connector.source_type in {"docs", "codebase"}:
         try:
             p = Path(source_id).expanduser()
             st = p.stat()
         except OSError:
             # If we cannot stat it, force re-fetch and allow connector to raise a helpful error.
-            return {"kind": "docs", "path": source_id, "stat_failed": True}
+            return {"kind": connector.source_type, "path": source_id, "stat_failed": True}
         return {
-            "kind": "docs",
+            "kind": connector.source_type,
             "path": str(p),
             "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))),
             "size": int(st.st_size),

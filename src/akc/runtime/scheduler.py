@@ -103,6 +103,7 @@ class InMemoryRuntimeScheduler(RuntimeScheduler):
     max_attempts: int = 3
     retry_base_delay_ms: int = 1000
     retry_jitter_ceiling_ms: int = 250
+    retry_max_delay_ms: int = 30_000
     _queues: dict[str, list[tuple[tuple[int, int, str], ScheduledRuntimeAction]]] = field(default_factory=dict)
     _in_flight: dict[str, dict[str, ScheduledRuntimeAction]] = field(default_factory=dict)
     _dead_letters: dict[str, list[RuntimeDeadLetter]] = field(default_factory=dict)
@@ -204,13 +205,16 @@ class InMemoryRuntimeScheduler(RuntimeScheduler):
             )
             return False
         backoff = int(self.retry_base_delay_ms) * (2 ** max(next_attempt - 1, 0))
+        bounded_backoff = min(backoff, int(self.retry_max_delay_ms))
         delayed = ScheduledRuntimeAction(
             action=scheduled.action,
             priority=scheduled.priority,
             enqueue_ts=scheduled.enqueue_ts,
             node_class=scheduled.node_class,
             attempt=next_attempt,
-            available_at=int(now_ms) + backoff + self._jitter_ms(action_id=action.action_id, attempt=next_attempt),
+            available_at=int(now_ms)
+            + bounded_backoff
+            + self._jitter_ms(action_id=action.action_id, attempt=next_attempt),
         )
         self._push(key=key, scheduled=delayed)
         return True

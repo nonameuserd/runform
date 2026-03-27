@@ -26,7 +26,9 @@ RUN_LABEL_KEY_MAX_LEN = 128
 RUN_LABEL_VALUE_MAX_LEN = 512
 
 _CONTROL_PLANE_REF_KEYS: tuple[tuple[str, str], ...] = (
+    ("action_run_ref", "action_run_ref"),
     ("runtime_evidence_ref", "runtime_evidence_ref"),
+    ("quality_sidecar_ref", "quality_sidecar_ref"),
     ("policy_decisions_ref", "policy_decisions_ref"),
     ("coordination_audit_ref", "coordination_audit_ref"),
     ("replay_decisions_ref", "replay_decisions_ref"),
@@ -161,6 +163,51 @@ def _time_compression_metric_cell(control_plane: dict[str, Any] | None, *, key: 
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         return float(raw)
     return None
+
+
+def _quality_contract_fingerprint_cell(control_plane: dict[str, Any] | None) -> str | None:
+    if not isinstance(control_plane, dict):
+        return None
+    raw = control_plane.get("quality_contract_fingerprint")
+    s = str(raw).strip() if raw is not None else ""
+    return s or None
+
+
+def _quality_score_cell(control_plane: dict[str, Any] | None, *, key: str) -> float | None:
+    if not isinstance(control_plane, dict):
+        return None
+    raw = control_plane.get(key)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    return None
+
+
+def _quality_count_cell(control_plane: dict[str, Any] | None, *, key: str) -> int | None:
+    if not isinstance(control_plane, dict):
+        return None
+    raw = control_plane.get(key)
+    if isinstance(raw, list):
+        vals = {str(x).strip() for x in raw if str(x).strip()}
+        return len(vals)
+    return None
+
+
+def _quality_dimensions_json_cell(control_plane: dict[str, Any] | None) -> str | None:
+    if not isinstance(control_plane, dict):
+        return None
+    raw = control_plane.get("quality_dimension_scores")
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        ks = str(k).strip()
+        if not ks:
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[ks] = float(v)
+    if not out:
+        return None
+    return json.dumps(out, sort_keys=True)
 
 
 def _policy_provenance_columns(control_plane: dict[str, Any] | None) -> tuple[str | None, str | None, str | None]:
@@ -437,6 +484,16 @@ def _migrate_ops_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs ADD COLUMN compile_to_healthy_runtime_ms REAL")
     if "compression_factor_vs_baseline" not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN compression_factor_vs_baseline REAL")
+    if "quality_contract_fingerprint" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN quality_contract_fingerprint TEXT")
+    if "quality_overall_score" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN quality_overall_score REAL")
+    if "quality_gate_failed_count" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN quality_gate_failed_count INTEGER")
+    if "quality_advisory_count" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN quality_advisory_count INTEGER")
+    if "quality_dimensions_json" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN quality_dimensions_json TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS repo_knowledge_decisions (
@@ -635,6 +692,11 @@ class OperationsIndex:
                 intent_to_healthy_runtime_ms REAL,
                 compile_to_healthy_runtime_ms REAL,
                 compression_factor_vs_baseline REAL,
+                quality_contract_fingerprint TEXT,
+                quality_overall_score REAL,
+                quality_gate_failed_count INTEGER,
+                quality_advisory_count INTEGER,
+                quality_dimensions_json TEXT,
                 PRIMARY KEY (tenant_id, repo_id, run_id)
             )
             """
@@ -893,6 +955,11 @@ class OperationsIndex:
         intent_to_healthy_runtime_ms = _time_compression_metric_cell(cp_payload, key="intent_to_healthy_runtime_ms")
         compile_to_healthy_runtime_ms = _time_compression_metric_cell(cp_payload, key="compile_to_healthy_runtime_ms")
         compression_factor_vs_baseline = _time_compression_metric_cell(cp_payload, key="compression_factor_vs_baseline")
+        quality_contract_fp = _quality_contract_fingerprint_cell(cp_payload)
+        quality_overall_score = _quality_score_cell(cp_payload, key="quality_overall_score")
+        quality_gate_failed_count = _quality_count_cell(cp_payload, key="quality_gate_failed_dimensions")
+        quality_advisory_count = _quality_count_cell(cp_payload, key="quality_advisory_dimensions")
+        quality_dimensions_json = _quality_dimensions_json_cell(cp_payload)
         ov_summary = _load_operational_predicate_summary(scope_root=scope_root, control_plane=cp_payload)
         ov_summary_json = json.dumps(ov_summary, sort_keys=True) if ov_summary is not None else None
         rel_manifest = _manifest_rel_path(outputs_root=outputs_root, manifest_path=manifest_path)
@@ -916,8 +983,10 @@ class OperationsIndex:
                     recompile_trigger_count, runtime_evidence_present, aggregate_health,
                     policy_bundle_id, policy_git_sha, rego_pack_version,
                     operational_validity_passed, operational_predicate_summary_json,
-                    intent_to_healthy_runtime_ms, compile_to_healthy_runtime_ms, compression_factor_vs_baseline
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    intent_to_healthy_runtime_ms, compile_to_healthy_runtime_ms, compression_factor_vs_baseline,
+                    quality_contract_fingerprint, quality_overall_score,
+                    quality_gate_failed_count, quality_advisory_count, quality_dimensions_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id, repo_id, run_id) DO UPDATE SET
                     updated_at_ms=excluded.updated_at_ms,
                     manifest_rel_path=excluded.manifest_rel_path,
@@ -936,7 +1005,12 @@ class OperationsIndex:
                     operational_predicate_summary_json=excluded.operational_predicate_summary_json,
                     intent_to_healthy_runtime_ms=excluded.intent_to_healthy_runtime_ms,
                     compile_to_healthy_runtime_ms=excluded.compile_to_healthy_runtime_ms,
-                    compression_factor_vs_baseline=excluded.compression_factor_vs_baseline
+                    compression_factor_vs_baseline=excluded.compression_factor_vs_baseline,
+                    quality_contract_fingerprint=excluded.quality_contract_fingerprint,
+                    quality_overall_score=excluded.quality_overall_score,
+                    quality_gate_failed_count=excluded.quality_gate_failed_count,
+                    quality_advisory_count=excluded.quality_advisory_count,
+                    quality_dimensions_json=excluded.quality_dimensions_json
                 """,
                 (
                     tenant_key,
@@ -960,6 +1034,11 @@ class OperationsIndex:
                     intent_to_healthy_runtime_ms,
                     compile_to_healthy_runtime_ms,
                     compression_factor_vs_baseline,
+                    quality_contract_fp,
+                    quality_overall_score,
+                    quality_gate_failed_count,
+                    quality_advisory_count,
+                    quality_dimensions_json,
                 ),
             )
             conn.execute(
@@ -1102,6 +1181,8 @@ class OperationsIndex:
                     r.policy_bundle_id, r.policy_git_sha, r.rego_pack_version,
                     r.operational_validity_passed, r.operational_predicate_summary_json,
                     r.intent_to_healthy_runtime_ms, r.compile_to_healthy_runtime_ms, r.compression_factor_vs_baseline,
+                    r.quality_contract_fingerprint, r.quality_overall_score,
+                    r.quality_gate_failed_count, r.quality_advisory_count, r.quality_dimensions_json,
                     pb.bundle_rel_path, pb.fingerprint_sha256, pb.last_modified_ms,
                     pb.rollout_stage, pb.revision_id
                 FROM runs r
@@ -1119,11 +1200,11 @@ class OperationsIndex:
             ov_out: bool | None = None if ov_raw is None else bool(int(ov_raw))
             ov_summary = _decode_json_cell(row[17])
             pba = _policy_bundle_artifact_from_join(
-                bundle_rel_path=str(row[21]) if row[21] else None,
-                fingerprint_sha256=str(row[22]) if row[22] else None,
-                last_modified_ms=int(row[23]) if row[23] is not None else None,
-                rollout_stage=str(row[24]) if row[24] else None,
-                revision_id=str(row[25]) if row[25] else None,
+                bundle_rel_path=str(row[26]) if row[26] else None,
+                fingerprint_sha256=str(row[27]) if row[27] else None,
+                last_modified_ms=int(row[28]) if row[28] is not None else None,
+                rollout_stage=str(row[29]) if row[29] else None,
+                revision_id=str(row[30]) if row[30] else None,
             )
             out.append(
                 {
@@ -1148,6 +1229,11 @@ class OperationsIndex:
                     "intent_to_healthy_runtime_ms": float(row[18]) if row[18] is not None else None,
                     "compile_to_healthy_runtime_ms": float(row[19]) if row[19] is not None else None,
                     "compression_factor_vs_baseline": float(row[20]) if row[20] is not None else None,
+                    "quality_contract_fingerprint": str(row[21]) if row[21] else None,
+                    "quality_overall_score": float(row[22]) if row[22] is not None else None,
+                    "quality_gate_failed_count": int(row[23]) if row[23] is not None else None,
+                    "quality_advisory_count": int(row[24]) if row[24] is not None else None,
+                    "quality_dimension_scores": _decode_json_cell(row[25]),
                     "policy_bundle_artifact": pba,
                 }
             )
@@ -1174,7 +1260,9 @@ class OperationsIndex:
                     pass_succeeded, pass_failed, pass_skipped,
                     recompile_trigger_count, runtime_evidence_present, aggregate_health,
                     policy_bundle_id, policy_git_sha, rego_pack_version,
-                    operational_validity_passed, operational_predicate_summary_json
+                    operational_validity_passed, operational_predicate_summary_json,
+                    quality_contract_fingerprint, quality_overall_score,
+                    quality_gate_failed_count, quality_advisory_count, quality_dimensions_json
                 FROM runs
                 WHERE tenant_id = ? AND repo_id = ? AND run_id = ?
                 """,
@@ -1255,6 +1343,11 @@ class OperationsIndex:
             "rego_pack_version": str(row[15]) if row[15] else None,
             "operational_validity_passed": ov_pass,
             "operational_predicate_summary": ov_summary,
+            "quality_contract_fingerprint": str(row[18]) if row[18] else None,
+            "quality_overall_score": float(row[19]) if row[19] is not None else None,
+            "quality_gate_failed_count": int(row[20]) if row[20] is not None else None,
+            "quality_advisory_count": int(row[21]) if row[21] is not None else None,
+            "quality_dimension_scores": _decode_json_cell(row[22]),
             "knowledge_decisions": knowledge_decisions,
             "policy_bundle_artifact": policy_bundle_artifact,
             "sidecars": sidecars,

@@ -173,16 +173,25 @@ Structured evidence also includes a final **`terminal_health`** row with `resour
 
 **Living automation profile (Phase E):** one named profile wires recompile trigger defaults, optional time-compression baselines on compile manifests (`baseline_duration_hours` + `compression_factor_vs_baseline`), and whether `akc runtime autopilot` passes **bridge-gated** runtime transcript events into `safe_recompile_on_drift`. Resolution order: CLI (`--living-automation-profile`) → env `AKC_LIVING_AUTOMATION_PROFILE` → `.akc/project.json` `living_automation_profile`.
 
-| Profile | Autopilot runtime→recompile | `living_loop_v1` manifest defaults |
+| Profile | Autopilot runtime→recompile | Manifest defaults |
 |---------|----------------------------|------------------------------------|
 | `off` (default) | No — ingest drift checks still run | No extra baseline metadata |
 | `living_loop_v1` | Yes — only when `DefaultLivingRuntimeBridge` maps an event to a health signal | Default 8h baseline for compression factor; granular acceptance triggers unless the eval suite’s `living_recompile_policy` overrides |
+| `living_loop_unattended_v1` | Yes (same as `living_loop_v1`) | Same as `living_loop_v1`, plus this profile is intended for **unattended** `akc runtime autopilot` deployments (see “Autopilot deployment” and `akc living doctor`) |
 
 Implementation: `src/akc/living/automation_profile.py`, `src/akc/living/runtime_bridge.py`, `src/akc/run/recompile_triggers.py`, `src/akc/run/time_compression.py`.
 
 ### Autopilot deployment (single-writer)
 
 `akc runtime autopilot` is a **single-writer per tenant/repo scope** at the mutating boundary: it acquires a lease before doing work (`src/akc/runtime/autopilot.py`).
+
+#### Progressive takeover (Level 4) defaults
+
+When `.akc/project.json` sets `adoption_level` to **`autonomy`** (Level 4), `akc runtime autopilot` applies the following **defaults**:
+
+- If no living automation profile is set via CLI/env/project, autopilot defaults to `living_loop_unattended_v1`.
+- If autonomy budgets are not provided via flags, autopilot behaves like `--unattended-defaults` (requires `living_loop_unattended_v1`).
+- The **reliability SLO gate** is enabled by default (same as `--slo-gate`; tunable via `--slo-*` flags).
 
 | Lease backend | Coordination |
 |---------------|----------------|
@@ -210,6 +219,15 @@ For Plan 3 staging/soak acceptance, AKC can gate on `reliability_scoreboard` art
   - `convergence_latency_ms_avg`
   - `mttr_like_repair_latency_ms_avg`
   - `failed_promotions_prevented`
+
+AKC also supports an **in-process** rollout gate in `akc runtime autopilot` (progressive takeover):
+
+- Enable with `--slo-gate` to **block starting new live rollouts** until trailing-window KPIs meet thresholds.
+- Tunables:
+  - `--slo-min-rollouts`
+  - `--slo-min-policy-compliance-rate`
+  - `--slo-min-rollback-success-rate`
+  - `--slo-max-change-instability-proxy`
 
 The repository includes:
 

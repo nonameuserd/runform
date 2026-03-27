@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
+from akc.adopt.trust_ladder import adoption_level_index, parse_adoption_level
+
 from .project_config import AkcProjectConfig, load_akc_project_config
 
 DeveloperRoleProfile: TypeAlias = Literal["classic", "emerging"]
@@ -57,20 +59,25 @@ def _governance_compile_defaults(governance_profile: object) -> dict[str, Any]:
 
     if governance_profile is not None:
         cd = getattr(governance_profile, "compile_defaults", None)
-        pairs: list[tuple[str, str]] = []
+        pairs: list[tuple[str, Any]] = []
         if isinstance(cd, Mapping):
-            pairs = [(str(k), str(v)) for k, v in cd.items()]
+            pairs = [(str(k), v) for k, v in cd.items()]
         elif cd is not None:
             try:
-                pairs = [(str(a), str(b)) for a, b in cd]
+                pairs = [(str(a), b) for a, b in cd]
             except (TypeError, ValueError):
                 pairs = []
         for key, val in pairs:
             k = key.strip()
-            v = val.strip()
-            if not k or not v:
+            if not k:
                 continue
-            out[k] = v
+            if isinstance(val, str):
+                v = val.strip()
+                if not v:
+                    continue
+                out[k] = v
+            else:
+                out[k] = val
 
     return out
 
@@ -134,6 +141,12 @@ def resolve_developer_role_profile(
             value=normalize_developer_role_profile(proj.developer_role_profile),
             source="project_file",
         )
+    # Progressive takeover: higher adoption levels default toward higher automation.
+    # This is still tenant-safe: it only consults the repo-local project config.
+    if proj is not None and proj.adoption_level is not None and str(proj.adoption_level).strip() != "":
+        lvl = parse_adoption_level(proj.adoption_level)
+        if lvl is not None and adoption_level_index(lvl) >= 3:
+            return ResolvedValue(value="emerging", source="profile_default")
     return ResolvedValue(value=legacy_default, source="legacy_default")
 
 
@@ -197,6 +210,30 @@ def resolve_compile_profile_defaults(
             legacy_default="off",
             governance_value=gov.get("stored_assertion_index"),
             profile_default=profile_defaults.get("stored_assertion_index"),
+        ),
+        "quality_contract_rollout_stage": _resolve_by_precedence(
+            cli_value=None,
+            legacy_default=None,
+            governance_value=gov.get("quality_contract_rollout_stage"),
+            profile_default="advisory",
+        ),
+        "quality_evidence_expectations": _resolve_by_precedence(
+            cli_value=None,
+            legacy_default=None,
+            governance_value=gov.get("quality_evidence_expectations"),
+            profile_default=None,
+        ),
+        "quality_domain_id": _resolve_by_precedence(
+            cli_value=None,
+            legacy_default=None,
+            governance_value=gov.get("quality_domain_id"),
+            profile_default=None,
+        ),
+        "quality_domain_matrix_path": _resolve_by_precedence(
+            cli_value=None,
+            legacy_default=None,
+            governance_value=gov.get("quality_domain_matrix_path"),
+            profile_default=None,
         ),
         "intent_bootstrap_from_store": ResolvedValue(
             value=bool(profile_defaults.get("intent_bootstrap_from_store", False)),

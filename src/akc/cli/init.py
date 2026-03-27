@@ -49,7 +49,10 @@ def _write_policy_stub(*, akc_dir: Path) -> Path:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Create ``.akc/project.json`` (and optional local OPA policy stub)."""
+    """Create ``.akc/project.json`` (and optional local OPA policy stub).
+
+    When `--detect` is set, also emit a lightweight `.akc/project_profile.json`.
+    """
 
     root = Path(str(args.directory)).expanduser()
     try:
@@ -87,6 +90,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         "repo_id": repo_id,
         "outputs_root": outputs_root,
     }
+    adoption_level = str(getattr(args, "adoption_level", "") or "").strip()
+    if adoption_level:
+        payload["adoption_level"] = adoption_level
     if policy_stub:
         payload["opa_policy_path"] = _POLICY_REL_IN_PROJECT
         payload["opa_decision_path"] = "data.akc.allow"
@@ -98,6 +104,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"akc init: cannot write {project_path}: {exc}")
         return 2
+
+    if bool(getattr(args, "detect", False)):
+        try:
+            from akc.adopt.detect import detect_project_profile
+
+            detected_profile = detect_project_profile(root=root)
+            profile_path = akc_dir / "project_profile.json"
+            profile_text = detected_profile.to_json_str(indent=2)
+            profile_path.write_text(profile_text, encoding="utf-8")
+            print(f"  project_profile: {profile_path}")
+        except Exception as exc:  # pragma: no cover (defensive; detection should be best-effort)
+            print(f"akc init: project detection failed (continuing without profile): {exc}")
 
     print(f"Wrote {project_path}")
     if policy_stub:
@@ -150,10 +168,23 @@ def register_init_parser(sub: Any) -> None:
         ),
     )
     init.add_argument(
+        "--adoption-level",
+        default=None,
+        help=(
+            "Progressive takeover ladder level recorded in project.json (informational): "
+            "observer|advisor|copilot|compiler|autonomy (or numeric 0..4)."
+        ),
+    )
+    init.add_argument(
         "--no-policy-stub",
         dest="policy_stub",
         action="store_false",
         default=True,
         help="Do not copy the bundled OPA policy stub or set opa_* keys in project.json",
+    )
+    init.add_argument(
+        "--detect",
+        action="store_true",
+        help="Analyze the repository and emit .akc/project_profile.json",
     )
     init.set_defaults(func=cmd_init)

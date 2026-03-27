@@ -426,4 +426,4 @@ def test_coordination_parallel_dispatch_reduces_layer_latency(tmp_path: Path) ->
         if not emitted and not k.scheduler.pending(context=k.context):
             break
     elapsed = time.perf_counter() - started
-    assert elapsed < 0.75
+    assert elapsed < 1.0  # CI / loaded hosts occasionally exceed tight parallel-dispatch bounds

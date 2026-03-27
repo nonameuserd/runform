@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from akc import __version__
 
+from .action import (
+    cmd_action_approve,
+    cmd_action_dispatch_channel,
+    cmd_action_replay,
+    cmd_action_status,
+    cmd_action_submit,
+)
 from .compile import cmd_compile
 from .control import (
     cmd_control_forensics_export,
@@ -104,6 +112,55 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_init_parser(sub)
 
+    if str(os.environ.get("AKC_ACTION_PLANE", "")).strip() == "1":
+        action = sub.add_parser("action", help="Action plane (intent parse/plan/execute)")
+        action_sub = action.add_subparsers(dest="action_command", required=True)
+
+        action_submit = action_sub.add_parser("submit", help="Submit an action request")
+        action_submit.add_argument("--text", required=True, help="Natural language request")
+        action_submit.add_argument("--tenant-id", required=True, help="Tenant identifier")
+        action_submit.add_argument("--repo-id", required=True, help="Repo identifier")
+        action_submit.add_argument("--channel", default=None, help="Optional inbound channel name")
+        action_submit.add_argument("--actor-id", default=None, help="Optional actor/user identifier")
+        action_submit.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Parse and plan only; do not execute provider steps.",
+        )
+        action_submit.add_argument(
+            "--simulate",
+            action="store_true",
+            help="Execute the plan in simulation mode with no external side effects.",
+        )
+        action_submit.set_defaults(func=cmd_action_submit)
+
+        action_status = action_sub.add_parser("status", help="Get action intent status")
+        action_status.add_argument("--intent-id", required=True, help="Intent identifier")
+        action_status.set_defaults(func=cmd_action_status)
+
+        action_approve = action_sub.add_parser("approve", help="Approve one pending action step")
+        action_approve.add_argument("--intent-id", required=True, help="Intent identifier")
+        action_approve.add_argument("--step-id", required=True, help="Step identifier")
+        action_approve.set_defaults(func=cmd_action_approve)
+
+        action_replay = action_sub.add_parser("replay", help="Replay action intent execution")
+        action_replay.add_argument("--intent-id", required=True, help="Intent identifier")
+        action_replay.add_argument(
+            "--mode",
+            default="simulate",
+            choices=["simulate", "live"],
+            help="Replay mode (default: simulate)",
+        )
+        action_replay.set_defaults(func=cmd_action_replay)
+
+        action_dispatch = action_sub.add_parser(
+            "dispatch-channel",
+            help="Dispatch channel payload into action submit flow",
+        )
+        action_dispatch.add_argument("--channel", required=True, help="Channel adapter name")
+        action_dispatch.add_argument("--payload-file", required=True, help="Path to JSON payload file")
+        action_dispatch.set_defaults(func=cmd_action_dispatch_channel)
+
     ingest = sub.add_parser(
         "ingest",
         help="Ingest sources into a vector index (connectors and index backends are pluggable)",
@@ -122,9 +179,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--connector",
         required=True,
-        choices=["docs", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"],
+        choices=["docs", "codebase", "openapi", "slack", "discord", "telegram", "whatsapp", "mcp"],
         help=(
-            "Connector: docs, openapi, slack, discord, telegram, whatsapp (Cloud API webhook captures), "
+            "Connector: docs, codebase, openapi, slack, discord, telegram, whatsapp (Cloud API webhook captures), "
             "mcp (mcp requires ingest-mcp extra)"
         ),
     )
@@ -991,12 +1048,69 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     compile_cmd.add_argument(
+        "--test-mode",
+        choices=["smoke", "full", "native_smoke", "native_full"],
+        default=None,
+        help=(
+            "Test gate mode. "
+            "smoke/full run ControllerConfig.test_command (default pytest). "
+            "native_smoke/native_full derive commands from detected project toolchain (lint/typecheck/build/test). "
+            "When omitted, defaults to smoke for --mode quick and full for --mode thorough "
+            "(unless adoption_level requests native validation)."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--native-test-mode",
+        action="store_true",
+        help=(
+            "When set with --test-mode smoke/full, resolve commands from the detected toolchain "
+            "(same as native_smoke/native_full) while keeping smoke vs full scheduling. "
+            "May also be set in .akc/project.json as native_test_mode."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--artifact-only",
+        action="store_true",
+        help=(
+            "Alias for `--compile-realization-mode artifact_only` (Level 1: Advisor; emits patch artifacts only, "
+            "no working-tree writes)."
+        ),
+    )
+    compile_cmd.add_argument(
         "--apply-scope-root",
         default=None,
         help=(
             "Absolute directory for scoped_apply (tenant/repo work tree). "
             "When omitted under scoped_apply, defaults to --work-root / outputs scope root."
         ),
+    )
+    compile_cmd.add_argument(
+        "--rollback-snapshots",
+        dest="rollback_snapshots_enabled",
+        action="store_true",
+        default=None,
+        help="Enable rollback snapshots under scoped_apply (default: enabled).",
+    )
+    compile_cmd.add_argument(
+        "--no-rollback-snapshots",
+        dest="rollback_snapshots_enabled",
+        action="store_false",
+        help="Disable rollback snapshots under scoped_apply.",
+    )
+    compile_cmd.add_argument(
+        "--git-branch-per-run",
+        action="store_true",
+        help="When scoped_apply is enabled, create a git branch `akc/compile/<patch_sha>` before applying the patch.",
+    )
+    compile_cmd.add_argument(
+        "--git-commit",
+        action="store_true",
+        help="When scoped_apply is enabled, commit the applied patch (stages only touched paths).",
+    )
+    compile_cmd.add_argument(
+        "--git-commit-message",
+        default=None,
+        help="Optional commit message for --git-commit (default: 'AKC scoped_apply <sha>').",
     )
     compile_cmd.add_argument(
         "--promotion-mode",
@@ -1793,6 +1907,37 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Cooldown after promotion denial (ms) (required unless --unattended-defaults)",
+    )
+
+    # Progressive takeover (Level 3): reliability SLO gate before starting new live rollouts.
+    runtime_autopilot.add_argument(
+        "--slo-gate",
+        action="store_true",
+        help=("Enable reliability SLO gate (blocks rollouts until KPIs meet thresholds)."),
+    )
+    runtime_autopilot.add_argument(
+        "--slo-min-rollouts",
+        type=int,
+        default=5,
+        help="Minimum rollouts in trailing window required for SLO evaluation (default: 5)",
+    )
+    runtime_autopilot.add_argument(
+        "--slo-min-policy-compliance-rate",
+        type=float,
+        default=0.98,
+        help="Minimum policy_compliance_rate required to allow rollouts (default: 0.98)",
+    )
+    runtime_autopilot.add_argument(
+        "--slo-min-rollback-success-rate",
+        type=float,
+        default=0.95,
+        help="Minimum rollback_success_rate required to allow rollouts (default: 0.95)",
+    )
+    runtime_autopilot.add_argument(
+        "--slo-max-change-instability-proxy",
+        type=float,
+        default=0.25,
+        help="Maximum delivery_change_instability_proxy allowed to allow rollouts (default: 0.25)",
     )
     runtime_autopilot.set_defaults(func=cmd_runtime_autopilot)
 

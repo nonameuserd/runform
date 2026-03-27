@@ -93,6 +93,46 @@ def test_operations_index_upsert_list_get(tmp_path: Path) -> None:
     assert "runtime_evidence_ref" in kinds
 
 
+def test_operations_index_indexes_quality_fields_and_sidecar(tmp_path: Path) -> None:
+    quality_rel = ".akc/run/run-q.quality.json"
+    m = RunManifest(
+        run_id="run-q",
+        tenant_id="t1",
+        repo_id="repo1",
+        ir_sha256=_hex64(),
+        replay_mode="live",
+        control_plane={
+            "schema_version": 1,
+            "schema_id": "akc:control_plane_envelope:v1",
+            "quality_contract_fingerprint": "1234abcd5678ef90",
+            "quality_overall_score": 0.82,
+            "quality_gate_failed_dimensions": ["judgment"],
+            "quality_advisory_dimensions": ["taste", "user_empathy"],
+            "quality_dimension_scores": {"judgment": 0.52, "taste": 0.71},
+            "quality_sidecar_ref": {"path": quality_rel, "sha256": _hex64("f")},
+        },
+    )
+    mp = _write_manifest(root=tmp_path, manifest=m)
+    OperationsIndex.upsert_from_manifest_path(mp, outputs_root=tmp_path)
+    db = operations_sqlite_path(outputs_root=tmp_path, tenant_id="t1")
+    idx = OperationsIndex(sqlite_path=db)
+
+    rows = idx.list_runs(tenant_id="t1", limit=10)
+    assert len(rows) == 1
+    assert rows[0]["quality_contract_fingerprint"] == "1234abcd5678ef90"
+    assert rows[0]["quality_gate_failed_count"] == 1
+    assert rows[0]["quality_advisory_count"] == 2
+    qscores = rows[0]["quality_dimension_scores"]
+    assert isinstance(qscores, dict)
+    assert qscores["judgment"] == 0.52
+
+    full = idx.get_run(tenant_id="t1", repo_id="repo1", run_id="run-q")
+    assert full is not None
+    assert full["quality_overall_score"] == 0.82
+    kinds = {str(s["kind"]) for s in full["sidecars"]}  # type: ignore[index]
+    assert "quality_sidecar_ref" in kinds
+
+
 def test_operations_index_policy_bundle_artifact(tmp_path: Path) -> None:
     m = RunManifest(
         run_id="run-pb",

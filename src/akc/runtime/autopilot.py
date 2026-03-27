@@ -50,6 +50,8 @@ EventKind = Literal["runtime_rollout", "promotion_prevented"]
 LeaseBackend = Literal["filesystem", "k8s"]
 EnvProfile = Literal["dev", "staging", "prod"]
 
+SLOGateStatus = Literal["allowed", "prevented", "insufficient_history", "error"]
+
 
 @dataclass(frozen=True, slots=True)
 class AutonomyBudgetConfig:
@@ -371,6 +373,60 @@ class ReliabilityScoreboard:
             "window_end_ms": int(self.window_end_ms),
             "kpi": dict(self.kpi),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilitySLOGateConfig:
+    """Fail-closed reliability gate for progressive takeover (Level 3).
+
+    The intent is to block *scope expansion* (starting new live rollouts) until
+    measured reliability KPIs are above minimum thresholds for this scope.
+    """
+
+    min_rollouts_total: int = 5
+    min_policy_compliance_rate: float = 0.98
+    min_rollback_success_rate: float = 0.95
+    max_delivery_change_instability_proxy: float = 0.25
+
+
+def _slo_gate_allows_rollout(
+    *,
+    now_ms: int,
+    scoreboard_window_ms: int,
+    tenant_id: str,
+    repo_id: str,
+    history: list[AutopilotHistoryEntry],
+    gate: ReliabilitySLOGateConfig,
+) -> tuple[bool, SLOGateStatus, str, ReliabilityScoreboard]:
+    """Evaluate the SLO gate over the trailing window (fail-closed)."""
+
+    window_start_ms = int(max(0, int(now_ms) - int(scoreboard_window_ms)))
+    window_end_ms = int(now_ms)
+    scoreboard = compute_reliability_scoreboard(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        window_start_ms=window_start_ms,
+        window_end_ms=window_end_ms,
+        history=history,
+    )
+    kpi = scoreboard.kpi
+    rollouts_total = int(kpi.get("rollouts_total", 0) or 0)
+    if rollouts_total < int(gate.min_rollouts_total):
+        return False, "insufficient_history", "min_rollouts_total_not_met", scoreboard
+
+    def _num(key: str) -> float:
+        v = kpi.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+        return 0.0
+
+    if _num("policy_compliance_rate") < float(gate.min_policy_compliance_rate):
+        return False, "prevented", "policy_compliance_rate_below_threshold", scoreboard
+    if _num("rollback_success_rate") < float(gate.min_rollback_success_rate):
+        return False, "prevented", "rollback_success_rate_below_threshold", scoreboard
+    if _num("delivery_change_instability_proxy") > float(gate.max_delivery_change_instability_proxy):
+        return False, "prevented", "delivery_change_instability_proxy_above_threshold", scoreboard
+    return True, "allowed", "allowed", scoreboard
 
 
 def _percentile_sorted(values: list[float], q: float) -> float:
@@ -1371,6 +1427,7 @@ def run_runtime_autopilot(
     env_profile: EnvProfile = "staging",
     lease_ttl_ms: int = 15_000,
     living_automation_profile: LivingAutomationProfile | None = None,
+    reliability_slo_gate: ReliabilitySLOGateConfig | None = None,
 ) -> int:
     """Always-on runtime controller loop (Plan 3).
 
@@ -1706,6 +1763,56 @@ def run_runtime_autopilot(
                 continue
 
             # Budgets guard: start runtime rollout only if allowed.
+            if reliability_slo_gate is not None:
+                try:
+                    history_for_gate = _load_history_jsonl(path=history_path)
+                    gate_allowed, gate_status, gate_reason, scoreboard = _slo_gate_allows_rollout(
+                        now_ms=now_ms,
+                        scoreboard_window_ms=scoreboard_window_ms,
+                        tenant_id=tid,
+                        repo_id=rid,
+                        history=history_for_gate,
+                        gate=reliability_slo_gate,
+                    )
+                except Exception:
+                    gate_allowed = False
+                    gate_status = "error"
+                    gate_reason = "slo_gate_evaluation_error"
+                    scoreboard = compute_reliability_scoreboard(
+                        tenant_id=tid,
+                        repo_id=rid,
+                        window_start_ms=int(max(0, int(now_ms) - int(scoreboard_window_ms))),
+                        window_end_ms=int(now_ms),
+                        history=[],
+                    )
+                if not gate_allowed:
+                    entry = AutopilotHistoryEntry(
+                        event_kind="promotion_prevented",
+                        attempt_id=make_attempt_id(),
+                        started_at_ms=now_ms,
+                        prevented_reason=f"slo_gate:{gate_status}:{gate_reason}",
+                        **_compile_fields_for_history(compile_summary),
+                    )
+                    _append_history_jsonl(path=history_path, entry=entry)
+                    _emit_decision_artifact(
+                        scope_root=scope_r,
+                        now_ms=now_ms,
+                        attempt_id=entry.attempt_id,
+                        tenant_id=tid,
+                        repo_id=rid,
+                        controller_id=controller_id_value,
+                        env_profile=env_profile,
+                        decision="slo_gate_prevented",
+                        budget_state=budget_state,
+                        extra={
+                            "reason": gate_reason,
+                            "gate_status": gate_status,
+                            "gate_config": reliability_slo_gate.__dict__,
+                            "scoreboard_kpi": dict(scoreboard.kpi),
+                        },
+                    )
+                    continue
+
             allowed, reason, budget_state2 = budget_guard_for_start(
                 now_ms=now_ms,
                 state=budget_state,
