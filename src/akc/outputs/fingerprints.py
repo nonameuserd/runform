@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from akc.memory.models import JSONValue, require_non_empty
+from akc.path_security import safe_resolve_path
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -55,7 +56,7 @@ def fingerprint_ingestion_state(
     """
 
     require_non_empty(tenant_id, name="tenant_id")
-    p = Path(state_path).expanduser()
+    p = safe_resolve_path(state_path)
     raw = p.read_text(encoding="utf-8")
     loaded = json.loads(raw)
     if not isinstance(loaded, dict):
@@ -76,5 +77,5 @@ def fingerprint_ingestion_state(
 
 
 def fingerprint_file_bytes(*, path: str | Path) -> str:
-    p = Path(path)
+    p = safe_resolve_path(path)
     return _sha256_hex(p.read_bytes())

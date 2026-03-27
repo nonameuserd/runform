@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 
 from .models import CanonicalDecision, KnowledgeSnapshot
 
@@ -17,7 +18,8 @@ OPERATOR_DECISIONS_RELPATH = ".akc/knowledge/decisions.json"
 
 
 def operator_decisions_path(*, scope_root: str | Path) -> Path:
-    return Path(scope_root).expanduser().resolve() / ".akc" / "knowledge" / "decisions.json"
+    root = safe_resolve_path(scope_root)
+    return safe_resolve_scoped_path(root, ".akc", "knowledge", "decisions.json")
 
 
 def load_operator_knowledge_decisions(
