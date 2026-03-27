@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
 from akc.control.cost_index import CostIndex
 from akc.memory.models import normalize_repo_id
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 
 
 def cmd_metrics(args: argparse.Namespace) -> int:
@@ -14,8 +14,8 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     tenant_id = str(args.tenant_id or "").strip()
     repo_id_raw = getattr(args, "repo_id", None)
     repo_id = normalize_repo_id(str(repo_id_raw).strip()) if repo_id_raw else None
-    outputs_root = Path(str(args.outputs_root)).expanduser()
-    metrics_db = outputs_root / tenant_id / ".akc" / "control" / "metrics.sqlite"
+    outputs_root = safe_resolve_path(str(args.outputs_root))
+    metrics_db = safe_resolve_scoped_path(outputs_root, tenant_id, ".akc", "control", "metrics.sqlite")
 
     idx = CostIndex(sqlite_path=metrics_db)
     totals = (

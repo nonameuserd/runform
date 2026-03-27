@@ -325,7 +325,9 @@ def write_resolved_governance_profile_for_scope(
 
 
 def _scope_root(*, outputs_root: Path, tenant_id: str, repo_id: str) -> Path:
-    return (outputs_root / tenant_id.strip() / str(repo_id).strip()).resolve()
+    from akc.path_security import safe_resolve_scoped_path
+
+    return safe_resolve_scoped_path(outputs_root, tenant_id.strip(), str(repo_id).strip())
 
 
 def _shard_accepts_tenant(shard: Any, *, tenant_id: str) -> bool:

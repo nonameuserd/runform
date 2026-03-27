@@ -17,7 +17,7 @@ from akc.outputs.fingerprints import (
     fingerprint_file_bytes,
     stable_json_fingerprint,
 )
-from akc.path_security import safe_resolve_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 
 DriftKind = Literal[
     "changed_sources",
@@ -159,11 +159,12 @@ def _upsert_manifest_artifact(
     artifacts = manifest_obj.get("artifacts")
     if not isinstance(artifacts, list):
         return
+    artifact_path = safe_resolve_scoped_path(scope_dir, relpath)
     entry = {
         "path": relpath,
         "media_type": media_type,
-        "sha256": _sha256_file(scope_dir / relpath),
-        "size_bytes": (scope_dir / relpath).stat().st_size,
+        "sha256": _sha256_file(artifact_path),
+        "size_bytes": artifact_path.stat().st_size,
         "metadata": dict(metadata) if metadata else None,
     }
     for idx, artifact in enumerate(artifacts):

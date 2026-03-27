@@ -21,6 +21,7 @@ from akc.compile.knowledge_extractor import (
 from akc.ir.provenance import ProvenancePointer
 from akc.knowledge.models import CanonicalConstraint, EvidenceMapping
 from akc.memory.models import normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 
 ASSERTION_INDEX_SCHEMA_VERSION = 2
 
@@ -35,7 +36,8 @@ DEFAULT_INGEST_DOC_DERIVED_PATTERNS = DocDerivedPatternOptions(
 def assertion_index_sqlite_path(*, scope_root: str | Path) -> Path:
     """Path to the assertion index DB for a tenant/repo scope (same layout as snapshot.json)."""
 
-    return Path(scope_root).expanduser().resolve() / ".akc" / "knowledge" / "assertions.sqlite"
+    root = safe_resolve_path(scope_root)
+    return safe_resolve_scoped_path(root, ".akc", "knowledge", "assertions.sqlite")
 
 
 def _connect(path: Path) -> sqlite3.Connection:

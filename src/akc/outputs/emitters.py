@@ -8,7 +8,7 @@ from typing import Protocol, runtime_checkable
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import require_non_empty
 from akc.outputs.models import OutputBundle
-from akc.path_security import safe_resolve_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 
 
 def _scope_dir(*, root: Path, scope: TenantRepoScope) -> Path:
@@ -18,12 +18,8 @@ def _scope_dir(*, root: Path, scope: TenantRepoScope) -> Path:
 
 
 def _ensure_under_root(*, root: Path, p: Path) -> None:
-    root_r = root.resolve()
-    p_r = p.resolve()
-    try:
-        p_r.relative_to(root_r)
-    except ValueError as e:  # pragma: no cover
-        raise ValueError("output path must be within emitter root") from e
+    # CodeQL-friendly confinement: resolve p under root and ensure it stays there.
+    safe_resolve_scoped_path(root, str(p))
 
 
 @runtime_checkable

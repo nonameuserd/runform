@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.utils.fingerprint import stable_json_fingerprint
 
 from .models import KnowledgeSnapshot, knowledge_provenance_fingerprint, knowledge_semantic_fingerprint
@@ -114,7 +115,7 @@ def write_knowledge_snapshot_artifacts(
         (snapshot_file_sha256, fingerprint_file_sha256) using `stable_json_fingerprint`
         on each file's JSON object (same convention as IR and run manifest output hashes).
     """
-    root = Path(scope_root).expanduser()
+    root = safe_resolve_path(scope_root)
     knowledge_dir = root / ".akc" / "knowledge"
     knowledge_dir.mkdir(parents=True, exist_ok=True)
 
@@ -184,7 +185,7 @@ def write_knowledge_mediation_report_artifact(
     Returns the ``stable_json_fingerprint`` (sha256) of the written JSON object.
     """
 
-    root = Path(scope_root).expanduser()
+    root = safe_resolve_path(scope_root)
     knowledge_dir = root / ".akc" / "knowledge"
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     envelope = build_knowledge_mediation_envelope(
@@ -202,7 +203,7 @@ def write_knowledge_mediation_report_artifact(
 def load_knowledge_snapshot_envelope(*, scope_root: str | Path) -> tuple[dict[str, Any], KnowledgeSnapshot]:
     """Load and validate a persisted `snapshot.json`; returns (raw_envelope, snapshot)."""
 
-    path = Path(scope_root).expanduser() / ".akc" / "knowledge" / "snapshot.json"
+    path = safe_resolve_path(scope_root) / ".akc" / "knowledge" / "snapshot.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("knowledge snapshot file must contain a JSON object")
