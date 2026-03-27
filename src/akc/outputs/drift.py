@@ -85,6 +85,79 @@ def _redact_sensitive_payload(obj: Any) -> Any:
     return obj
 
 
+def _safe_details_for_disk(details: Any) -> dict[str, Any]:
+    """Persist only a non-sensitive structural summary of details.
+
+    Drift/trigger `details` may include runtime payloads that can carry secrets.
+    We intentionally keep only the set of keys to preserve debuggability without
+    storing values in clear text.
+    """
+    if not isinstance(details, Mapping):
+        return {"keys": []}
+    # Allowlist a small set of operationally useful, non-secret fields.
+    preserved: dict[str, Any] = {}
+    for k in ("success_criterion_id",):
+        v = details.get(k)
+        if isinstance(v, str) and v.strip():
+            preserved[k] = v
+    v_ids = details.get("success_criterion_ids")
+    if isinstance(v_ids, list):
+        ids = [str(x).strip() for x in v_ids if isinstance(x, str) and str(x).strip()]
+        if ids:
+            preserved["success_criterion_ids"] = ids
+    keys = [str(k) for k in details]
+    keys_sorted = sorted({k for k in keys if k.strip()})
+    return {**preserved, "keys": keys_sorted}
+
+
+def _safe_drift_report_for_disk(*, report: DriftReport) -> dict[str, Any]:
+    return {
+        "scope": {"tenant_id": report.scope.tenant_id, "repo_id": report.scope.repo_id},
+        "findings": [
+            {
+                "kind": f.kind,
+                "severity": f.severity,
+                "details": _safe_details_for_disk(f.details),
+            }
+            for f in report.findings
+        ],
+    }
+
+
+def _safe_recompile_triggers_for_disk(
+    *,
+    scope: TenantRepoScope,
+    check_id: str,
+    checked_at_ms: int,
+    source: str,
+    triggers: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    safe_triggers: list[dict[str, Any]] = []
+    for item in triggers:
+        if not isinstance(item, Mapping):
+            continue
+        kind_raw = item.get("kind")
+        kind = str(kind_raw).strip() if isinstance(kind_raw, str) else str(kind_raw or "").strip()
+        details = item.get("details")
+        safe_triggers.append(
+            {
+                "kind": kind or "unknown",
+                "details": _safe_details_for_disk(details),
+                "checked_at_ms": checked_at_ms,
+                "source": source,
+            }
+        )
+    return {
+        "tenant_id": scope.tenant_id,
+        "repo_id": scope.repo_id,
+        "run_id": check_id,
+        "check_id": check_id,
+        "checked_at_ms": checked_at_ms,
+        "source": source,
+        "triggers": safe_triggers,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class DriftFinding:
     kind: DriftKind
@@ -125,7 +198,8 @@ class DriftReport:
 
 
 def _scope_dir(*, root: Path, scope: TenantRepoScope) -> Path:
-    return (root / scope.tenant_id / scope.repo_id).resolve()
+    # Use the path-security helper to prevent path injection/traversal.
+    return safe_resolve_scoped_path(root, scope.tenant_id, scope.repo_id)
 
 
 def _read_json_object(path: Path, *, what: str) -> dict[str, Any]:
@@ -301,7 +375,11 @@ def drift_report(
     mismatched: list[str] = []
     invalid: list[str] = []
     for relpath, exp_hash in expected.items():
-        fp = (scoped / relpath).resolve()
+        try:
+            fp = safe_resolve_scoped_path(scoped, relpath)
+        except ValueError:
+            invalid.append(relpath)
+            continue
         try:
             _ensure_under_root(root=scoped, p=fp)
         except ValueError:
@@ -475,7 +553,16 @@ def write_baseline(
                 filtered: dict[str, Any] = {
                     k: v for k, v in loaded.items() if isinstance(k, str) and k.startswith(prefix)
                 }
-                payload["sources_by_key"] = filtered
+                # IMPORTANT: do not persist raw per-source objects (they may contain secrets).
+                # Persist only stable per-key fingerprints so we can diff changes without
+                # storing clear-text values.
+                fps: dict[str, str] = {}
+                for k, v in filtered.items():
+                    try:
+                        fps[str(k)] = stable_json_fingerprint(v)
+                    except Exception:
+                        fps[str(k)] = hashlib.sha256(str(v).encode("utf-8")).hexdigest()
+                payload["sources_by_key_fps"] = fps
         except Exception:
             # Baseline can still be written and drift detection still works via sources_sha256.
             pass
@@ -518,10 +605,14 @@ def write_drift_artifacts(
     """Persist structured living drift artifacts under the tenant-scoped root."""
 
     require_non_empty(check_id, name="check_id")
+    # Prevent path injection via check_id in filenames.
+    check_id_safe = "".join(ch for ch in str(check_id).strip() if ch.isalnum() or ch in {"-", "_", "."})[:128]
+    if not check_id_safe:
+        raise ValueError("check_id must contain at least one safe filename character")
     checked_at = int(checked_at_ms if checked_at_ms is not None else time.time() * 1000)
     root = safe_resolve_path(outputs_root)
     scoped = _scope_dir(root=root, scope=scope)
-    living_dir = scoped / ".akc" / "living"
+    living_dir = safe_resolve_scoped_path(scoped, ".akc", "living")
     living_dir.mkdir(parents=True, exist_ok=True)
 
     baseline_manifest_sha256: str | None = None
@@ -538,7 +629,7 @@ def write_drift_artifacts(
 
     drift_payload: dict[str, Any] = apply_schema_envelope(
         obj={
-            **report.to_json_obj(),
+            **_safe_drift_report_for_disk(report=report),
             "checked_at_ms": checked_at,
             "baseline_path": baseline_str,
             "baseline_manifest_sha256": baseline_manifest_sha256,
@@ -548,39 +639,25 @@ def write_drift_artifacts(
     validate_artifact_json(obj=drift_payload, kind="living_drift_report")
 
     triggers_payload: dict[str, Any] = apply_schema_envelope(
-        obj={
-            "tenant_id": scope.tenant_id,
-            "repo_id": scope.repo_id,
-            "run_id": check_id,
-            "check_id": check_id,
-            "checked_at_ms": checked_at,
-            "source": source,
-            "triggers": [
-                {
-                    **dict(item),
-                    **({"checked_at_ms": checked_at} if "checked_at_ms" not in item else {}),
-                    **({"source": source} if "source" not in item else {}),
-                }
-                for item in triggers
-                if isinstance(item, Mapping)
-            ],
-        },
+        obj=_safe_recompile_triggers_for_disk(
+            scope=scope,
+            check_id=check_id,
+            checked_at_ms=checked_at,
+            source=source,
+            triggers=triggers,
+        ),
         kind="recompile_triggers",
     )
     validate_artifact_json(obj=triggers_payload, kind="recompile_triggers")
 
-    drift_path = living_dir / f"{check_id}.drift.json"
-    triggers_path = living_dir / f"{check_id}.triggers.json"
-    drift_payload_safe = _redact_sensitive_payload(drift_payload)
-    triggers_payload_safe = _redact_sensitive_payload(triggers_payload)
-    if not isinstance(drift_payload_safe, dict) or not isinstance(triggers_payload_safe, dict):
-        raise ValueError("living artifacts must serialize to JSON objects")
+    drift_path = safe_resolve_scoped_path(living_dir, f"{check_id_safe}.drift.json")
+    triggers_path = safe_resolve_scoped_path(living_dir, f"{check_id_safe}.triggers.json")
     drift_path.write_text(
-        json.dumps(drift_payload_safe, indent=2, sort_keys=True) + "\n",
+        json.dumps(drift_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     triggers_path.write_text(
-        json.dumps(triggers_payload_safe, indent=2, sort_keys=True) + "\n",
+        json.dumps(triggers_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     _update_manifest_living_metadata(

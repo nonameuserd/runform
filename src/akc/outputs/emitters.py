@@ -14,7 +14,7 @@ from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 def _scope_dir(*, root: Path, scope: TenantRepoScope) -> Path:
     require_non_empty(scope.tenant_id, name="scope.tenant_id")
     require_non_empty(scope.repo_id, name="scope.repo_id")
-    return root / scope.tenant_id / scope.repo_id
+    return safe_resolve_scoped_path(root, scope.tenant_id, scope.repo_id)
 
 
 def _ensure_under_root(*, root: Path, p: Path) -> None:
@@ -47,7 +47,7 @@ class FileSystemEmitter(Emitter):
 
         written: list[Path] = []
         for a in bundle.artifacts:
-            fp = out_dir / a.path
+            fp = safe_resolve_scoped_path(out_dir, a.path)
             # Ensure the resolved path stays inside the scoped dir.
             _ensure_under_root(root=out_dir, p=fp)
             fp.parent.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ class JsonManifestEmitter(Emitter):
         out_dir.mkdir(parents=True, exist_ok=True)
         _ensure_under_root(root=root_p, p=out_dir)
 
-        mpath = out_dir / self.manifest_name
+        mpath = safe_resolve_scoped_path(out_dir, self.manifest_name)
         _ensure_under_root(root=out_dir, p=mpath)
         mpath.write_text(json.dumps(bundle.to_manifest_obj(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         written.append(mpath)

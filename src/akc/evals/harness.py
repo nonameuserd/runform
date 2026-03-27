@@ -754,9 +754,19 @@ def _run_single_task(
     run_status = "failed"
     manifest_path: Path
     if isinstance(manifest_path_raw, str) and manifest_path_raw.strip():
-        manifest_path = Path(manifest_path_raw).expanduser()
-        if not manifest_path.is_absolute():
-            manifest_path = safe_resolve_scoped_path(suite_dir, str(manifest_path))
+        # Resolve manifest paths under an allowlist to prevent path injection.
+        raw = str(manifest_path_raw).strip()
+        scope_root = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id)
+        # Also allow repository-relative fixtures when running locally.
+        repo_root = safe_resolve_path(Path.cwd())
+        bases = (suite_dir, scope_root, outputs_root, repo_root)
+        if Path(raw).is_absolute():
+            resolved_abs = resolve_absolute_path_under_allowlist_bases(raw, allowed_bases=bases)
+            if resolved_abs is None:
+                raise ValueError("manifest_path must resolve under suite_dir, repo_root, tenant scope, or outputs_root")
+            manifest_path = resolved_abs
+        else:
+            manifest_path = safe_resolve_scoped_path(suite_dir, raw)
         manifest = load_run_manifest(
             path=manifest_path,
             expected_tenant_id=tenant_id,
@@ -801,7 +811,7 @@ def _run_single_task(
         run_status = str(result.status)
         run_dir = safe_resolve_scoped_path(base, ".akc", "run")
         candidates = sorted(
-            run_dir.glob("*.manifest.json"),
+            [p for p in run_dir.iterdir() if p.is_file() and p.name.endswith(".manifest.json")],
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -1094,8 +1104,17 @@ def run_eval_suite(
 
     baseline_summary: dict[str, float] | None = None
     if baseline_report_path is not None:
-        base_fp = Path(baseline_report_path).expanduser()
-        if base_fp.exists():
+        # Only allow reading a baseline report under outputs_root or suite_dir.
+        raw_path = str(baseline_report_path).strip()
+        base_fp: Path | None = None
+        if Path(raw_path).is_absolute():
+            base_fp = resolve_absolute_path_under_allowlist_bases(
+                raw_path,
+                allowed_bases=(outputs, suite_fp.parent),
+            )
+        else:
+            base_fp = safe_resolve_scoped_path(suite_fp.parent, raw_path)
+        if base_fp is not None and base_fp.exists():
             raw = json.loads(base_fp.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and isinstance(raw.get("summary"), dict):
                 baseline_summary = {
