@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from akc.memory.models import require_non_empty
+from akc.path_security import safe_resolve_path
 
 
 def control_audit_jsonl_path(*, outputs_root: str | Path, tenant_id: str) -> Path:
     require_non_empty(tenant_id, name="tenant_id")
-    return Path(outputs_root).expanduser().resolve() / tenant_id.strip() / ".akc" / "control" / "control_audit.jsonl"
+    return safe_resolve_path(outputs_root) / tenant_id.strip() / ".akc" / "control" / "control_audit.jsonl"
 
 
 def append_control_audit_event(

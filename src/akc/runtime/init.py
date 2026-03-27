@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from akc.path_security import safe_resolve_path
 from akc.runtime.adapters.base import HybridRuntimeAdapter, RuntimeAdapter
 from akc.runtime.adapters.local_depth import LocalDepthRuntimeAdapter
 from akc.runtime.adapters.native import NativeRuntimeAdapter
@@ -35,7 +36,7 @@ def create_local_depth_runtime(
     """
     writer = evidence_writer or InMemoryRuntimeEvidenceWriter()
     adapter = LocalDepthRuntimeAdapter(
-        outputs_root=Path(outputs_root).expanduser().resolve(),
+        outputs_root=safe_resolve_path(outputs_root),
         delegate=delegate or NativeRuntimeAdapter(),
     )
     return RuntimeKernel(

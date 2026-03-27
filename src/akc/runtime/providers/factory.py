@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from pathlib import Path
 
+from akc.path_security import safe_resolve_path
 from akc.runtime.models import RuntimeBundle
 from akc.runtime.providers.compose import DockerComposeApplyProvider, DockerComposeObserveProvider
 from akc.runtime.providers.kubernetes import KubernetesApplyProvider, KubernetesObserveProvider
@@ -42,7 +42,7 @@ def create_deployment_provider(bundle: RuntimeBundle) -> DeploymentProviderClien
     if not isinstance(raw, Mapping):
         return InMemoryDeploymentProviderClient()
     kind = str(raw.get("kind", "")).strip()
-    bundle_path = Path(str(bundle.ref.bundle_path)).expanduser().resolve()
+    bundle_path = safe_resolve_path(str(bundle.ref.bundle_path))
     full_replace = full_layer_replacement_enabled(bundle)
 
     if kind in {"docker_compose_apply", "kubernetes_apply"}:

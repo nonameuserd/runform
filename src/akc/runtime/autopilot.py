@@ -28,6 +28,7 @@ from akc.living.automation_profile import (
 from akc.living.runtime_bridge import default_living_runtime_bridge
 from akc.living.safe_recompile import safe_recompile_on_drift
 from akc.memory.models import JSONValue, normalize_repo_id
+from akc.path_security import safe_resolve_path
 from akc.run.loader import find_latest_run_manifest, load_run_manifest
 from akc.runtime.compile_apply_attestation import (
     compile_apply_attestation_denial_for_rollout,
@@ -788,7 +789,7 @@ def _save_scope_state_file(*, state_path: Path, scope_state: dict[str, Any]) -> 
 
 
 def _scope_root(outputs_root: Path, tenant_id: str, repo_id: str) -> Path:
-    return outputs_root.expanduser().resolve() / tenant_id.strip() / normalize_repo_id(repo_id)
+    return safe_resolve_path(outputs_root) / tenant_id.strip() / normalize_repo_id(repo_id)
 
 
 def _scope_key(*, tenant_id: str, repo_id: str) -> str:
@@ -815,7 +816,7 @@ def _scope_registry_scopes(*, scope_registry_path: Path) -> list[tuple[str, str]
 
 def _iter_scopes(*, outputs_root: Path, tenant_id: str | None, repo_id: str | None) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
-    root = outputs_root.expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     if tenant_id is not None and repo_id is not None:
         out.append((tenant_id, repo_id))
         return out
@@ -1296,7 +1297,7 @@ def _load_incremental_runtime_events_for_scope(
             started_at_ms = int(record.get("started_at_ms", 0) or 0)
             if started_at_ms < last_runtime_run_started_at_ms:
                 continue
-            events_path = Path(str(record.get("events_path", ""))).expanduser()
+            events_path = safe_resolve_path(str(record.get("events_path", "")))
             if not events_path.is_file():
                 continue
             raw_events = json.loads(events_path.read_text(encoding="utf-8"))
@@ -1394,7 +1395,7 @@ def _latest_runtime_evidence_for_scope_after_start(
     try:
         record = json.loads(latest.read_text(encoding="utf-8"))
         terminal_status = str(record.get("status", "unknown")).strip() or "unknown"
-        evidence_path = Path(str(record.get("runtime_evidence_path", ""))).expanduser()
+        evidence_path = safe_resolve_path(str(record.get("runtime_evidence_path", "")))
         rollback_count, rollback_success_count, conv_avg = _latest_runtime_evidence_summary(
             runtime_evidence_path=evidence_path
         )
@@ -1444,8 +1445,8 @@ def run_runtime_autopilot(
 
     from argparse import Namespace
 
-    outputs_root_p = Path(outputs_root).expanduser().resolve()
-    ingest_state_path_p = Path(ingest_state_path).expanduser().resolve()
+    outputs_root_p = safe_resolve_path(outputs_root)
+    ingest_state_path_p = safe_resolve_path(ingest_state_path)
     if not ingest_state_path_p.is_file():
         raise ValueError(f"ingest_state_path does not exist: {ingest_state_path_p}")
 
@@ -1477,7 +1478,7 @@ def run_runtime_autopilot(
         iterations += 1
 
         scope_pairs = (
-            _scope_registry_scopes(scope_registry_path=Path(scope_registry_path).expanduser().resolve())
+            _scope_registry_scopes(scope_registry_path=safe_resolve_path(scope_registry_path))
             if scope_registry_path is not None
             else _iter_scopes(outputs_root=outputs_root_p, tenant_id=tenant_id, repo_id=repo_id)
         )
@@ -1883,7 +1884,7 @@ def run_runtime_autopilot(
                 scope_state["budget_state"] = _budget_state_to_json(state=budget_state2)
                 _save_scope_state_file(state_path=state_path, scope_state=scope_state)
                 continue
-            pp_path = (scope_r / pp_path_rel).expanduser().resolve()
+            pp_path = safe_resolve_path(scope_r / pp_path_rel)
             pp_obj = json.loads(pp_path.read_text(encoding="utf-8"))
             apply_target_metadata = pp_obj.get("apply_target_metadata")
             runtime_bundle_relpath = ""
@@ -1904,7 +1905,7 @@ def run_runtime_autopilot(
                 _save_scope_state_file(state_path=state_path, scope_state=scope_state)
                 continue
 
-            bundle_path = (scope_r / runtime_bundle_relpath).expanduser().resolve()
+            bundle_path = safe_resolve_path(scope_r / runtime_bundle_relpath)
 
             # Start mutating runtime.
             runtime_started_at = _now_ms()

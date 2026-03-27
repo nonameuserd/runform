@@ -10,13 +10,14 @@ from akc.intent.models import stable_intent_sha256
 from akc.intent.policy_projection import project_runtime_intent_projection
 from akc.intent.store import IntentStoreError, JsonFileIntentStore
 from akc.memory.models import normalize_repo_id
+from akc.path_security import safe_resolve_path
 from akc.utils.fingerprint import stable_json_fingerprint
 
 
 def repo_root_from_bundle_path(bundle_path: Path) -> Path | None:
     """Return the directory that contains ``.akc`` (repo / outputs root) when ``bundle_path`` includes ``.akc``."""
 
-    parts = Path(bundle_path).expanduser().resolve().parts
+    parts = safe_resolve_path(bundle_path).parts
     try:
         akc_index = parts.index(".akc")
     except ValueError:

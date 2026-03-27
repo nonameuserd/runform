@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from akc.path_security import safe_resolve_path
 from akc.utils.fingerprint import stable_json_fingerprint
 
 _ATTESTATION_KEYS = (
@@ -101,7 +102,7 @@ def compile_apply_attestation_denial_for_rollout(
     rel = str(ref.get("path", "")).strip()
     if not rel:
         return None
-    packet_path = (scope_root / rel).expanduser().resolve()
+    packet_path = safe_resolve_path(scope_root / rel)
     if not packet_path.is_file():
         return None
     try:
