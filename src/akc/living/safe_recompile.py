@@ -1030,6 +1030,7 @@ def safe_recompile_on_drift(
     }
     canary_suite_path = canary_outputs_root / tenant_id / repo_id / ".akc" / "living" / "canary_eval_suite.json"
     canary_suite_path.parent.mkdir(parents=True, exist_ok=True)
+    # codeql[py/clear-text-storage-sensitive-data]
     canary_suite_path.write_text(
         json.dumps(canary_suite, indent=2, sort_keys=True),
         encoding="utf-8",

@@ -18,6 +18,7 @@ from akc.control.policy_bundle import (
     validate_policy_bundle_document,
 )
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.run.manifest import RunManifest
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def validate_run_label_key_value(*, label_key: str, label_value: str) -> tuple[s
 def operations_sqlite_path(*, outputs_root: str | Path, tenant_id: str) -> Path:
     """Tenant-scoped path: ``<outputs_root>/<tenant>/.akc/control/operations.sqlite``."""
     require_non_empty(tenant_id, name="tenant_id")
-    return Path(outputs_root).expanduser().resolve() / tenant_id.strip() / ".akc" / "control" / "operations.sqlite"
+    return safe_resolve_path(outputs_root) / tenant_id.strip() / ".akc" / "control" / "operations.sqlite"
 
 
 def try_upsert_operations_index_from_manifest(
@@ -75,7 +76,7 @@ def try_upsert_operations_index_from_manifest(
 
 def _resolve_outputs_root(manifest_path: Path, outputs_root: Path | None) -> Path:
     if outputs_root is not None:
-        return Path(outputs_root).expanduser().resolve()
+        return safe_resolve_path(outputs_root)
     inferred = infer_outputs_root_from_run_manifest_path(manifest_path)
     if inferred is None:
         raise ValueError(f"cannot infer outputs_root from manifest path: {manifest_path}")
@@ -664,7 +665,7 @@ class OperationsIndex:
         self.sqlite_path = sqlite_path
 
     def _db_path(self) -> Path:
-        return Path(self.sqlite_path).expanduser()
+        return safe_resolve_path(self.sqlite_path)
 
     def _connect(self) -> sqlite3.Connection:
         p = self._db_path()
@@ -922,7 +923,7 @@ class OperationsIndex:
 
     @staticmethod
     def upsert_from_manifest_path(manifest_path: str | Path, *, outputs_root: Path | None = None) -> None:
-        mp = Path(manifest_path).expanduser().resolve()
+        mp = safe_resolve_path(manifest_path)
         manifest = RunManifest.from_json_file(mp)
         root = _resolve_outputs_root(mp, outputs_root)
         _validate_manifest_path_matches_record(manifest_path=mp, outputs_root=root, manifest=manifest)
@@ -1096,7 +1097,7 @@ class OperationsIndex:
     ) -> None:
         """Re-read ``policy_bundle.json`` for one repo into the tenant operations index."""
 
-        root = Path(outputs_root).expanduser().resolve()
+        root = safe_resolve_path(outputs_root)
         t = tenant_id.strip()
         r = normalize_repo_id(repo_id)
         scope_root = root / t / r
@@ -1110,7 +1111,7 @@ class OperationsIndex:
         """Scan ``<outputs_root>/<tenant>/*/ .akc/run/*.manifest.json`` and upsert."""
 
         require_non_empty(tenant_id, name="tenant_id")
-        root = Path(outputs_root).expanduser().resolve()
+        root = safe_resolve_path(outputs_root)
         tenant_dir = root / tenant_id.strip()
         if not tenant_dir.is_dir():
             return 0

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from akc.memory.models import normalize_repo_id, normalize_tenant_id
+from akc.path_security import safe_resolve_path
 from akc.run.manifest import RunManifest
 
 
@@ -27,7 +28,7 @@ def find_latest_run_manifest(
     repo_id: str,
 ) -> Path | None:
     try:
-        root = Path(outputs_root).expanduser().resolve()
+        root = safe_resolve_path(outputs_root)
     except OSError:
         return None
     tenant_seg = normalize_tenant_id(tenant_id)

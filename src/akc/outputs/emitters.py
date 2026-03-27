@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from akc.compile.interfaces import TenantRepoScope
 from akc.memory.models import require_non_empty
 from akc.outputs.models import OutputBundle
+from akc.path_security import safe_resolve_path
 
 
 def _scope_dir(*, root: Path, scope: TenantRepoScope) -> Path:
@@ -40,10 +41,9 @@ class FileSystemEmitter(Emitter):
     create_parents: bool = True
 
     def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
-        root_p = Path(root)
+        root_p = safe_resolve_path(root)
         if self.create_parents:
             root_p.mkdir(parents=True, exist_ok=True)
-        root_p = root_p.resolve()
 
         out_dir = _scope_dir(root=root_p, scope=bundle.scope)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -69,9 +69,8 @@ class JsonManifestEmitter(Emitter):
 
     def emit(self, *, bundle: OutputBundle, root: str | Path) -> list[Path]:
         require_non_empty(self.manifest_name, name="manifest_name")
-        root_p = Path(root)
+        root_p = safe_resolve_path(root)
         root_p.mkdir(parents=True, exist_ok=True)
-        root_p = root_p.resolve()
 
         written = self.artifacts.emit(bundle=bundle, root=root_p)
         out_dir = _scope_dir(root=root_p, scope=bundle.scope)

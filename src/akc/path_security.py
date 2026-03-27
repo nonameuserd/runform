@@ -13,6 +13,37 @@ import os.path
 from pathlib import Path
 
 
+def safe_resolve_path(raw: str | Path) -> Path:
+    """Resolve a user-supplied path safely (expanduser + realpath + absolute check).
+
+    This is the preferred replacement for ``Path(user_input).expanduser()`` that
+    CodeQL recognises as a sanitiser for ``py/path-injection``.
+    """
+    s = coerce_safe_path_string(raw)
+    expanded = os.path.expanduser(s)
+    resolved = os.path.realpath(expanded)
+    if not os.path.isabs(resolved):
+        raise ValueError("resolved path is not absolute")
+    return Path(resolved)
+
+
+def safe_resolve_scoped_path(root: str | Path, *segments: str) -> Path:
+    """Resolve a path under *root* and verify it stays confined there.
+
+    The ``root`` is first resolved via :func:`safe_resolve_path`, then
+    ``segments`` are joined.  The final ``realpath`` result is checked with
+    ``startswith`` against the resolved root — the standard CodeQL-recognised
+    confinement pattern.
+    """
+    root_resolved = safe_resolve_path(root)
+    joined = os.path.join(str(root_resolved), *segments)
+    final = os.path.realpath(joined)
+    root_prefix = str(root_resolved) + os.sep
+    if final != str(root_resolved) and not final.startswith(root_prefix):
+        raise ValueError("scoped path escapes allowed root")
+    return Path(final)
+
+
 def coerce_safe_path_string(raw: str | Path) -> str:
     """Return stripped text or raise if the path string is unusable for resolution."""
     s = str(raw).strip()

@@ -21,6 +21,7 @@ from akc.control.operations_index import (
 from akc.control.policy import BundleRedactionPolicy
 from akc.knowledge.observability import summarize_knowledge_governance
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_evaluation_modes
 from akc.run.manifest import RunManifest
 from akc.run.replay_decisions import PassReplayDecisionRecord
@@ -49,7 +50,7 @@ _CONTROL_PLANE_REF_KEYS: tuple[str, ...] = (
 
 def repo_scope_root(*, outputs_root: Path, tenant_id: str, repo_id: str) -> Path:
     require_non_empty(tenant_id, name="tenant_id")
-    root = Path(outputs_root).expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     return root / tenant_id.strip() / normalize_repo_id(repo_id)
 
 
@@ -59,7 +60,7 @@ def resolve_outputs_and_scope_root_for_manifest(
 ) -> tuple[Path, Path]:
     """Infer ``outputs_root`` and tenant/repo scope from a standard run manifest path."""
 
-    mp = manifest_path.expanduser().resolve()
+    mp = safe_resolve_path(manifest_path)
     outputs_root = infer_outputs_root_from_run_manifest_path(mp)
     if outputs_root is None:
         raise ValueError(
@@ -81,12 +82,12 @@ def resolve_run_manifest_path(
     run_id: str | None,
 ) -> Path:
     if manifest_path is not None:
-        return Path(manifest_path).expanduser().resolve()
+        return safe_resolve_path(manifest_path)
     require_non_empty(str(outputs_root or ""), name="outputs_root")
     require_non_empty(str(tenant_id or ""), name="tenant_id")
     require_non_empty(str(repo_id or ""), name="repo_id")
     require_non_empty(str(run_id or ""), name="run_id")
-    root = cast(Path, outputs_root).expanduser().resolve()
+    root = safe_resolve_path(cast(Path, outputs_root))
     tenant_s = cast(str, tenant_id).strip()
     repo_s = cast(str, repo_id).strip()
     run_s = cast(str, run_id).strip()
@@ -250,7 +251,7 @@ def build_replay_plan_document(
             "run compile in a governed environment with tenant-isolated credentials."
         ),
         "manifest": {
-            "path": str(manifest_source_path.expanduser().resolve()),
+            "path": str(safe_resolve_path(manifest_source_path)),
             "run_id": manifest.run_id.strip(),
             "tenant_id": manifest.tenant_id.strip(),
             "repo_id": manifest.repo_id.strip(),
@@ -812,14 +813,14 @@ def build_forensics_bundle(
     All reads are confined under ``scope_root`` via :func:`read_repo_relative_file` / :func:`_ensure_under_scope`.
     """
 
-    out_dir = out_dir.expanduser().resolve()
+    out_dir = safe_resolve_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = (out_dir / "data").resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     files_dir = (out_dir / "files").resolve()
     files_dir.mkdir(parents=True, exist_ok=True)
 
-    root_out = Path(outputs_root).expanduser().resolve()
+    root_out = safe_resolve_path(outputs_root)
     scope_r = scope_root.resolve()
     tenant_s = manifest.tenant_id.strip()
     run_s = manifest.run_id.strip()
@@ -1189,7 +1190,7 @@ def export_incident_bundle(
 ) -> dict[str, Any]:
     """Copy a slim evidence set for incidents; read-only reads under ``scope_root``."""
 
-    out_dir = out_dir.expanduser().resolve()
+    out_dir = safe_resolve_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_dir = (out_dir / "data").resolve()
     data_dir.mkdir(parents=True, exist_ok=True)

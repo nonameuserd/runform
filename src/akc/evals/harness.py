@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
 from akc.memory.models import normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.run import PassRecord, RunManifest, RuntimeEvidenceRecord, replay_runtime_execution
 from akc.run.loader import load_run_manifest
 
@@ -1065,8 +1066,8 @@ def run_eval_suite(
     outputs_root: str | Path,
     baseline_report_path: str | Path | None = None,
 ) -> EvalReport:
-    suite_fp = Path(suite_path).expanduser()
-    outputs = Path(outputs_root).expanduser()
+    suite_fp = safe_resolve_path(suite_path)
+    outputs = safe_resolve_path(outputs_root)
     suite = _load_suite(suite_fp)
 
     tasks_raw = suite.get("tasks")

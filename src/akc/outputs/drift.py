@@ -17,6 +17,7 @@ from akc.outputs.fingerprints import (
     fingerprint_file_bytes,
     stable_json_fingerprint,
 )
+from akc.path_security import safe_resolve_path
 
 DriftKind = Literal[
     "changed_sources",
@@ -224,7 +225,7 @@ def drift_report(
 
     require_non_empty(scope.tenant_id, name="scope.tenant_id")
     require_non_empty(scope.repo_id, name="scope.repo_id")
-    root = Path(outputs_root).expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     scoped = _scope_dir(root=root, scope=scope)
 
     manifest_path = scoped / "manifest.json"
@@ -280,7 +281,7 @@ def drift_report(
     baseline: dict[str, Any] = {}
     bpath: Path | None = None
     if baseline_path is not None:
-        bpath = Path(baseline_path).expanduser()
+        bpath = safe_resolve_path(baseline_path)
         try:
             baseline = _read_json_object(bpath, what="baseline")
         except FileNotFoundError:
@@ -401,7 +402,7 @@ def write_baseline(
 
     require_non_empty(scope.tenant_id, name="scope.tenant_id")
     require_non_empty(scope.repo_id, name="scope.repo_id")
-    p = Path(baseline_path).expanduser()
+    p = safe_resolve_path(baseline_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     payload: dict[str, Any] = {
@@ -413,7 +414,7 @@ def write_baseline(
         # Store best-effort per-source fingerprints so we can compute changed
         # source sets (used by "living systems" safe recompile).
         try:
-            state_raw = Path(ingest_fingerprint.state_path).expanduser().read_text(encoding="utf-8")
+            state_raw = safe_resolve_path(ingest_fingerprint.state_path).read_text(encoding="utf-8")
             loaded = json.loads(state_raw)
             if isinstance(loaded, dict):
                 prefix = f"{scope.tenant_id}::"
@@ -436,7 +437,7 @@ def write_baseline(
         payload["knowledge_provenance_fingerprint"] = knowledge_provenance_fingerprint
 
     # Also record a manifest fingerprint as a cheap “contract” anchor.
-    root = Path(outputs_root).expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     scoped = _scope_dir(root=root, scope=scope)
     manifest_path = scoped / "manifest.json"
     if manifest_path.exists():
@@ -464,7 +465,7 @@ def write_drift_artifacts(
 
     require_non_empty(check_id, name="check_id")
     checked_at = int(checked_at_ms if checked_at_ms is not None else time.time() * 1000)
-    root = Path(outputs_root).expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     scoped = _scope_dir(root=root, scope=scope)
     living_dir = scoped / ".akc" / "living"
     living_dir.mkdir(parents=True, exist_ok=True)
@@ -472,9 +473,9 @@ def write_drift_artifacts(
     baseline_manifest_sha256: str | None = None
     baseline_str: str | None = None
     if baseline_path is not None:
-        baseline_str = str(Path(baseline_path).expanduser())
+        baseline_str = str(safe_resolve_path(baseline_path))
         try:
-            baseline_obj = _read_json_object(Path(baseline_path).expanduser(), what="baseline")
+            baseline_obj = _read_json_object(safe_resolve_path(baseline_path), what="baseline")
             raw_manifest_sha = baseline_obj.get("manifest_sha256")
             if isinstance(raw_manifest_sha, str) and len(raw_manifest_sha) == 64:
                 baseline_manifest_sha256 = raw_manifest_sha

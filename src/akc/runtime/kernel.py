@@ -6,7 +6,6 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from akc.artifacts.contracts import is_runtime_bundle_schema_id
@@ -20,6 +19,7 @@ from akc.control.tracing import TraceSpan, new_span_id, new_trace_id
 from akc.coordination.models import CoordinationScheduleLayer
 from akc.ir import IRDocument, IRNode, OperationalContract
 from akc.memory.models import JSONValue
+from akc.path_security import safe_resolve_path
 from akc.runtime.action_routing import resolve_action_route
 from akc.runtime.adapters.base import RuntimeAdapter
 from akc.runtime.contracts import (
@@ -240,7 +240,7 @@ class RuntimeKernel:
         strict_intent_authority: bool | None = None,
         coordination_execution_overrides: Mapping[str, Any] | None = None,
     ) -> RuntimeBundle:
-        bundle_path = Path(bundle_ref.bundle_path).expanduser()
+        bundle_path = safe_resolve_path(bundle_ref.bundle_path)
         raw_bytes = bundle_path.read_bytes()
         bundle_hash = stable_json_fingerprint(json.loads(raw_bytes.decode("utf-8")))
         if bundle_hash != bundle_ref.manifest_hash:

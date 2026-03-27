@@ -11,6 +11,7 @@ from typing import Any
 from akc.compile.artifact_consistency import validate_coordination_orchestration_consistency
 from akc.coordination.models import CoordinationParseError, ParsedCoordinationSpec, parse_coordination_obj
 from akc.memory.models import JSONValue
+from akc.path_security import safe_resolve_path
 from akc.utils.fingerprint import stable_json_fingerprint
 
 
@@ -82,7 +83,7 @@ def load_coordination_for_bundle(
         path = str(ref_raw.get("path", "")).strip()
         if not path:
             return None
-        resolved = resolve_coordination_artifact_path(bundle_path=bundle_path.expanduser().resolve(), ref_path=path)
+        resolved = resolve_coordination_artifact_path(bundle_path=safe_resolve_path(bundle_path), ref_path=path)
         if not resolved.is_file():
             raise CoordinationParseError(f"coordination_ref path {path!r} resolved to missing file {resolved}")
         obj = _read_json_object(resolved)
@@ -114,7 +115,7 @@ def load_coordination_for_bundle(
 
     parsed = parse_coordination_obj(obj)
     run_id = str(payload.get("run_id", parsed.run_id)).strip()
-    orch = _maybe_load_orchestration(bundle_path=bundle_path.expanduser().resolve(), run_id=run_id)
+    orch = _maybe_load_orchestration(bundle_path=safe_resolve_path(bundle_path), run_id=run_id)
     if orch is not None:
         issues = validate_coordination_orchestration_consistency(
             orchestration_obj=orch,

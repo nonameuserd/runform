@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 
 from akc.ir.schema import IRDocument
 from akc.memory.models import JSONValue, require_non_empty
+from akc.path_security import safe_resolve_path
 
 RuntimePolicyMode = Literal["default", "enforce", "dry_run", "simulate", "canary"]
 RuntimeActionStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
@@ -757,7 +758,7 @@ def load_ir_document_from_bundle_payload(
     path = str(ref_raw.get("path", "")).strip()
     if not path:
         return None
-    bundle_path = Path(bundle_ref.bundle_path).expanduser()
+    bundle_path = safe_resolve_path(bundle_ref.bundle_path)
     ir_path = _resolve_system_ir_ref_path(bundle_path=bundle_path, ref_path=path)
     if not ir_path.is_file():
         return None
@@ -799,7 +800,7 @@ def load_ir_document_for_bundle(bundle: RuntimeBundle) -> IRDocument | None:
     path = str(ref_raw.get("path", "")).strip()
     if not path:
         return None
-    bundle_path = Path(bundle.ref.bundle_path).expanduser()
+    bundle_path = safe_resolve_path(bundle.ref.bundle_path)
     ir_path = _resolve_system_ir_ref_path(bundle_path=bundle_path, ref_path=path)
     if not ir_path.is_file():
         return None

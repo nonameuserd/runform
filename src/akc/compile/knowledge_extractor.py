@@ -29,6 +29,7 @@ from akc.knowledge.models import (
     EvidenceMapping,
     KnowledgeSnapshot,
 )
+from akc.path_security import safe_resolve_path
 
 Predicate = Literal["required", "forbidden", "must_use", "must_not_use", "allowed"]
 
@@ -642,7 +643,7 @@ def _merge_assertion_index_before_finalize(
         merge_indexed_assertions_into_snapshot_state,
     )
 
-    root = Path(knowledge_artifact_root).expanduser()
+    root = safe_resolve_path(knowledge_artifact_root)
     idx_c, idx_e, idx_s = load_assertions_for_doc_ids(
         scope_root=root,
         tenant_id=tenant_id,
@@ -678,7 +679,7 @@ def _apply_operator_decisions_optional(
     from akc.knowledge.operator_decisions import apply_operator_decisions_to_snapshot, load_operator_knowledge_decisions
 
     overlay = load_operator_knowledge_decisions(
-        scope_root=Path(knowledge_artifact_root).expanduser(),
+        scope_root=safe_resolve_path(knowledge_artifact_root),
         tenant_id=tenant_id,
         repo_id=repo_id,
     )
