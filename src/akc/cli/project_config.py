@@ -12,6 +12,9 @@ class AkcProjectConfig:
     """Repo-scoped defaults under ``.akc/project.{json,yaml}`` (optional)."""
 
     developer_role_profile: str | None = None
+    # Progressive takeover: adoption ladder level hint (Level 0..4).
+    # This is informational today (used by tooling/UX); compile still requires explicit flags.
+    adoption_level: str | None = None
     tenant_id: str | None = None
     repo_id: str | None = None
     outputs_root: str | None = None
@@ -25,6 +28,18 @@ class AkcProjectConfig:
     skill_roots: tuple[str, ...] = ()
     compile_skill_max_file_bytes: int | None = None
     compile_skill_max_total_bytes: int | None = None
+    # Safe realization: allowlist relative path prefixes the compiler may mutate
+    # under scoped_apply. Defaults are controlled by ControllerConfig; project.json
+    # may tighten or widen explicitly.
+    mutation_paths: tuple[str, ...] | None = None
+    # Optional toolchain override for `akc compile` / native test execution.
+    # This is a best-effort mapping that is resolved into a `ToolchainProfile`
+    # by `akc.adopt.toolchain.resolve_toolchain_profile()`.
+    toolchain: dict[str, Any] | None = None
+    # When true, `smoke` / `full` test modes resolve commands from the toolchain like native_smoke/native_full.
+    native_test_mode: bool | None = None
+    # Fail-closed scoped_apply guard: deny categories from `akc.compile.change_scope`.
+    change_scope_deny_categories: tuple[str, ...] | None = None
 
 
 def _coerce_str(data: Mapping[str, Any], key: str) -> str | None:
@@ -47,6 +62,12 @@ def _coerce_str_list(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
         if s:
             out.append(s)
     return tuple(out)
+
+
+def _coerce_optional_str_list(data: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
+    if key not in data:
+        return None
+    return _coerce_str_list(data, key)
 
 
 def _coerce_optional_positive_int(data: Mapping[str, Any], key: str) -> int | None:
@@ -88,6 +109,45 @@ def _coerce_optional_bool(data: Mapping[str, Any], key: str) -> bool | None:
     return None
 
 
+_SCOPE_DENY_ALLOWED: frozenset[str] = frozenset(("code", "config", "ci", "infra", "dependency", "docs", "other"))
+
+
+def _coerce_optional_change_scope_deny(data: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
+    if key not in data:
+        return None
+    v = data[key]
+    if v is None:
+        return None
+    if not isinstance(v, list):
+        raise ValueError(f"{key} must be a JSON array of category strings when set")
+    out: list[str] = []
+    for item in v:
+        s = str(item).strip().lower()
+        if not s:
+            continue
+        if s not in _SCOPE_DENY_ALLOWED:
+            raise ValueError(
+                f"{key} unknown category {item!r}; expected one of {sorted(_SCOPE_DENY_ALLOWED)}",
+            )
+        out.append(s)
+    return tuple(out)
+
+
+def _coerce_optional_mapping(data: Mapping[str, Any], key: str) -> dict[str, Any] | None:
+    v = data.get(key)
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError(f"{key} must be a JSON object when set")
+    out: dict[str, Any] = {}
+    for mk, mv in v.items():
+        ks = str(mk).strip()
+        if not ks:
+            continue
+        out[ks] = mv
+    return out
+
+
 def load_akc_project_config(cwd: Path) -> AkcProjectConfig | None:
     """Load ``.akc/project.json`` or ``.akc/project.yaml`` when present.
 
@@ -125,6 +185,7 @@ def load_akc_project_config(cwd: Path) -> AkcProjectConfig | None:
         return None
     return AkcProjectConfig(
         developer_role_profile=_coerce_str(data, "developer_role_profile"),
+        adoption_level=_coerce_str(data, "adoption_level"),
         tenant_id=_coerce_str(data, "tenant_id"),
         repo_id=_coerce_str(data, "repo_id"),
         outputs_root=_coerce_str(data, "outputs_root"),
@@ -138,4 +199,8 @@ def load_akc_project_config(cwd: Path) -> AkcProjectConfig | None:
         skill_roots=_coerce_str_list(data, "skill_roots"),
         compile_skill_max_file_bytes=_coerce_optional_positive_int(data, "compile_skill_max_file_bytes"),
         compile_skill_max_total_bytes=_coerce_optional_positive_int(data, "compile_skill_max_total_bytes"),
+        mutation_paths=_coerce_optional_str_list(data, "mutation_paths"),
+        toolchain=_coerce_optional_mapping(data, "toolchain"),
+        native_test_mode=_coerce_optional_bool(data, "native_test_mode"),
+        change_scope_deny_categories=_coerce_optional_change_scope_deny(data, "change_scope_deny_categories"),
     )

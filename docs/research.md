@@ -80,8 +80,20 @@ References from runtime and “recompile” planning for operator-style control 
 
 ## RAG, retrieval quality, and evaluation
 
+- [RAGAS evaluation framework](https://arxiv.org/abs/2309.15217) — grounding-focused RAG evaluation dimensions.
 - [Google Cloud — optimizing RAG retrieval](https://cloud.google.com/blog/products/ai-machine-learning/optimizing-rag-retrieval) — retrieval quality patterns.
 - [Evidently AI — RAG evaluation guide](https://evidentlyai.com/llm-guide/rag-evaluation) — offline eval dimensions for RAG systems.
+
+## Human quality, UX, and governance anchors
+
+References used to ground quality dimensions such as `taste`, `judgment`, and `user_empathy`:
+
+- [ISO 9241-210:2019](https://www.iso.org/standard/77520.html) — human-centered design principles.
+- [NN/g — 10 Usability Heuristics](https://www.nngroup.com/articles/ten-usability-heuristics/) — user control, error prevention, and recovery heuristics.
+- [NN/g — Aesthetic-Usability Effect](https://www.nngroup.com/articles/aesthetic-usability-effect/) — perceived usability impact from visual quality.
+- [NIST AI RMF 1.0](https://doi.org/10.6028/NIST.AI.100-1) — AI risk/governance framing for judgment and controls.
+- [Data Mesh Principles](https://martinfowler.com/articles/data-mesh-principles.html) — domain ownership and bounded-context framing.
+- [ACM Software Engineering Code of Ethics](https://www.acm.org/code-of-ethics/software-engineering-code) — engineering-discipline and professional obligations.
 
 ## Lead time, DORA, and “time compression” measurement
 

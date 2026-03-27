@@ -61,6 +61,66 @@ Recommended baseline:
 - `approval.requires_approval_action_prefixes = ["incident.", "mutate."]`
 - `approval.allow_self_approval = false`
 
+## Intent Quality Contract Operations
+
+When compile or promotion decisions include intent quality checks, triage outcomes in this order:
+
+1. Resolve run scope (`outputs_root`, `tenant_id`, `repo_id`, `run_id`) and open the run manifest:
+   - `<outputs_root>/<tenant_id>/<repo_id>/.akc/run/<run_id>.manifest.json`
+2. Inspect `control_plane` quality fields:
+   - `quality_contract_fingerprint`
+   - `quality_overall_score`
+   - `quality_dimension_scores`
+   - `quality_gate_failed_dimensions`
+   - `quality_advisory_dimensions`
+   - `quality_policy_reasons`
+   - `quality_sidecar_ref`
+3. Open the quality sidecar:
+   - `<outputs_root>/<tenant_id>/<repo_id>/.akc/run/<run_id>.quality.json`
+   - Verify per-dimension scores, evidence refs, gate failures, and advisories match the manifest summary.
+4. Review pass-level acceptance evidence:
+   - `pass_records[].name == "intent_acceptance"` in the manifest.
+   - Step outputs should include `last_intent_acceptance.quality_scorecard` and per-dimension failure/advisory lists.
+5. Cross-check indexed aggregates in operations index (`.akc/control/operations.sqlite`) for fleet-level reporting:
+   - `quality_contract_fingerprint`
+   - `quality_overall_score`
+   - `quality_gate_failed_count`
+   - `quality_advisory_count`
+   - `quality_dimensions_json`
+
+Reason-code interpretation:
+
+- `policy.quality_contract.gate_failed`: one or more dimensions in `enforcement_stage=gate` scored below `gate_min_score`; run is denied/blocked until corrected or thresholds change.
+- `policy.quality_contract.advisory`: advisory dimensions scored below `target_score`; run can proceed, but operator review is expected.
+
+### Governance Compile Defaults Example
+
+To enable domain-grounded quality expectations without per-run CLI flags, set policy-bundle governance defaults:
+
+```json
+{
+  "governance_profile": {
+    "version": 1,
+    "assurance_mode": "hybrid",
+    "verifier_coupling_default": true,
+    "verifier_enforcement": "auto",
+    "provider_allowlist": [],
+    "escalation_thresholds": { "max_errors_before_block": 1 },
+    "compile_defaults": {
+      "quality_contract_rollout_stage": "phase_b",
+      "quality_domain_id": "security_network_secrets",
+      "quality_domain_matrix_path": "tests/fixtures/knowledge_domains/domain_coverage_matrix.json"
+    }
+  }
+}
+```
+
+Behavior:
+
+- `quality_contract_rollout_stage` controls advisory vs gate defaults (`phase_b`/`phase_c` enable critical gates).
+- `quality_domain_id` + `quality_domain_matrix_path` load `quality_evidence_expectations` from the selected domain in the matrix.
+- loaded expectations are persisted into compile metadata and applied when the default quality contract is auto-injected.
+
 ## Audit and Logs
 
 Primary audit stream:

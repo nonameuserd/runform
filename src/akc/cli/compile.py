@@ -10,6 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
+from akc.adopt.toolchain import ToolchainPreflightError
+from akc.adopt.trust_ladder import parse_adoption_level, recommended_compile_realization_mode
 from akc.compile import (
     Budget,
     CompileSession,
@@ -18,6 +20,7 @@ from akc.compile import (
     TierConfig,
 )
 from akc.compile.controller_config import (
+    ChangeScopeCategory,
     CompileMcpToolSpec,
     CompileMcpToolStage,
     CompileSkillsMode,
@@ -49,6 +52,48 @@ from .profile_defaults import (
 from .project_config import AkcProjectConfig, load_akc_project_config
 
 IrGraphIntegrityPolicy: TypeAlias = Literal["off", "warn", "error"] | None
+
+
+def _quality_expectations_from_domain_matrix(
+    *,
+    cwd: Path,
+    domain_id: str | None,
+    matrix_path: str | None,
+) -> dict[str, list[str]] | None:
+    did = str(domain_id or "").strip()
+    if not did:
+        return None
+    if matrix_path is not None and str(matrix_path).strip():
+        target = Path(str(matrix_path)).expanduser()
+        if not target.is_absolute():
+            target = (cwd / target).resolve()
+    else:
+        target = (cwd / "tests" / "fixtures" / "knowledge_domains" / "domain_coverage_matrix.json").resolve()
+    if not target.is_file():
+        return None
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    domains = raw.get("domains")
+    if not isinstance(domains, list):
+        return None
+    for entry in domains:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("id", "")).strip() != did:
+            continue
+        exp = entry.get("quality_evidence_expectations")
+        if not isinstance(exp, dict):
+            return None
+        out: dict[str, list[str]] = {}
+        for dim, vals in exp.items():
+            key = str(dim).strip()
+            if not key or not isinstance(vals, list):
+                continue
+            out[key] = [str(x).strip() for x in vals if str(x).strip()]
+        return out or None
+    return None
 
 
 def resolve_compile_policies(
@@ -564,6 +609,7 @@ def _build_compile_config(
     cost_input_per_1k_tokens_usd: float,
     cost_output_per_1k_tokens_usd: float,
     cost_tool_call_usd: float,
+    test_mode: TestMode,
     compile_realization_mode: Literal["artifact_only", "scoped_apply"],
     apply_scope_root: str | None,
 ) -> ControllerConfig:
@@ -581,11 +627,11 @@ def _build_compile_config(
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=12, max_repairs_per_step=4, max_iterations_total=8)
-        test_mode: TestMode = "full"
+        default_test_mode: TestMode = "full"
         full_every: int | None = None
     else:
         budget = Budget(max_llm_calls=4, max_repairs_per_step=2, max_iterations_total=4)
-        test_mode = "smoke"
+        default_test_mode = "smoke"
         full_every = 2
 
     base_tool_allow: tuple[str, ...] = ("llm.complete", "executor.run")
@@ -597,7 +643,7 @@ def _build_compile_config(
         tiers=tiers,
         stage_tiers={"generate": "small", "repair": "small"},
         budget=budget,
-        test_mode=test_mode,
+        test_mode=test_mode if str(test_mode).strip() else default_test_mode,
         full_test_every_n_iterations=full_every,
         policy_mode="audit_only" if policy_mode == "audit_only" else "enforce",
         tool_allowlist=tool_allowlist,
@@ -799,6 +845,13 @@ def cmd_compile(args: argparse.Namespace) -> int:
         promotion_mode=getattr(args, "promotion_mode", None),
         stored_assertion_index=str(getattr(args, "stored_assertion_index", "off")),
     )
+    qee_effective = profile_resolved["quality_evidence_expectations"].value
+    if not isinstance(qee_effective, dict):
+        qee_effective = _quality_expectations_from_domain_matrix(
+            cwd=cwd,
+            domain_id=cast(str | None, profile_resolved["quality_domain_id"].value),
+            matrix_path=cast(str | None, profile_resolved["quality_domain_matrix_path"].value),
+        )
     sandbox_mode = str(profile_resolved["sandbox"].value)
     strong_lane_preference = str(profile_resolved["strong_lane_preference"].value)
     policy_mode_effective = str(profile_resolved["policy_mode"].value)
@@ -976,9 +1029,17 @@ def cmd_compile(args: argparse.Namespace) -> int:
             ),
         )
     realization_mode = str(getattr(args, "compile_realization_mode", "scoped_apply")).strip()
+    if bool(getattr(args, "artifact_only", False)):
+        realization_mode = "artifact_only"
     if realization_mode not in ("artifact_only", "scoped_apply"):
         print("--compile-realization-mode must be artifact_only or scoped_apply")
         return 2
+
+    adoption = parse_adoption_level(proj.adoption_level) if proj is not None else None
+    if adoption is not None:
+        recommended_rm = recommended_compile_realization_mode(adoption)
+        if recommended_rm == "artifact_only" and realization_mode == "scoped_apply":
+            realization_mode = "artifact_only"
     apply_scope_root: str | None = None
     if realization_mode == "scoped_apply":
         asr = getattr(args, "apply_scope_root", None)
@@ -987,6 +1048,14 @@ def cmd_compile(args: argparse.Namespace) -> int:
         else:
             apply_scope_root = str(work_root.expanduser().resolve())
     compile_rm = cast(Literal["artifact_only", "scoped_apply"], realization_mode)
+    cli_test_mode_raw = getattr(args, "test_mode", None)
+    if cli_test_mode_raw is not None and str(cli_test_mode_raw).strip():
+        effective_test_mode = cast(TestMode, str(cli_test_mode_raw).strip())
+    else:
+        if adoption is not None and adoption in {"copilot", "compiler", "autonomy"}:
+            effective_test_mode = "native_full" if str(args.mode) == "thorough" else "native_smoke"
+        else:
+            effective_test_mode = "full" if str(args.mode) == "thorough" else "smoke"
     config = _build_compile_config(
         mode=str(args.mode),
         policy_mode=policy_mode_effective,
@@ -995,9 +1064,38 @@ def cmd_compile(args: argparse.Namespace) -> int:
         cost_input_per_1k_tokens_usd=float(getattr(args, "cost_input_per_1k_usd", 0.0)),
         cost_output_per_1k_tokens_usd=float(getattr(args, "cost_output_per_1k_usd", 0.0)),
         cost_tool_call_usd=float(getattr(args, "cost_tool_call_usd", 0.0)),
+        test_mode=effective_test_mode,
         compile_realization_mode=compile_rm,
         apply_scope_root=apply_scope_root,
     )
+    # Toolchain override mapping from `.akc/project.json` (used by preflight gate).
+    if proj is not None and proj.toolchain is not None:
+        config = replace(config, toolchain=proj.toolchain)
+    if proj is not None and proj.native_test_mode is not None:
+        config = replace(config, native_test_mode=bool(proj.native_test_mode))
+    if proj is not None and proj.change_scope_deny_categories is not None:
+        config = replace(
+            config,
+            change_scope_deny_categories=cast(
+                tuple[ChangeScopeCategory, ...],
+                tuple(proj.change_scope_deny_categories),
+            ),
+        )
+    # Safe realization: optional project-level mutation allowlist.
+    if proj is not None and proj.mutation_paths is not None:
+        config = replace(config, mutation_paths=tuple(proj.mutation_paths))
+    rollback_snapshots_enabled = getattr(args, "rollback_snapshots_enabled", None)
+    if rollback_snapshots_enabled is not None:
+        config = replace(config, rollback_snapshots_enabled=bool(rollback_snapshots_enabled))
+    if bool(getattr(args, "native_test_mode", False)):
+        config = replace(config, native_test_mode=True)
+    if bool(getattr(args, "git_branch_per_run", False)):
+        config = replace(config, git_branch_per_run=True)
+    if bool(getattr(args, "git_commit", False)):
+        config = replace(config, git_commit=True)
+    gcm = getattr(args, "git_commit_message", None)
+    if gcm is not None and str(gcm).strip():
+        config = replace(config, git_commit_message=str(gcm).strip())
     config = _merge_compile_skills_from_sources(
         config=config,
         proj=proj,
@@ -1077,6 +1175,30 @@ def cmd_compile(args: argparse.Namespace) -> int:
                 "value": stored_idx,
                 "source": profile_resolved["stored_assertion_index"].source,
             },
+            "quality_contract_rollout_stage": {
+                "value": cast(str | None, profile_resolved["quality_contract_rollout_stage"].value),
+                "source": profile_resolved["quality_contract_rollout_stage"].source,
+            },
+            "quality_evidence_expectations": {
+                "value": cast(JSONValue | None, qee_effective),
+                "source": (
+                    profile_resolved["quality_evidence_expectations"].source
+                    if isinstance(profile_resolved["quality_evidence_expectations"].value, dict)
+                    else (
+                        "governance"
+                        if qee_effective is not None and profile_resolved["quality_domain_id"].source == "governance"
+                        else profile_resolved["quality_evidence_expectations"].source
+                    )
+                ),
+            },
+            "quality_domain_id": {
+                "value": cast(str | None, profile_resolved["quality_domain_id"].value),
+                "source": profile_resolved["quality_domain_id"].source,
+            },
+            "quality_domain_matrix_path": {
+                "value": cast(str | None, profile_resolved["quality_domain_matrix_path"].value),
+                "source": profile_resolved["quality_domain_matrix_path"].source,
+            },
             "promotion_mode_explicit": {
                 "value": promotion_mode_explicit,
                 "source": profile_resolved["promotion_mode"].source,
@@ -1100,6 +1222,10 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
     md2 = dict(config.metadata or {})
     md2["developer_role_profile"] = developer_role_profile
+    if profile_resolved["quality_contract_rollout_stage"].value is not None:
+        md2["quality_contract_rollout_stage"] = str(profile_resolved["quality_contract_rollout_stage"].value)
+    if isinstance(qee_effective, dict):
+        md2["quality_evidence_expectations"] = dict(qee_effective)
     md2["developer_profile_auto_seed_step"] = bool(profile_resolved["auto_seed_deployable_step"].value)
     md2["developer_profile_intent_bootstrap_from_store"] = bool(profile_resolved["intent_bootstrap_from_store"].value)
     config = replace(config, metadata=md2)
@@ -1185,7 +1311,21 @@ def cmd_compile(args: argparse.Namespace) -> int:
             developer_role_profile=developer_role_profile,
             developer_profile_decisions=profile_decisions,
             skills_project_root=work_root,
+            project_root=cwd,
         )
+    except ToolchainPreflightError as exc:
+        print(str(exc))
+        pref = exc.result
+        if pref.missing:
+            print(f"  missing binaries: {list(pref.missing)}")
+        if pref.version_errors:
+            print(f"  binaries without version: {list(pref.version_errors)}")
+        if pref.versions:
+            keys = sorted(pref.versions.keys())[:12]
+            print("  versions:")
+            for k in keys:
+                print(f"    {k}: {pref.versions.get(k)}")
+        return 2
     except IntentCompilerError as exc:
         print(f"Intent compilation failed: {exc}")
         return 2

@@ -10,6 +10,19 @@ import pytest
 from tests.integration.knowledge_domain_coverage_registry import KD_DOC_IDS_ALLOWLIST
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "knowledge_domains"
+_QUALITY_DIMS = {
+    "taste",
+    "domain_knowledge",
+    "judgment",
+    "instincts",
+    "user_empathy",
+    "engineering_discipline",
+}
+_HARD_GATE_DIMS = {
+    "domain_knowledge",
+    "judgment",
+    "engineering_discipline",
+}
 
 
 def _load_json(name: str) -> dict:
@@ -43,6 +56,22 @@ def test_domain_coverage_matrix_domains_reference_fixture_prefixes() -> None:
     for prefix in prefixes:
         assert isinstance(prefix, str) and prefix.endswith("/")
         assert (_FIXTURES / prefix).is_dir(), f"missing domain dir {_FIXTURES / prefix}"
+
+
+def test_domain_coverage_matrix_quality_expectations_cover_all_dimensions() -> None:
+    matrix = _load_json("domain_coverage_matrix.json")
+    defaults = matrix.get("quality_contract_defaults") or {}
+    required = set(defaults.get("required_dimensions") or [])
+    assert required == _QUALITY_DIMS
+    hard_gate = set(defaults.get("hard_gate_dimensions") or [])
+    assert hard_gate == _HARD_GATE_DIMS
+    for domain in matrix.get("domains") or []:
+        assert isinstance(domain, dict)
+        expectations = domain.get("quality_evidence_expectations")
+        assert isinstance(expectations, dict)
+        assert set(expectations.keys()) == _QUALITY_DIMS
+        for values in expectations.values():
+            assert isinstance(values, list)
 
 
 @pytest.mark.parametrize(

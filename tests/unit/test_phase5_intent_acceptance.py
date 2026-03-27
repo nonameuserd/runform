@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -18,7 +19,7 @@ from akc.compile.interfaces import (
     TenantRepoScope,
 )
 from akc.compile.session import CompileSession
-from akc.intent import IntentSpecV1, Objective, OperatingBound, SuccessCriterion
+from akc.intent import IntentSpecV1, Objective, OperatingBound, QualityContract, QualityDimensionSpec, SuccessCriterion
 from akc.run import RunManifest
 
 
@@ -103,6 +104,7 @@ def _mk_intent_with_artifact_acceptance(
             ),
         ),
         operating_bounds=OperatingBound(max_seconds=None, max_steps=None, allow_network=False),
+        quality_contract=_quality_contract(engineering_stage="advisory"),
         assumptions=(),
         risk_notes=(),
         tags=(),
@@ -129,6 +131,33 @@ def _patch_that_touches_tests(*, keyword: str) -> str:
             "",
         ]
     )
+
+
+def _quality_contract(*, engineering_stage: Literal["advisory", "gate"]) -> QualityContract:
+    dims: dict[str, QualityDimensionSpec] = {}
+    for dim in (
+        "taste",
+        "domain_knowledge",
+        "judgment",
+        "instincts",
+        "user_empathy",
+        "engineering_discipline",
+    ):
+        dims[dim] = QualityDimensionSpec(
+            target_score=0.75,
+            gate_min_score=0.6,
+            weight=1.0,
+            evidence_requirements=(),
+            enforcement_stage="advisory",
+        )
+    dims["engineering_discipline"] = QualityDimensionSpec(
+        target_score=0.8,
+        gate_min_score=0.99,
+        weight=1.0,
+        evidence_requirements=("nonexistent_signal",),
+        enforcement_stage=engineering_stage,
+    )
+    return QualityContract(dimensions=dims)
 
 
 def test_intent_acceptance_failure_separates_compile_and_intent_satisfied(
@@ -260,6 +289,7 @@ def test_intent_acceptance_operational_compile_phase_matches_fixture_evidence(
             ),
         ),
         operating_bounds=OperatingBound(max_seconds=None, max_steps=None, allow_network=False),
+        quality_contract=_quality_contract(engineering_stage="advisory"),
         assumptions=(),
         risk_notes=(),
         tags=(),
@@ -304,3 +334,73 @@ def test_intent_acceptance_operational_compile_phase_matches_fixture_evidence(
     by_name = {p.name: p for p in manifest.passes}
     assert by_name["verify"].status == "succeeded"
     assert by_name["intent_acceptance"].status == "succeeded"
+
+
+def test_quality_contract_advisory_does_not_block_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id = "t1"
+    repo_id = "r1"
+    intent = _mk_intent_with_artifact_acceptance(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        expected_keyword="EXPECTED_KEYWORD_PRESENT",
+    )
+    intent = IntentSpecV1.from_json_obj(
+        {
+            **intent.to_json_obj(),
+            "quality_contract": _quality_contract(engineering_stage="advisory").to_json_obj(),
+        }
+    ).normalized()
+    monkeypatch.setattr("akc.compile.controller.compile_intent_spec", lambda **_: intent)
+
+    cfg = _mk_config(max_repairs_per_step=1)
+    llm = _FixedLLM(patch_text=_patch_that_touches_tests(keyword="EXPECTED_KEYWORD_PRESENT"))
+    ex = _ScriptedExecutor(exit_codes=[0])
+    session = CompileSession.from_memory(tenant_id=tenant_id, repo_id=repo_id)
+    plan = session.memory.plan_state.create_plan(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    session.memory.plan_state.set_active_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
+
+    res = session.run(goal="Goal", llm=llm, executor=ex, config=cfg, outputs_root=tmp_path)
+    assert res.status == "succeeded"
+    assert res.intent_satisfied is True
+
+
+def test_quality_contract_gate_blocks_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id = "t1"
+    repo_id = "r1"
+    intent = _mk_intent_with_artifact_acceptance(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        expected_keyword="EXPECTED_KEYWORD_PRESENT",
+    )
+    intent = IntentSpecV1.from_json_obj(
+        {
+            **intent.to_json_obj(),
+            "quality_contract": _quality_contract(engineering_stage="gate").to_json_obj(),
+        }
+    ).normalized()
+    monkeypatch.setattr("akc.compile.controller.compile_intent_spec", lambda **_: intent)
+
+    cfg = _mk_config(max_repairs_per_step=1)
+    llm = _FixedLLM(patch_text=_patch_that_touches_tests(keyword="EXPECTED_KEYWORD_PRESENT"))
+    ex = _ScriptedExecutor(exit_codes=[0, 0])
+    session = CompileSession.from_memory(tenant_id=tenant_id, repo_id=repo_id)
+    plan = session.memory.plan_state.create_plan(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    session.memory.plan_state.set_active_plan(tenant_id=tenant_id, repo_id=repo_id, plan_id=plan.id)
+
+    res = session.run(goal="Goal", llm=llm, executor=ex, config=cfg, outputs_root=tmp_path)
+    assert res.compile_succeeded is True
+    assert res.intent_satisfied is False
+    manifest_path = tmp_path / tenant_id / repo_id / ".akc" / "run" / f"{res.plan.id}.manifest.json"
+    manifest = RunManifest.from_json_file(manifest_path)
+    by_name = {p.name: p for p in manifest.passes}
+    assert by_name["intent_acceptance"].status == "failed"

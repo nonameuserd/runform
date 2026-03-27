@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -29,8 +29,32 @@ EvaluationMode = Literal[
     "artifact_check",
     "metric_threshold",
     "operational_spec",
+    "quality_contract",
     "human_gate",
 ]
+
+QualityDimensionId = Literal[
+    "taste",
+    "domain_knowledge",
+    "judgment",
+    "instincts",
+    "user_empathy",
+    "engineering_discipline",
+]
+ALLOWED_QUALITY_DIMENSION_IDS: tuple[QualityDimensionId, ...] = (
+    "taste",
+    "domain_knowledge",
+    "judgment",
+    "instincts",
+    "user_empathy",
+    "engineering_discipline",
+)
+CRITICAL_QUALITY_GATE_DIMENSION_IDS: tuple[QualityDimensionId, ...] = (
+    "domain_knowledge",
+    "judgment",
+    "engineering_discipline",
+)
+QualityEnforcementStage = Literal["advisory", "gate"]
 
 OperationalValidityWindow = Literal["single_run", "rolling_ms"]
 OperationalPredicateKind = Literal["threshold", "presence"]
@@ -628,6 +652,179 @@ def parse_operational_validity_params(
     return OperationalValidityParams.from_mapping(cast(Mapping[str, Any], params))
 
 
+@dataclass(frozen=True, slots=True)
+class QualityDimensionSpec:
+    """One quality dimension configuration for the intent quality contract."""
+
+    target_score: float
+    gate_min_score: float | None = None
+    weight: float = 1.0
+    evidence_requirements: tuple[str, ...] = ()
+    enforcement_stage: QualityEnforcementStage = "advisory"
+
+    def __post_init__(self) -> None:
+        t = float(self.target_score)
+        if t < 0.0 or t > 1.0:
+            raise ValueError("quality_dimension.target_score must be within [0.0, 1.0]")
+        if self.gate_min_score is not None:
+            gm = float(self.gate_min_score)
+            if gm < 0.0 or gm > 1.0:
+                raise ValueError("quality_dimension.gate_min_score must be within [0.0, 1.0] when set")
+        w = float(self.weight)
+        if w <= 0.0:
+            raise ValueError("quality_dimension.weight must be > 0")
+        if self.enforcement_stage not in ("advisory", "gate"):
+            raise ValueError("quality_dimension.enforcement_stage must be advisory or gate")
+        for ev in self.evidence_requirements:
+            require_non_empty(ev, name="quality_dimension.evidence_requirements[]")
+
+    def to_json_obj(self) -> dict[str, JSONValue]:
+        obj: dict[str, JSONValue] = {
+            "target_score": float(self.target_score),
+            "gate_min_score": float(self.gate_min_score) if self.gate_min_score is not None else None,
+            "weight": float(self.weight),
+            "evidence_requirements": list(self.evidence_requirements),
+            "enforcement_stage": self.enforcement_stage,
+        }
+        return {k: v for k, v in obj.items() if v is not None}
+
+    @staticmethod
+    def from_json_obj(obj: Mapping[str, Any]) -> QualityDimensionSpec:
+        if not isinstance(obj, Mapping):
+            raise IntentModelError("quality_contract dimension must be a JSON object")
+        raw_target = obj.get("target_score")
+        if isinstance(raw_target, bool) or not isinstance(raw_target, (int, float)):
+            raise IntentModelError("quality_contract.target_score must be a number")
+        raw_gate = obj.get("gate_min_score")
+        gate_min: float | None = None
+        if raw_gate is not None:
+            if isinstance(raw_gate, bool) or not isinstance(raw_gate, (int, float)):
+                raise IntentModelError("quality_contract.gate_min_score must be a number when set")
+            gate_min = float(raw_gate)
+        raw_weight = obj.get("weight", 1.0)
+        if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
+            raise IntentModelError("quality_contract.weight must be a number")
+        raw_evidence = obj.get("evidence_requirements")
+        evidence: tuple[str, ...] = ()
+        if raw_evidence is not None:
+            if not isinstance(raw_evidence, list):
+                raise IntentModelError("quality_contract.evidence_requirements must be an array when set")
+            evidence = tuple(str(x).strip() for x in raw_evidence if str(x).strip())
+        stage_raw = str(obj.get("enforcement_stage", "advisory")).strip().lower()
+        if stage_raw not in ("advisory", "gate"):
+            raise IntentModelError("quality_contract.enforcement_stage must be advisory or gate")
+        return QualityDimensionSpec(
+            target_score=float(raw_target),
+            gate_min_score=gate_min,
+            weight=float(raw_weight),
+            evidence_requirements=evidence,
+            enforcement_stage=cast(QualityEnforcementStage, stage_raw),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QualityContract:
+    """Intent-level quality contract for human-centric system outcomes."""
+
+    dimensions: Mapping[QualityDimensionId, QualityDimensionSpec]
+
+    def __post_init__(self) -> None:
+        keys = {str(k).strip() for k in self.dimensions}
+        expected = {str(k) for k in ALLOWED_QUALITY_DIMENSION_IDS}
+        if keys != expected:
+            missing = sorted(expected - keys)
+            extra = sorted(keys - expected)
+            parts: list[str] = []
+            if missing:
+                parts.append(f"missing={missing!r}")
+            if extra:
+                parts.append(f"extra={extra!r}")
+            details = "; ".join(parts) if parts else "invalid quality dimensions"
+            raise ValueError(f"quality_contract must define exactly six dimensions ({details})")
+
+    def to_json_obj(self) -> dict[str, JSONValue]:
+        return {dim: self.dimensions[dim].to_json_obj() for dim in ALLOWED_QUALITY_DIMENSION_IDS}
+
+    def prompt_compact_obj(self) -> dict[str, JSONValue]:
+        """Bounded summary for compile prompt context."""
+
+        out: dict[str, JSONValue] = {}
+        for dim in ALLOWED_QUALITY_DIMENSION_IDS:
+            d = self.dimensions[dim]
+            out[dim] = {
+                "target_score": float(d.target_score),
+                "gate_min_score": float(d.gate_min_score) if d.gate_min_score is not None else None,
+                "weight": float(d.weight),
+                "enforcement_stage": d.enforcement_stage,
+            }
+        return out
+
+    @staticmethod
+    def from_json_obj(obj: Mapping[str, Any]) -> QualityContract:
+        if not isinstance(obj, Mapping):
+            raise IntentModelError("quality_contract must be a JSON object")
+        dims: dict[QualityDimensionId, QualityDimensionSpec] = {}
+        for dim in ALLOWED_QUALITY_DIMENSION_IDS:
+            raw = obj.get(dim)
+            if not isinstance(raw, Mapping):
+                raise IntentModelError(f"quality_contract.{dim} must be an object")
+            dims[dim] = QualityDimensionSpec.from_json_obj(cast(Mapping[str, Any], raw))
+        return QualityContract(dimensions=dims)
+
+    @staticmethod
+    def advisory_defaults(
+        *,
+        evidence_expectations: Mapping[str, Sequence[str]] | None = None,
+    ) -> QualityContract:
+        """Default all-dimension advisory profile used for safe global rollout."""
+
+        dims: dict[QualityDimensionId, QualityDimensionSpec] = {}
+        for dim in ALLOWED_QUALITY_DIMENSION_IDS:
+            raw_expect: tuple[str, ...] = ()
+            if isinstance(evidence_expectations, Mapping):
+                raw_vals = evidence_expectations.get(dim, ())
+                if isinstance(raw_vals, Sequence) and not isinstance(raw_vals, (str, bytes)):
+                    raw_expect = tuple(str(x).strip() for x in raw_vals if str(x).strip())
+            dims[dim] = QualityDimensionSpec(
+                target_score=0.75,
+                gate_min_score=0.6,
+                weight=1.0,
+                evidence_requirements=raw_expect,
+                enforcement_stage="advisory",
+            )
+        return QualityContract(dimensions=dims)
+
+    @staticmethod
+    def critical_gate_defaults(
+        *,
+        evidence_expectations: Mapping[str, Sequence[str]] | None = None,
+    ) -> QualityContract:
+        """Default profile that hard-gates critical quality dimensions first."""
+
+        gate_dims = set(CRITICAL_QUALITY_GATE_DIMENSION_IDS)
+        dims: dict[QualityDimensionId, QualityDimensionSpec] = {}
+        for dim in ALLOWED_QUALITY_DIMENSION_IDS:
+            raw_expect: tuple[str, ...] = ()
+            if isinstance(evidence_expectations, Mapping):
+                raw_vals = evidence_expectations.get(dim, ())
+                if isinstance(raw_vals, Sequence) and not isinstance(raw_vals, (str, bytes)):
+                    raw_expect = tuple(str(x).strip() for x in raw_vals if str(x).strip())
+            dims[dim] = QualityDimensionSpec(
+                target_score=0.75,
+                gate_min_score=0.6,
+                weight=1.0,
+                evidence_requirements=raw_expect,
+                enforcement_stage="gate" if dim in gate_dims else "advisory",
+            )
+        return QualityContract(dimensions=dims)
+
+
+def quality_contract_fingerprint(*, quality_contract: QualityContract | None) -> str | None:
+    if quality_contract is None:
+        return None
+    return stable_json_fingerprint(quality_contract.to_json_obj())[:16]
+
+
 _INTENT_SPEC_SCHEMA_KIND: Final[str] = "intent_spec"
 _INTENT_SPEC_DEFAULT_VERSION: Final[int] = 1
 
@@ -956,6 +1153,7 @@ class IntentSpecV1:
     policies: tuple[PolicyRef, ...] = ()
     success_criteria: tuple[SuccessCriterion, ...] = ()
     operating_bounds: OperatingBound | None = None
+    quality_contract: QualityContract | None = None
 
     assumptions: tuple[Assumption, ...] = ()
     risk_notes: tuple[str, ...] = ()
@@ -1022,6 +1220,7 @@ class IntentSpecV1:
             policies=self.policies,
             success_criteria=self.success_criteria,
             operating_bounds=self.operating_bounds,
+            quality_contract=self.quality_contract,
             assumptions=self.assumptions,
             risk_notes=self.risk_notes,
             tags=tuple(t.strip() for t in self.tags if isinstance(t, str)),
@@ -1047,6 +1246,7 @@ class IntentSpecV1:
             "policies": [p.to_json_obj() for p in i.policies],
             "success_criteria": [s.to_json_obj() for s in i.success_criteria],
             "operating_bounds": (i.operating_bounds.to_json_obj() if i.operating_bounds is not None else None),
+            "quality_contract": (i.quality_contract.to_json_obj() if i.quality_contract is not None else None),
             "assumptions": [a.to_json_obj() for a in i.assumptions],
             "risk_notes": list(i.risk_notes),
             "tags": list(i.tags),
@@ -1093,6 +1293,12 @@ class IntentSpecV1:
             if isinstance(operating_bounds_raw, dict)
             else None
         )
+        quality_contract_raw = obj.get("quality_contract")
+        quality_contract = (
+            QualityContract.from_json_obj(cast(Mapping[str, Any], quality_contract_raw))
+            if isinstance(quality_contract_raw, Mapping)
+            else None
+        )
 
         return IntentSpecV1(
             intent_id=str(obj.get("intent_id", "")),
@@ -1109,6 +1315,7 @@ class IntentSpecV1:
             policies=tuple(PolicyRef.from_json_obj(x) for x in _require_arr("policies")),
             success_criteria=tuple(SuccessCriterion.from_json_obj(x) for x in _require_arr("success_criteria")),
             operating_bounds=operating_bounds,
+            quality_contract=quality_contract,
             assumptions=tuple(Assumption.from_json_obj(x) for x in _require_arr("assumptions")),
             risk_notes=tuple(str(x) for x in (obj.get("risk_notes") or [])),
             tags=tuple(str(x) for x in (obj.get("tags") or [])),
@@ -1155,6 +1362,7 @@ def _intent_semantic_fingerprint_payload(*, intent: IntentSpecV1) -> dict[str, J
         "policies": [p.to_json_obj() for p in _sorted_by_id(i.policies)],
         "success_criteria": [s.to_json_obj() for s in _sorted_by_id(i.success_criteria)],
         "operating_bounds": (i.operating_bounds.to_json_obj() if i.operating_bounds is not None else None),
+        "quality_contract": (i.quality_contract.to_json_obj() if i.quality_contract is not None else None),
         "assumptions": [a.to_json_obj() for a in _sorted_by_id(i.assumptions)],
     }
 
@@ -1167,7 +1375,11 @@ def intent_semantic_fingerprint(*, intent: IntentSpecV1) -> str:
     return h[:16]
 
 
-def intent_acceptance_slice_fingerprint(*, success_criteria: tuple[SuccessCriterion, ...]) -> str:
+def intent_acceptance_slice_fingerprint(
+    *,
+    success_criteria: tuple[SuccessCriterion, ...],
+    quality_contract: QualityContract | None = None,
+) -> str:
     """Stable short fingerprint of the normalized success-criteria slice (acceptance-only contract).
 
     Used for offline manifest correlation and replay tooling when full intent JSON is absent.
@@ -1176,8 +1388,9 @@ def intent_acceptance_slice_fingerprint(*, success_criteria: tuple[SuccessCriter
 
     payload: dict[str, JSONValue] = {
         "kind": "intent_acceptance_slice",
-        "schema_version": 1,
+        "schema_version": 2,
         "success_criteria": [s.to_json_obj() for s in _sorted_by_id(success_criteria)],
+        "quality_contract": quality_contract.to_json_obj() if quality_contract is not None else None,
     }
     h = stable_json_fingerprint(payload)
     return h[:16]

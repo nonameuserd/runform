@@ -103,7 +103,22 @@
             "policy_mode": { "type": "string", "minLength": 1, "maxLength": 64 },
             "replay_mode": { "type": "string", "minLength": 1, "maxLength": 64 },
             "promotion_mode": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "stored_assertion_index": { "type": "string", "minLength": 1, "maxLength": 64 }
+            "stored_assertion_index": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "quality_contract_rollout_stage": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "quality_domain_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "quality_domain_matrix_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "quality_evidence_expectations": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "taste": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+                "domain_knowledge": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+                "judgment": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+                "instincts": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+                "user_empathy": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+                "engineering_discipline": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
+              }
+            }
           }
         }
       }

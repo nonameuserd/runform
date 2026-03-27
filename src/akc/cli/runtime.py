@@ -2292,16 +2292,33 @@ def cmd_runtime_autopilot(args: argparse.Namespace) -> int:
     """Run always-on runtime autopilot controller loop."""
     configure_logging(verbose=bool(getattr(args, "verbose", False)))
 
+    from akc.adopt.trust_ladder import adoption_level_index, parse_adoption_level
     from akc.cli.project_config import load_akc_project_config
     from akc.living.automation_profile import resolve_living_automation_profile
-    from akc.runtime.autopilot import AutonomyBudgetConfig, run_runtime_autopilot
+    from akc.runtime.autopilot import AutonomyBudgetConfig, ReliabilitySLOGateConfig, run_runtime_autopilot
 
     proj = load_akc_project_config(Path.cwd())
+    adoption = parse_adoption_level(proj.adoption_level) if proj is not None else None
     living_profile = resolve_living_automation_profile(
         cli_value=getattr(args, "living_automation_profile", None),
         env=os.environ,
         project_value=proj.living_automation_profile if proj is not None else None,
     )
+
+    # Progressive takeover (Level 4): if adoption is set to full autonomy and living automation
+    # was not configured via CLI/env/project, default to unattended living loop.
+    if adoption is not None and adoption_level_index(adoption) >= 4:
+        cli_lp = getattr(args, "living_automation_profile", None)
+        env_lp = os.environ.get("AKC_LIVING_AUTOMATION_PROFILE")
+        proj_lp = proj.living_automation_profile if proj is not None else None
+        if (
+            (cli_lp is None or str(cli_lp).strip() == "")
+            and (env_lp is None or str(env_lp).strip() == "")
+            and (proj_lp is None or str(proj_lp).strip() == "")
+        ):
+            from akc.living.automation_profile import PROFILE_LIVING_LOOP_UNATTENDED_V1
+
+            living_profile = PROFILE_LIVING_LOOP_UNATTENDED_V1
 
     use_unattended_defaults = bool(getattr(args, "unattended_defaults", False))
     if use_unattended_defaults and living_profile.id != "living_loop_unattended_v1":
@@ -2314,6 +2331,35 @@ def cmd_runtime_autopilot(args: argparse.Namespace) -> int:
         getattr(args, "living_check_interval_sec", getattr(args, "living_check_interval_s", 3600.0))
     )
     lease_ns_effective: str | None = getattr(args, "lease_namespace", None)
+
+    # Progressive takeover (Level 4): if budgets were not provided explicitly, prefer unattended defaults
+    # (still requires unattended living automation to be enabled, i.e. living_loop_unattended_v1).
+    if adoption is not None and adoption_level_index(adoption) >= 4 and not use_unattended_defaults:
+        missing_budget_flag = False
+        for _label, val in (
+            ("--max-mutations-per-day", getattr(args, "max_mutations_per_day", None)),
+            ("--max-concurrent-rollouts", getattr(args, "max_concurrent_rollouts", None)),
+            ("--rollback-budget-per-day", getattr(args, "rollback_budget_per_day", None)),
+            ("--max-consecutive-rollout-failures", getattr(args, "max_consecutive_rollout_failures", None)),
+            (
+                "--max-rollbacks-per-day-before-escalation",
+                getattr(args, "max_rollbacks_per_day_before_escalation", None),
+            ),
+            ("--cooldown-after-failure-ms", getattr(args, "cooldown_after_failure_ms", None)),
+            ("--cooldown-after-policy-deny-ms", getattr(args, "cooldown_after_policy_deny_ms", None)),
+        ):
+            if val is None:
+                missing_budget_flag = True
+                break
+        if missing_budget_flag:
+            use_unattended_defaults = True
+
+    if use_unattended_defaults and living_profile.id != "living_loop_unattended_v1":
+        raise SystemExit(
+            "--unattended-defaults requires living_loop_unattended_v1 "
+            "(set --living-automation-profile or AKC_LIVING_AUTOMATION_PROFILE / .akc/project.json)."
+        )
+
     if use_unattended_defaults:
         from akc.living.unattended_defaults import unattended_autopilot_defaults_for_env
 
@@ -2354,6 +2400,19 @@ def cmd_runtime_autopilot(args: argparse.Namespace) -> int:
             cooldown_after_policy_deny_ms=int(args.cooldown_after_policy_deny_ms),
         )
 
+    slo_gate_cfg: ReliabilitySLOGateConfig | None = None
+    # Progressive takeover (Level 4): default to SLO gating when configured for full autonomy.
+    use_slo_gate = bool(getattr(args, "slo_gate", False)) or (
+        adoption is not None and adoption_level_index(adoption) >= 4
+    )
+    if use_slo_gate:
+        slo_gate_cfg = ReliabilitySLOGateConfig(
+            min_rollouts_total=int(getattr(args, "slo_min_rollouts", 5)),
+            min_policy_compliance_rate=float(getattr(args, "slo_min_policy_compliance_rate", 0.98)),
+            min_rollback_success_rate=float(getattr(args, "slo_min_rollback_success_rate", 0.95)),
+            max_delivery_change_instability_proxy=float(getattr(args, "slo_max_change_instability_proxy", 0.25)),
+        )
+
     return run_runtime_autopilot(
         outputs_root=args.outputs_root,
         ingest_state_path=args.ingest_state_path,
@@ -2376,4 +2435,5 @@ def cmd_runtime_autopilot(args: argparse.Namespace) -> int:
         scope_registry_path=getattr(args, "scope_registry_path", None),
         env_profile=cast(Literal["dev", "staging", "prod"], str(getattr(args, "env_profile", "staging"))),
         living_automation_profile=living_profile,
+        reliability_slo_gate=slo_gate_cfg,
     )

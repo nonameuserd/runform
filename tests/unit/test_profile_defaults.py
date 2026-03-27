@@ -17,7 +17,7 @@ from akc.cli.project_config import AkcProjectConfig, load_akc_project_config
 @dataclass(frozen=True, slots=True)
 class _Gov:
     rollout_stage: str | None = None
-    compile_defaults: tuple[tuple[str, str], ...] = ()
+    compile_defaults: tuple[tuple[str, object], ...] = ()
 
 
 def test_normalize_developer_role_profile_defaults_to_classic() -> None:
@@ -71,6 +71,14 @@ def test_resolve_developer_role_profile_cli_over_env_over_file(tmp_path: Path) -
 def test_resolve_developer_role_profile_legacy_when_unset(tmp_path: Path) -> None:
     assert resolve_developer_role_profile(cli_value=None, cwd=tmp_path, env={}).value == "classic"
     assert resolve_developer_role_profile(cli_value=None, cwd=tmp_path, env={}).source == "legacy_default"
+
+
+def test_resolve_developer_role_profile_defaults_to_emerging_for_adoption_level_compiler(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(json.dumps({"adoption_level": "compiler"}), encoding="utf-8")
+    r = resolve_developer_role_profile(cli_value=None, cwd=tmp_path, env={})
+    assert r.value == "emerging"
+    assert r.source == "profile_default"
 
 
 def test_resolve_optional_project_string_precedence() -> None:
@@ -137,6 +145,19 @@ def test_load_akc_project_config_compile_skill_byte_caps(tmp_path: Path) -> None
     assert cfg is not None
     assert cfg.compile_skill_max_file_bytes == 120_000
     assert cfg.compile_skill_max_total_bytes == 30_000
+
+
+def test_load_akc_project_config_native_and_change_scope(tmp_path: Path) -> None:
+    akc = tmp_path / ".akc"
+    akc.mkdir(parents=True)
+    (akc / "project.json").write_text(
+        '{"native_test_mode": true, "change_scope_deny_categories": ["ci", "infra"]}\n',
+        encoding="utf-8",
+    )
+    cfg = load_akc_project_config(tmp_path)
+    assert cfg is not None
+    assert cfg.native_test_mode is True
+    assert cfg.change_scope_deny_categories == ("ci", "infra")
 
 
 def test_load_akc_project_config_json_opa_fields(tmp_path: Path) -> None:
@@ -227,3 +248,83 @@ def test_resolve_compile_profile_governance_compile_defaults_without_rollout_sta
     assert resolved["replay_mode"].source == "governance"
     assert resolved["promotion_mode"].value == "artifact_only"
     assert resolved["promotion_mode"].source == "governance"
+
+
+def test_resolve_compile_profile_quality_rollout_defaults_to_advisory() -> None:
+    resolved = resolve_compile_profile_defaults(
+        profile="classic",
+        governance_profile=_Gov(rollout_stage=None, compile_defaults=()),
+        sandbox="dev",
+        strong_lane_preference="docker",
+        policy_mode="enforce",
+        replay_mode="live",
+        promotion_mode=None,
+        stored_assertion_index="off",
+    )
+    assert resolved["quality_contract_rollout_stage"].value == "advisory"
+    assert resolved["quality_contract_rollout_stage"].source == "profile_default"
+
+
+def test_resolve_compile_profile_governance_quality_rollout_stage_override() -> None:
+    resolved = resolve_compile_profile_defaults(
+        profile="emerging",
+        governance_profile=_Gov(
+            rollout_stage="prod",
+            compile_defaults=(("quality_contract_rollout_stage", "phase_b"),),
+        ),
+        sandbox="dev",
+        strong_lane_preference="docker",
+        policy_mode="enforce",
+        replay_mode="live",
+        promotion_mode=None,
+        stored_assertion_index="off",
+    )
+    assert resolved["quality_contract_rollout_stage"].value == "phase_b"
+    assert resolved["quality_contract_rollout_stage"].source == "governance"
+
+
+def test_resolve_compile_profile_governance_quality_evidence_expectations_mapping() -> None:
+    expectations = {
+        "engineering_discipline": ["tests_touched", "execution_passed"],
+        "judgment": ["policy_decisions"],
+    }
+    resolved = resolve_compile_profile_defaults(
+        profile="emerging",
+        governance_profile=_Gov(
+            rollout_stage="prod",
+            compile_defaults=(("quality_evidence_expectations", expectations),),
+        ),
+        sandbox="dev",
+        strong_lane_preference="docker",
+        policy_mode="enforce",
+        replay_mode="live",
+        promotion_mode=None,
+        stored_assertion_index="off",
+    )
+    assert resolved["quality_evidence_expectations"].source == "governance"
+    assert resolved["quality_evidence_expectations"].value == expectations
+
+
+def test_resolve_compile_profile_governance_quality_domain_fields() -> None:
+    resolved = resolve_compile_profile_defaults(
+        profile="classic",
+        governance_profile=_Gov(
+            rollout_stage=None,
+            compile_defaults=(
+                ("quality_domain_id", "security_network_secrets"),
+                ("quality_domain_matrix_path", "tests/fixtures/knowledge_domains/domain_coverage_matrix.json"),
+            ),
+        ),
+        sandbox="dev",
+        strong_lane_preference="docker",
+        policy_mode="enforce",
+        replay_mode="live",
+        promotion_mode=None,
+        stored_assertion_index="off",
+    )
+    assert resolved["quality_domain_id"].value == "security_network_secrets"
+    assert resolved["quality_domain_id"].source == "governance"
+    assert (
+        resolved["quality_domain_matrix_path"].value == "tests/fixtures/knowledge_domains/domain_coverage_matrix.json"
+    )
+    assert resolved["quality_domain_matrix_path"].source == "governance"
