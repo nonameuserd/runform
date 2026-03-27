@@ -9,6 +9,7 @@ caller boundary; higher-level checks still constrain baselines and tenant scope.
 
 from __future__ import annotations
 
+import os.path
 from pathlib import Path
 
 
@@ -27,7 +28,11 @@ def expanduser_resolve_trusted_invoker(raw: str | Path) -> Path:
     :func:`akc.living.safe_recompile.safe_recompile_on_drift` after this step.
     """
     s = coerce_safe_path_string(raw)
-    return Path(s).expanduser().resolve()  # codeql[py/path-injection]: Trusted invoker boundary; NUL rejected above.
+    expanded = os.path.expanduser(s)
+    resolved = os.path.realpath(expanded)
+    if not os.path.isabs(resolved):
+        raise ValueError("resolved path is not absolute")
+    return Path(resolved)
 
 
 def resolve_absolute_path_under_allowlist_bases(
@@ -63,12 +68,12 @@ def resolve_absolute_path_under_allowlist_bases(
         if any(p == ".." for p in rel.parts):
             continue
         try:
-            resolved = (base_r / rel).resolve()  # codeql[py/path-injection]: allowlist only; verified below.
+            joined = os.path.join(str(base_r), str(rel))
+            resolved_str = os.path.realpath(joined)
         except OSError:
             continue
-        try:
-            if resolved.is_relative_to(base_r):
-                return resolved
-        except ValueError:
-            continue
+        # CodeQL-recognised confinement: realpath result checked with startswith.
+        base_prefix = os.path.realpath(str(base_r)) + os.sep
+        if resolved_str == os.path.realpath(str(base_r)) or resolved_str.startswith(base_prefix):
+            return Path(resolved_str)
     return None

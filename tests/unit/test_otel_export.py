@@ -262,6 +262,29 @@ def test_build_resource_attributes_merges_intent_observability() -> None:
     assert a["akc.intent.trace_tags"] == "intent.oteld_stub:stub_a"
 
 
+def test_build_resource_attributes_merges_quality_observability() -> None:
+    quality = {
+        "overall_weighted_score": 0.83,
+        "gate_failed_dimensions": ["judgment"],
+        "advisory_dimensions": ["taste", "user_empathy"],
+        "dimensions": [
+            {"dimension_id": "judgment", "score": 0.52},
+            {"dimension_id": "taste", "score": 0.74},
+        ],
+    }
+    a = build_resource_attributes(
+        tenant_id="t",
+        repo_id="r",
+        run_id="run",
+        quality_summary=quality,
+        quality_contract_fingerprint="1234abcd5678ef90",
+    )
+    assert a["akc.intent.quality.contract_fingerprint"] == "1234abcd5678ef90"
+    assert a["akc.intent.quality.overall_score"] == 0.83
+    assert a["akc.intent.quality.gate_failed_dimensions"] == "judgment"
+    assert a["akc.intent.quality.dimension.judgment.score"] == 0.52
+
+
 def test_sink_types_smoke() -> None:
     MultiOtelExportSink(sinks=()).write_line("{}")
     # HTTP sink should not raise on unreachable URL (swallows URLError)

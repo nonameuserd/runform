@@ -21,6 +21,7 @@ _MODE_TO_PASSES: dict[str, frozenset[str]] = {
     "metric_threshold": frozenset({"intent_acceptance", "runtime_bundle", "execute", "repair"}),
     # Operational criteria need a refreshed runtime bundle, execution/repair signals, and acceptance.
     "operational_spec": frozenset({"intent_acceptance", "runtime_bundle", "execute", "repair"}),
+    "quality_contract": frozenset({"intent_acceptance", "execute", "verify"}),
     "human_gate": frozenset({"intent_acceptance"}),
 }
 

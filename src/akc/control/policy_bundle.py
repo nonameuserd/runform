@@ -34,27 +34,34 @@ _GOVERNANCE_COMPILE_DEFAULT_KEYS = frozenset(
         "replay_mode",
         "promotion_mode",
         "stored_assertion_index",
+        "quality_contract_rollout_stage",
+        "quality_domain_id",
+        "quality_domain_matrix_path",
+        "quality_evidence_expectations",
     }
 )
 
 
-def _compile_defaults_tuple_from_governance_mapping(gp: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+def _compile_defaults_tuple_from_governance_mapping(gp: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
     """Parse optional org-wide compile defaults from ``governance_profile`` in a policy bundle."""
 
     raw = gp.get("compile_defaults")
     if not isinstance(raw, dict):
         return ()
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, Any]] = []
     for k, v in raw.items():
         key = str(k).strip()
         if key not in _GOVERNANCE_COMPILE_DEFAULT_KEYS:
             continue
         if v is None:
             continue
-        val = str(v).strip()
-        if not val:
+        if isinstance(v, str):
+            val = v.strip()
+            if not val:
+                continue
+            out.append((key, val))
             continue
-        out.append((key, val))
+        out.append((key, v))
     return tuple(sorted(out))
 
 
@@ -68,7 +75,7 @@ class GovernanceProfile:
     max_errors_before_block: int
     rollout_stage: str | None
     # Org-wide compile defaults (optional); overlays rollout_stage-derived keys in profile resolution.
-    compile_defaults: tuple[tuple[str, str], ...]
+    compile_defaults: tuple[tuple[str, Any], ...]
     source: str
 
     def to_json_obj(self) -> dict[str, Any]:

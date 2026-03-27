@@ -10,14 +10,18 @@ Design goals:
 
 from __future__ import annotations
 
+import shlex
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+from akc.adopt.detect import detect_project_profile
+from akc.adopt.toolchain import resolve_toolchain_profile
 from akc.compile.controller_budget_loop import run_budgeted_generate_execute_repair_loop
-from akc.compile.controller_config import ControllerConfig
+from akc.compile.controller_config import ControllerConfig, controller_uses_native_toolchain_resolved_commands
 from akc.compile.controller_patch_utils import (
     _derive_full_test_command,
     combined_tool_like_calls,
@@ -70,8 +74,9 @@ from akc.intent import (
     compute_intent_fingerprint,
     project_intent_operating_bounds_to_policy_context,
     project_stage_timeout_s,
+    quality_contract_fingerprint,
 )
-from akc.intent.models import ConstraintLink, IntentSpec, SuccessCriterionLink
+from akc.intent.models import ConstraintLink, IntentSpec, QualityContract, SuccessCriterionLink
 from akc.intent.plan_step_intent import build_plan_step_intent_ref
 from akc.intent.resolve import resolve_compile_intent_context
 from akc.intent.store import IntentStore
@@ -188,6 +193,40 @@ def _docker_apparmor_available() -> bool:
 def _unwrap_executor_for_policy(executor: Executor) -> Any:
     underlying = getattr(executor, "underlying", None)
     return underlying if underlying is not None else executor
+
+
+def _intent_with_profile_quality_defaults(
+    *,
+    intent_spec: IntentSpec,
+    profile_mode: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> IntentSpec:
+    mode = str(profile_mode or "classic").strip().lower()
+    if mode not in {"classic", "emerging"}:
+        return intent_spec
+    if getattr(intent_spec, "quality_contract", None) is not None:
+        return intent_spec
+    raw_stage = ""
+    evidence_expectations: dict[str, tuple[str, ...]] | None = None
+    if isinstance(metadata, Mapping):
+        raw_stage = str(metadata.get("quality_contract_rollout_stage", "")).strip().lower()
+        raw_expect = metadata.get("quality_evidence_expectations")
+        if isinstance(raw_expect, Mapping):
+            parsed: dict[str, tuple[str, ...]] = {}
+            for dim_id, reqs in raw_expect.items():
+                did = str(dim_id).strip()
+                if not did:
+                    continue
+                if isinstance(reqs, (list, tuple)):
+                    vals = tuple(str(x).strip() for x in reqs if str(x).strip())
+                    parsed[did] = vals
+            if parsed:
+                evidence_expectations = parsed
+    if raw_stage in {"gate", "critical_gate", "phase_b", "phase_c"}:
+        qc = QualityContract.critical_gate_defaults(evidence_expectations=evidence_expectations)
+    else:
+        qc = QualityContract.advisory_defaults(evidence_expectations=evidence_expectations)
+    return cast(IntentSpec, replace(cast(Any, intent_spec), quality_contract=qc).normalized())
 
 
 def _executor_backend_label(executor: Executor) -> str:
@@ -378,6 +417,7 @@ def run_compile_loop(
     intent_store: IntentStore | None = None,
     knowledge_artifact_root: str | Path | None = None,
     skills_project_root: str | Path | None = None,
+    project_root: str | Path | None = None,
 ) -> ControllerResult:
     """Run the Phase 3 compile loop for the active plan step.
 
@@ -393,6 +433,8 @@ def run_compile_loop(
     require_non_empty(repo_id, name="repo_id")
     require_non_empty(goal, name="goal")
     require_non_empty(replay_mode, name="replay_mode")
+    md = dict(config.metadata or {})
+    profile_mode = str(md.get("developer_role_profile", "classic")).strip().lower()
 
     # Phase 2 normalization:
     # - For explicit intent-backed runs, session may pass a precompiled intent.
@@ -412,6 +454,7 @@ def run_compile_loop(
                 goal_statement=goal,
                 controller_budget=config.budget,
             )
+    intent_spec = _intent_with_profile_quality_defaults(intent_spec=intent_spec, profile_mode=profile_mode, metadata=md)
     intent_fingerprint = compute_intent_fingerprint(intent=intent_spec)
     if intent_store is not None:
         persisted = intent_spec.normalized()
@@ -509,8 +552,6 @@ def run_compile_loop(
 
     step_id = plan.next_step_id
     if step_id is None:
-        md = dict(config.metadata or {})
-        profile_mode = str(md.get("developer_role_profile", "classic")).strip().lower()
         auto_seed_deployable = bool(md.get("developer_profile_auto_seed_step", False))
         require_deployable_steps = bool(md.get("require_deployable_steps", False))
         deployable_intent = intent_declares_deployable_objective(intent=intent_spec)
@@ -677,6 +718,12 @@ def run_compile_loop(
             ),
             "operating_bounds": dict(bounds_projection.effective),
         }
+    intent_contract["quality_contract"] = (
+        intent_spec.quality_contract.prompt_compact_obj() if intent_spec.quality_contract is not None else None
+    )
+    intent_contract["quality_contract_fingerprint"] = quality_contract_fingerprint(
+        quality_contract=intent_spec.quality_contract
+    )
     intent_node_properties_for_ir: dict[str, Any] = dict(intent_contract)
     intent_node_properties_for_ir["intent_semantic_fingerprint"] = intent_fingerprint.semantic
     intent_node_properties_for_ir["intent_goal_text_fingerprint"] = intent_fingerprint.goal_text
@@ -905,24 +952,53 @@ def run_compile_loop(
     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
 
     gen_tier = config.tier_for_stage(stage="generate")
+
     # Tests-by-default: run tests for every candidate evaluation.
     # Prefer explicit config, but remain backward-compatible with older metadata keys.
-    smoke_command = list(
-        config.test_command
-        if config.test_command is not None
-        else (config.metadata or {}).get("execute_command") or ["python", "-m", "pytest", "-q"]
-    )
+    def _composite_shell_command(commands: list[list[str]]) -> list[str]:
+        parts = [shlex.join(cmd) for cmd in commands if cmd]
+        joined = " && ".join(parts)
+        script = f"set -e; {joined}"
+        return ["sh", "-lc", script]
+
+    if controller_uses_native_toolchain_resolved_commands(config):
+        if project_root is None:
+            raise ValueError("native toolchain tests require project_root to resolve commands")
+        extracted = detect_project_profile(root=Path(project_root).expanduser().resolve())
+        toolchain = resolve_toolchain_profile(extracted_profile=extracted, explicit_toolchain=config.toolchain)
+
+        smoke_cmds: list[list[str]] = []
+        if toolchain.lint_command:
+            smoke_cmds.append(list(toolchain.lint_command))
+        if toolchain.typecheck_command:
+            smoke_cmds.append(list(toolchain.typecheck_command))
+        elif toolchain.language == "rust" and toolchain.build_command:
+            smoke_cmds.append(list(toolchain.build_command))
+        if not smoke_cmds:
+            smoke_cmds.append(list(toolchain.test_command))
+
+        smoke_command = _composite_shell_command(smoke_cmds) if len(smoke_cmds) > 1 else list(smoke_cmds[0])
+        full_command = list(toolchain.test_command)
+        if config.test_mode == "native_full" or (bool(config.native_test_mode) and config.test_mode == "full"):
+            smoke_command = list(full_command)
+    else:
+        smoke_command = list(
+            config.test_command
+            if config.test_command is not None
+            else (config.metadata or {}).get("execute_command") or ["python", "-m", "pytest", "-q"]
+        )
     smoke_timeout_s_raw = (
         config.test_timeout_s if config.test_timeout_s is not None else (config.metadata or {}).get("execute_timeout_s")
     )
     smoke_timeout_s_f = float(smoke_timeout_s_raw) if smoke_timeout_s_raw is not None else None
 
-    full_command_raw = (config.metadata or {}).get("full_test_command")
-    full_command = (
-        list(full_command_raw)
-        if isinstance(full_command_raw, (list, tuple)) and full_command_raw
-        else _derive_full_test_command(smoke_command)
-    )
+    if not controller_uses_native_toolchain_resolved_commands(config):
+        full_command_raw = (config.metadata or {}).get("full_test_command")
+        full_command = (
+            list(full_command_raw)
+            if isinstance(full_command_raw, (list, tuple)) and full_command_raw
+            else _derive_full_test_command(smoke_command)
+        )
     full_timeout_s_raw = (config.metadata or {}).get("full_test_timeout_s")
     full_timeout_s_f = float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
 
@@ -1014,6 +1090,10 @@ def run_compile_loop(
     if skills_project_root is not None:
         skills_root_path = Path(skills_project_root).expanduser().resolve()
 
+    project_root_path: Path | None = None
+    if project_root is not None:
+        project_root_path = Path(project_root).expanduser().resolve()
+
     skill_append_pre, skill_audit_pre = build_compile_skill_system_append(
         config=config,
         project_root=skills_root_path,
@@ -1087,5 +1167,6 @@ def run_compile_loop(
         intent_store=intent_store,
         intent_contract_shape=intent_contract_shape,
         skills_project_root=skills_root_path,
+        project_root=project_root_path,
         compile_skills_resolved=compile_skills_resolved,
     )

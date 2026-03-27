@@ -19,6 +19,12 @@ _POLICY_REASON_NARRATIVES: dict[str, str] = {
     "policy.opa.unavailable": "OPA binary or policy inputs were unavailable; treated as deny.",
     "policy.opa.parse_error": "OPA returned a value shape the evaluator could not interpret.",
     "policy.opa.unknown": "OPA evaluation did not yield a recognized allow/deny result.",
+    "policy.quality_contract.gate_failed": (
+        "A gated quality-contract dimension scored below its configured minimum; promotion was denied."
+    ),
+    "policy.quality_contract.advisory": (
+        "Quality-contract advisory findings were recorded; run is allowed but requires operator review."
+    ),
 }
 
 

@@ -110,6 +110,50 @@ def test_scheduler_retries_with_backoff_then_dead_letters() -> None:
     assert dead_letters[0].reason == "backend_error"
 
 
+def test_scheduler_retry_backoff_is_bounded() -> None:
+    scheduler = InMemoryRuntimeScheduler(
+        max_attempts=5,
+        retry_base_delay_ms=10_000,
+        retry_jitter_ceiling_ms=1,
+        retry_max_delay_ms=1_500,
+    )
+    context = _context()
+    action = _action("bounded")
+    scheduler.enqueue(context=context, action=action, priority=0, enqueue_ts=100, node_class="workflow")
+    dequeued = scheduler.dequeue(
+        context=context,
+        now_ms=100,
+        max_in_flight=10,
+        max_in_flight_per_node_class=10,
+    )
+    assert dequeued is not None
+    retried = scheduler.retry(
+        context=context,
+        action=action,
+        node_class="workflow",
+        reason="backend_error",
+        error="boom",
+        now_ms=100,
+    )
+    assert retried is True
+    assert (
+        scheduler.dequeue(
+            context=context,
+            now_ms=1_000,
+            max_in_flight=10,
+            max_in_flight_per_node_class=10,
+        )
+        is None
+    )
+    bounded_ready = scheduler.dequeue(
+        context=context,
+        now_ms=1_700,
+        max_in_flight=10,
+        max_in_flight_per_node_class=10,
+    )
+    assert bounded_ready is not None
+
+
 def test_scheduler_snapshot_restore_requeues_inflight_for_at_least_once() -> None:
     scheduler = InMemoryRuntimeScheduler()
     context = _context()

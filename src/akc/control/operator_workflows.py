@@ -36,6 +36,7 @@ def _normalize_developer_role_profile(value: object) -> str:
 
 
 _CONTROL_PLANE_REF_KEYS: tuple[str, ...] = (
+    "action_run_ref",
     "runtime_evidence_ref",
     "policy_decisions_ref",
     "coordination_audit_ref",

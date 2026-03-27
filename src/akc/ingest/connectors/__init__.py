@@ -1,6 +1,7 @@
 """Connector interfaces and implementations."""
 
 from akc.ingest.connectors.base import BaseConnector, Connector, iter_documents
+from akc.ingest.connectors.codebase import CodebaseConnector, CodebaseConnectorConfig, build_codebase_connector
 from akc.ingest.connectors.docs import DocsConnector, DocsConnectorConfig, build_docs_connector
 from akc.ingest.connectors.messaging.discord import (
     DiscordConnector,
@@ -27,6 +28,9 @@ __all__ = [
     "BaseConnector",
     "Connector",
     "iter_documents",
+    "CodebaseConnector",
+    "CodebaseConnectorConfig",
+    "build_codebase_connector",
     "DocsConnector",
     "DocsConnectorConfig",
     "build_docs_connector",

@@ -26,6 +26,44 @@ Not just generating code — but generating **complete, executable systems**.
 
 ---
 
+## Critical Path: Existing Codebases
+
+AKC must support operators who already have a real repository.
+
+Input can be:
+
+- an existing TS/Python/Rust/JS (or mixed) project
+- current CI/build/test commands
+- current infra/runtime shape
+
+Required behavior:
+
+1. **Adopt, don't restart**
+
+- compile against the existing tree
+- preserve architecture and conventions
+- produce diffs, not greenfield scaffolds by default
+
+2. **Language-aware execution**
+
+- detect the project stack and toolchain
+- run the repository's native validation commands (tests/build/lint)
+- fail closed when commands or environments are missing
+
+3. **Safe realization**
+
+- apply scoped patches only inside approved repo boundaries
+- keep policy-gated, auditable mutation history
+- support artifact-only mode when direct mutation is not allowed
+
+4. **Progressive takeover**
+
+- start as co-pilot inside the existing codebase
+- then compile larger slices (services/workflows/infra)
+- then operate as full intent-to-system compiler/runtime
+
+---
+
 ## The End Goal
 
 ### 1. Intent → System (Instantly)

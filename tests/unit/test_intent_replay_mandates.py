@@ -55,3 +55,8 @@ def test_modes_union_is_stable_sorted_in_policy() -> None:
     assert "execute" in m
     assert "verify" in m
     assert "intent_acceptance" in m
+
+
+def test_quality_contract_mode_requires_execute_verify_and_acceptance() -> None:
+    m = mandatory_partial_replay_passes_for_evaluation_modes(modes=("quality_contract",))
+    assert m == frozenset({"execute", "verify", "intent_acceptance"})

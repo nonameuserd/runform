@@ -26,6 +26,7 @@ For development (pytest, ruff, mypy, pre-commit):
 ```bash
 uv sync --extra dev
 uv run pre-commit install
+uv run pytest -q
 ```
 
 ### Use the `akc` command
@@ -57,12 +58,14 @@ Top-level commands (run `akc --help` for the full tree):
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | Project             | `init`                                                                                                                                    |
 | Ingestion & compile | `ingest`, `compile`, `verify`, `eval`                                                                                                     |
+| Integrations        | `mcp` (MCP server; install extra — see [cli-commands.md](cli-commands.md))                                                               |
 | Drift & living      | `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor`                                                             |
 | Runtime             | `runtime` (`start`, `stop`, `status`, `events`, `reconcile`, `checkpoint`, `replay`, `autopilot`, `coordination-plan`, and related flags) |
-| Control plane       | `control`, `control-bot`, `metrics`, `policy`, `fleet`                                                                                    |
+| Control plane       | `control`, `control-bot` (top-level), `metrics`, `policy`, `fleet`                                                                        |
 | Delivery            | `deliver` (named-recipient sessions; see [delivery-architecture.md](delivery-architecture.md))                                            |
 | Viewer              | `view` (TUI / static web / export)                                                                                                        |
 | Slack helpers       | `slack list-channels`                                                                                                                     |
+| Action plane        | `action` (only when `AKC_ACTION_PLANE=1`; see [cli-commands.md](cli-commands.md))                                                          |
 
 Quick inventory:
 
@@ -139,7 +142,7 @@ For always-on runtime autopilot acceptance, use the reliability scoreboard gate 
 
 ### Extension points and transparency
 
-- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, openapi, slack, discord, telegram, whatsapp, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
+- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, **codebase**, openapi, slack, discord, telegram, whatsapp, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
 - **Embedding defaults to offline:** the default embedder is `none`; use `--embedder hash` for deterministic, key-free indexing. **Cloud providers (OpenAI, Gemini) are opt-in only**—use them only when you explicitly set `--embedder openai` or `--embedder gemini` and provide the corresponding API key.
 - **Compile** uses an offline LLM backend by default; no API keys are required for the standard ingest → compile → verify path. Examples in this guide use offline or generic options; cloud-backed options are explicitly marked as optional.
 
@@ -148,6 +151,115 @@ For always-on runtime autopilot acceptance, use the reliability scoreboard gate 
 - **Offline (recommended for tests/demos):** `--embedder hash` (deterministic, no API keys) or default `none`
 - **OpenAI-compatible (optional):** `--embedder openai` with `AKC_OPENAI_API_KEY` (and optional `AKC_OPENAI_BASE_URL`, `AKC_OPENAI_EMBED_MODEL`)
 - **Gemini (optional):** `--embedder gemini` with `AKC_GEMINI_API_KEY` (and optional `AKC_GEMINI_BASE_URL`, `AKC_GEMINI_EMBED_MODEL`)
+
+### Progressive Takeover (Observer / Advisor / Copilot)
+
+AKC’s progressive takeover ladder lets you adopt the system safely in an existing repository.
+
+#### Observer (read-only)
+
+For existing repositories, start read-only (index and profile only):
+
+```bash
+# 1) Create .akc/project.json + emit a lightweight analysis profile
+akc init --detect
+
+# 2) Index the repo source tree for retrieval (offline, deterministic)
+akc ingest \
+  --tenant-id tenant-1 \
+  --connector codebase \
+  --input . \
+  --embedder hash \
+  --index-backend sqlite
+```
+
+Notes:
+
+- `akc init --detect` writes `.akc/project_profile.json` (languages, package managers, conventions, and best-effort build/test command evidence).
+- `--connector codebase` ingests local source files under `--input` and is intended to ground later compile runs against the existing codebase.
+
+#### Advisor (artifact-only compile)
+
+This produces **validated artifacts** (IR, manifests, patches, tests) without writing to your working tree:
+
+```bash
+akc compile \
+  --tenant-id tenant-1 \
+  --repo-id my-repo \
+  --outputs-root ./out \
+  --artifact-only
+```
+
+This is the recommended posture for first-time compile runs in a real repo: fail-closed, reviewable, and easy to run in CI.
+
+#### Copilot (scoped apply with policy)
+
+This allows **scoped working-tree mutation**, gated by strict preflight + policy allowlists. You must:
+
+- set a narrow `--apply-scope-root` (a dedicated clone/worktree is recommended)
+- allow `compile.patch.apply` in your Rego policy (default-deny otherwise)
+
+```bash
+akc compile \
+  --tenant-id tenant-1 \
+  --repo-id my-repo \
+  --outputs-root ./out \
+  --compile-realization-mode scoped_apply \
+  --apply-scope-root /absolute/path/to/your/repo \
+  --policy-mode enforce \
+  --opa-policy-path ./.akc/policy/compile_tools.rego
+```
+
+### Progressive Takeover (Compiler)
+
+This expands from “compile artifacts” to **larger slices** (services/workflows) with coordination + living recompile + reliability gates:
+
+- **Coordination graphs:** runtime bundles may include a coordination spec; print deterministic schedule layers with:
+
+```bash
+akc runtime coordination-plan --bundle <path/to/runtime_bundle.json>
+```
+
+- **Living recompile:** drift + runtime health signals can trigger safe recompiles when you opt into a living automation profile (see `docs/runtime-execution.md`).
+- **Reliability SLO gate (autopilot):** block **new live rollouts** until trailing-window KPIs meet thresholds:
+
+```bash
+akc runtime autopilot --slo-gate --help
+```
+
+### Progressive Takeover (Autonomy / continuous reconciliation)
+
+At Level 4, the human role is **policy-only**: you define boundaries (OPA policy, budgets, allowlists), and AKC continuously reconciles drift and runtime health by running `akc runtime autopilot`.
+
+Minimal setup:
+
+- Set `.akc/project.json` `adoption_level` to `autonomy` (or `4` / `l4`).
+- Keep policy in **default-deny** and explicitly allow only the mutating capabilities you want.
+- Enable living automation so autopilot is permitted to feed runtime health signals into safe recompiles.
+
+Example `.akc/project.json` snippet:
+
+```json
+{
+  "adoption_level": "autonomy",
+  "living_automation_profile": "living_loop_unattended_v1"
+}
+```
+
+Run autopilot (fleet-style multi-scope discovery under `outputs_root` is supported):
+
+```bash
+uv run akc runtime autopilot \
+  --outputs-root ./out \
+  --ingest-state-path ./out/.akc/ingest_state.json \
+  --env-profile staging
+```
+
+Level-4 defaults:
+
+- If `adoption_level` is `autonomy` and no living profile is configured via CLI/env/project, autopilot defaults to `living_loop_unattended_v1`.
+- If autonomy budgets are not provided explicitly, autopilot defaults to `--unattended-defaults` (requires `living_loop_unattended_v1`).
+- The reliability SLO gate is enabled by default (same thresholds as `--slo-gate`, tunable via `--slo-*` flags).
 
 ### Ingest local docs
 
@@ -285,7 +397,38 @@ Optional: `--mode quick` (default) or `--mode thorough`, `--goal "Your goal"`, `
 
 By default, compile uses **`scoped_apply`**: after a passing candidate, it may apply the strict unified-diff patch under a bounded working tree (`--apply-scope-root` or fallback to `--work-root` / outputs scope). That path is **policy-gated** (OPA must allow the `compile.patch.apply` action) and **fail-closed**: if preflight or policy denies, compile does not mutate the tree.
 
-**Opt-in artifact-only** (`--compile-realization-mode artifact_only`) validates patches and writes outputs under `<outputs-root>/<tenant-id>/<repo-id>/` without applying patches to your source tree.
+**Opt-in artifact-only** (`--compile-realization-mode artifact_only` or the alias `--artifact-only`) validates patches and writes outputs under `<outputs-root>/<tenant-id>/<repo-id>/` without applying patches to your source tree.
+
+#### Native test validation (project toolchain)
+
+Compile always runs a test/validation gate for candidates. By default this uses the controller’s configured `test_command` (typically `pytest`), but “Copilot” expects running the repo’s **native** validation commands.
+
+Use:
+
+- `--test-mode native_smoke`: derive a “fast” gate from the detected toolchain (lint/typecheck/build/test)
+- `--test-mode native_full`: run the detected toolchain’s full test command
+
+In native modes, AKC detects the project profile from the current working directory and resolves a toolchain profile (optionally overridden by `.akc/project.json` `toolchain`).
+
+Example:
+
+```bash
+cd /absolute/path/to/your/repo
+akc compile \
+  --tenant-id my-tenant \
+  --repo-id my-repo \
+  --outputs-root ./out \
+  --test-mode native_smoke
+```
+
+#### Safe rollback and git integration (optional)
+
+When `scoped_apply` is enabled, you can opt into extra safety and rollback ergonomics:
+
+- `--rollback-snapshots` / `--no-rollback-snapshots`: toggle per-run snapshots of touched files under `.akc/rollback/…`
+- `--git-branch-per-run`: create a branch (e.g. `akc/compile/<patch_sha>`) before applying
+- `--git-commit`: commit the applied patch (stages only touched paths)
+- `--git-commit-message "..."`: optional message override
 
 **Risk profile (what to use when)**
 
@@ -311,7 +454,7 @@ akc compile \
   --tenant-id my-tenant \
   --repo-id my-repo \
   --outputs-root ./out \
-  --compile-realization-mode artifact_only
+  --artifact-only
 ```
 
 Example (explicit scope + enforce policy — same realization mode, pinned tree):
@@ -348,11 +491,18 @@ Example `.akc/project.json`:
 ```json
 {
   "developer_role_profile": "emerging",
+  "adoption_level": "advisor",
   "tenant_id": "my-tenant",
   "repo_id": "my-repo",
   "outputs_root": "./out"
 }
 ```
+
+`adoption_level` is a **progressive takeover hint**:
+
+- AKC records it in `.akc/project.json` for operator tooling and future automation gates.
+- For `adoption_level` **`compiler`** or **`autonomy`**, it also defaults the UX toward higher automation by resolving `developer_role_profile` to **`emerging`** when you have not set a profile explicitly (CLI/env/project `developer_role_profile` still wins).
+- Today, **compile still requires explicit flags**: use `akc compile --artifact-only` (or `--compile-realization-mode artifact_only`) for “Advisor” behavior.
 
 #### One copy-paste block (env + minimal flags)
 
@@ -607,6 +757,38 @@ Replay decision table:
 | `partial_replay` | Replayed (model) | Yes (selected passes run live) | Prior manifest recommended; pass list from `--partial-replay-passes` or manifest |
 
 For `partial_replay`, `--partial-replay-passes` takes precedence; if omitted, pass selection falls back to the replay manifest.
+
+#### Intent quality contract (advisory vs gate)
+
+Compile acceptance supports an intent-level `quality_contract` with six stable dimensions:
+
+- `taste`
+- `domain_knowledge`
+- `judgment`
+- `instincts`
+- `user_empathy`
+- `engineering_discipline`
+
+Each dimension can set `target_score`, optional `gate_min_score`, `weight`, `evidence_requirements`, and `enforcement_stage` (`advisory` or `gate`).
+
+Default profile behavior:
+
+- `domain_knowledge`, `judgment`, and `engineering_discipline` are hard-gated by default.
+- `taste`, `instincts`, and `user_empathy` remain advisory by default.
+
+- **Advisory**: findings are recorded, run may still pass.
+- **Gate**: any dimension below `gate_min_score` fails intent acceptance.
+
+Behavior and evidence surfaces:
+
+- compile writes `last_intent_acceptance.quality_scorecard` on the step outputs
+- run sidecar: `.akc/run/<run_id>.quality.json`
+- manifest control-plane fields include `quality_contract_fingerprint`, `quality_overall_score`, per-dimension scores, and gate/advisory dimension sets
+- OTEL export includes `akc.intent.quality.*` attributes for score/tag correlation
+
+Replay note:
+
+- `quality_contract` evaluation mode contributes mandatory partial-replay passes (`execute`, `verify`, `intent_acceptance`) in replay planning
 
 Replay examples:
 

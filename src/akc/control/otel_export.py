@@ -99,6 +99,45 @@ def intent_observability_resource_attrs(
     return out
 
 
+def quality_observability_resource_attrs(
+    *,
+    quality_summary: Mapping[str, Any] | None,
+    quality_contract_fingerprint: str | None = None,
+) -> dict[str, JSONValue]:
+    """Map quality scorecard summary into compact resource attributes."""
+
+    out: dict[str, JSONValue] = {}
+    if quality_contract_fingerprint is not None and str(quality_contract_fingerprint).strip():
+        out["akc.intent.quality.contract_fingerprint"] = str(quality_contract_fingerprint).strip()
+    if not isinstance(quality_summary, Mapping):
+        return out
+    overall_raw = quality_summary.get("overall_weighted_score")
+    if isinstance(overall_raw, (int, float)) and not isinstance(overall_raw, bool):
+        out["akc.intent.quality.overall_score"] = float(overall_raw)
+    gate_raw = quality_summary.get("gate_failed_dimensions")
+    if isinstance(gate_raw, Sequence) and not isinstance(gate_raw, (str, bytes)):
+        gate_joined = ",".join(sorted({str(x).strip() for x in gate_raw if str(x).strip()}))
+        if gate_joined:
+            out["akc.intent.quality.gate_failed_dimensions"] = gate_joined
+    advisory_raw = quality_summary.get("advisory_dimensions")
+    if isinstance(advisory_raw, Sequence) and not isinstance(advisory_raw, (str, bytes)):
+        advisory_joined = ",".join(sorted({str(x).strip() for x in advisory_raw if str(x).strip()}))
+        if advisory_joined:
+            out["akc.intent.quality.advisory_dimensions"] = advisory_joined
+    dims_raw = quality_summary.get("dimensions")
+    if isinstance(dims_raw, Sequence) and not isinstance(dims_raw, (str, bytes)):
+        for row in dims_raw:
+            if not isinstance(row, Mapping):
+                continue
+            did = str(row.get("dimension_id", "")).strip()
+            if not did:
+                continue
+            score_raw = row.get("score")
+            if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool):
+                out[f"akc.intent.quality.dimension.{did}.score"] = float(score_raw)
+    return out
+
+
 def build_resource_attributes(
     *,
     tenant_id: str,
@@ -107,6 +146,8 @@ def build_resource_attributes(
     stable_intent_sha256: str | None = None,
     runtime_run_id: str | None = None,
     intent_projection: Mapping[str, Any] | None = None,
+    quality_summary: Mapping[str, Any] | None = None,
+    quality_contract_fingerprint: str | None = None,
 ) -> dict[str, JSONValue]:
     """Resource attributes for export records (tenant/repo isolation + correlation)."""
 
@@ -121,6 +162,12 @@ def build_resource_attributes(
     if runtime_run_id is not None and str(runtime_run_id).strip():
         attrs["akc.runtime_run_id"] = str(runtime_run_id).strip()
     attrs.update(intent_observability_resource_attrs(intent_projection))
+    attrs.update(
+        quality_observability_resource_attrs(
+            quality_summary=quality_summary,
+            quality_contract_fingerprint=quality_contract_fingerprint,
+        )
+    )
     return attrs
 
 
@@ -165,6 +212,8 @@ def trace_span_dict_to_export_obj(
     stable_intent_sha256: str | None = None,
     runtime_run_id: str | None = None,
     intent_projection: Mapping[str, Any] | None = None,
+    quality_summary: Mapping[str, Any] | None = None,
+    quality_contract_fingerprint: str | None = None,
 ) -> dict[str, JSONValue]:
     """Build one ``akc_trace_export`` record from a :class:`TraceSpan`-compatible dict."""
 
@@ -206,6 +255,8 @@ def trace_span_dict_to_export_obj(
                 stable_intent_sha256=stable_intent_sha256,
                 runtime_run_id=runtime_run_id,
                 intent_projection=intent_projection,
+                quality_summary=quality_summary,
+                quality_contract_fingerprint=quality_contract_fingerprint,
             )
         },
         "span": span_body,
@@ -222,6 +273,8 @@ def trace_span_to_export_obj(
     stable_intent_sha256: str | None = None,
     runtime_run_id: str | None = None,
     intent_projection: Mapping[str, Any] | None = None,
+    quality_summary: Mapping[str, Any] | None = None,
+    quality_contract_fingerprint: str | None = None,
 ) -> dict[str, JSONValue]:
     return trace_span_dict_to_export_obj(
         span.to_json_obj(),
@@ -232,6 +285,8 @@ def trace_span_to_export_obj(
         stable_intent_sha256=stable_intent_sha256,
         runtime_run_id=runtime_run_id,
         intent_projection=intent_projection,
+        quality_summary=quality_summary,
+        quality_contract_fingerprint=quality_contract_fingerprint,
     )
 
 
@@ -378,6 +433,8 @@ def build_compile_trace_export_text(
     repo_id: str,
     run_id: str,
     stable_intent_sha256: str | None,
+    quality_summary: Mapping[str, Any] | None = None,
+    quality_contract_fingerprint: str | None = None,
 ) -> str:
     """NDJSON body for ``.otel.jsonl`` at compile emit time (no runtime spans yet)."""
 
@@ -393,6 +450,8 @@ def build_compile_trace_export_text(
             source="compile.trace_span",
             stable_intent_sha256=stable_intent_sha256,
             runtime_run_id=None,
+            quality_summary=quality_summary,
+            quality_contract_fingerprint=quality_contract_fingerprint,
         )
         lines.append(export_obj_to_json_line(rec))
     return ("\n".join(lines) + ("\n" if lines else "")) if lines else ""

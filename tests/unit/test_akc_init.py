@@ -60,6 +60,40 @@ def test_cmd_init_no_policy_stub(tmp_path: Path) -> None:
     assert raw["developer_role_profile"] == "classic"
 
 
+def test_cmd_init_detect_emits_project_profile(tmp_path: Path) -> None:
+    # Minimal Python project layout for deterministic language detection.
+    src = tmp_path / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    ns = SimpleNamespace(
+        directory=str(tmp_path),
+        force=False,
+        tenant_id="t1",
+        repo_id="r1",
+        outputs_root="out",
+        developer_role_profile="classic",
+        policy_stub=False,
+        detect=True,
+    )
+    assert cmd_init(ns) == 0
+
+    profile_path = tmp_path / ".akc" / "project_profile.json"
+    assert profile_path.is_file()
+    raw = json.loads(profile_path.read_text(encoding="utf-8"))
+
+    langs = raw.get("languages")
+    assert isinstance(langs, list)
+    assert any(isinstance(x, dict) and x.get("language") == "python" for x in langs)
+
+    # Basic shape guarantees for consumers.
+    assert isinstance(raw.get("package_managers"), list)
+    assert isinstance(raw.get("ci_systems"), list)
+    assert isinstance(raw.get("conventions"), dict)
+    assert isinstance(raw.get("architecture_hints"), dict)
+
+
 def test_cmd_init_refuses_overwrite_without_force(tmp_path: Path) -> None:
     akc = tmp_path / ".akc"
     akc.mkdir(parents=True)

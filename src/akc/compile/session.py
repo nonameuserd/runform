@@ -11,10 +11,13 @@ import json
 import logging
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
+from akc.adopt.detect import detect_project_profile
+from akc.adopt.toolchain import ToolchainPreflightError, preflight_toolchain, resolve_toolchain_profile
 from akc.artifacts.contracts import ARTIFACT_SCHEMA_VERSION, apply_schema_envelope
 from akc.artifacts.schemas import RUNTIME_BUNDLE_SCHEMA_VERSION
 from akc.artifacts.validate import validate_artifact_json
@@ -51,6 +54,7 @@ from akc.intent import (
     compile_intent_spec,
     compute_intent_fingerprint,
     intent_acceptance_slice_fingerprint,
+    quality_contract_fingerprint,
     stable_intent_sha256,
 )
 from akc.intent.compiler import IntentCompilerError
@@ -280,8 +284,26 @@ class CompileSession:
         developer_role_profile: str = "classic",
         developer_profile_decisions: Mapping[str, JSONValue] | None = None,
         skills_project_root: str | Path | None = None,
+        project_root: str | Path | None = None,
     ) -> ControllerResult:
         """Run the Phase 3 compile loop for this tenant+repo scope."""
+        # 2b. Environment preflight gate (fail-closed).
+        #
+        # Before any compile run against an existing codebase, ensure required
+        # toolchain binaries are present and report versions.
+        if config.toolchain_preflight_enabled and project_root is not None:
+            root = Path(project_root).expanduser()
+            extracted = detect_project_profile(root=root)
+            resolved = resolve_toolchain_profile(extracted_profile=extracted, explicit_toolchain=config.toolchain)
+            pref = preflight_toolchain(resolved, timeout_s=float(config.toolchain_preflight_timeout_s))
+            if not pref.ok:
+                parts: list[str] = ["toolchain preflight failed (fail-closed)"]
+                if pref.missing:
+                    parts.append("missing: " + ", ".join(pref.missing))
+                if pref.version_errors:
+                    parts.append("no_version: " + ", ".join(pref.version_errors))
+                raise ToolchainPreflightError("; ".join(parts), result=pref)
+
         compile_started_at_ms = int(time.time() * 1000)
         loaded_replay_manifest: RunManifest | None = None
         effective_replay_manifest: RunManifest | None = None
@@ -382,6 +404,9 @@ class CompileSession:
         controller_intent_spec: IntentSpecV1 | None = None  # used for controller acceptance
         derived_goal: str = goal
         profile_mode = str(developer_role_profile or "classic").strip().lower()
+        run_metadata = dict(config.metadata or {})
+        run_metadata["developer_role_profile"] = profile_mode
+        config = replace(config, metadata=run_metadata)
         profile_intent_bootstrap_enabled = bool(
             dict(config.metadata or {}).get("developer_profile_intent_bootstrap_from_store", False)
         )
@@ -512,6 +537,7 @@ class CompileSession:
             intent_store=intent_store_for_controller,
             knowledge_artifact_root=knowledge_artifact_root,
             skills_project_root=skills_project_root,
+            project_root=project_root,
         )
 
         # Phase 4 Outputs integration (minimal): on success, emit a scoped manifest
@@ -521,6 +547,24 @@ class CompileSession:
         # by requiring `outputs_root`.
         if outputs_root is not None:
             # Phase 6: emit intent artifacts + fingerprints for replay/audit.
+            if (
+                intent_spec is None
+                and intent_store_for_controller is not None
+                and (
+                    active_id := intent_store_for_controller.get_active_intent_id(
+                        tenant_id=self.tenant_id,
+                        repo_id=self.repo_id,
+                    )
+                )
+                is not None
+            ):
+                loaded = intent_store_for_controller.load_intent(
+                    tenant_id=self.tenant_id,
+                    repo_id=self.repo_id,
+                    intent_id=active_id,
+                )
+                if loaded is not None:
+                    intent_spec = loaded.normalized()
             if intent_spec is None:
                 intent_spec = compile_intent_spec(
                     tenant_id=self.tenant_id,
@@ -816,6 +860,71 @@ class CompileSession:
                     version=int(schema_version),
                 )
                 output_hashes[scoped_apply_path] = stable_json_fingerprint(scoped_apply_obj)
+            last_intent_accept = step_outputs.get("last_intent_acceptance")
+            quality_contract_fp: str | None = None
+            quality_scorecard: dict[str, Any] | None = None
+            quality_gate_failed_dimensions: list[str] = []
+            quality_advisory_dimensions: list[str] = []
+            quality_policy_reasons: list[str] = []
+            quality_dimension_scores: dict[str, float] = {}
+            quality_evidence_refs: dict[str, dict[str, JSONValue]] = {}
+            quality_sidecar_path = f".akc/run/{result.plan.id}.quality.json"
+            quality_sidecar_obj: dict[str, Any] | None = None
+            if isinstance(last_intent_accept, dict):
+                qfp_raw = last_intent_accept.get("quality_contract_fingerprint")
+                if isinstance(qfp_raw, str) and qfp_raw.strip():
+                    quality_contract_fp = qfp_raw.strip()
+                qsc_raw = last_intent_accept.get("quality_scorecard")
+                if isinstance(qsc_raw, dict):
+                    quality_scorecard = dict(qsc_raw)
+                gate_raw = last_intent_accept.get("quality_gate_failed_dimensions")
+                if isinstance(gate_raw, list):
+                    quality_gate_failed_dimensions = sorted(
+                        {str(x).strip() for x in gate_raw if isinstance(x, str) and str(x).strip()}
+                    )
+                advisory_raw = last_intent_accept.get("quality_advisory_dimensions")
+                if isinstance(advisory_raw, list):
+                    quality_advisory_dimensions = sorted(
+                        {str(x).strip() for x in advisory_raw if isinstance(x, str) and str(x).strip()}
+                    )
+                reason_raw = last_intent_accept.get("quality_policy_reasons")
+                if isinstance(reason_raw, list):
+                    quality_policy_reasons = sorted(
+                        {str(x).strip() for x in reason_raw if isinstance(x, str) and str(x).strip()}
+                    )
+            if quality_contract_fp is None:
+                quality_contract_fp = quality_contract_fingerprint(quality_contract=intent_spec.quality_contract)
+            if isinstance(quality_scorecard, dict):
+                dims_raw = quality_scorecard.get("dimensions")
+                if isinstance(dims_raw, list):
+                    for row in dims_raw:
+                        if not isinstance(row, dict):
+                            continue
+                        did = str(row.get("dimension_id", "")).strip()
+                        if not did:
+                            continue
+                        score_raw = row.get("score")
+                        if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool):
+                            quality_dimension_scores[did] = float(score_raw)
+                        quality_evidence_refs[did] = {
+                            "path": quality_sidecar_path,
+                            "dimension_id": did,
+                        }
+                quality_sidecar_obj = {
+                    "schema_id": "akc:quality_scorecard:v1",
+                    "schema_version": 1,
+                    "run_id": result.plan.id,
+                    "tenant_id": self.tenant_id,
+                    "repo_id": self.repo_id,
+                    "intent_id": intent_spec.intent_id,
+                    "quality_contract_fingerprint": quality_contract_fp,
+                    "scorecard": dict(quality_scorecard),
+                    "gate_failed_dimensions": list(quality_gate_failed_dimensions),
+                    "advisory_dimensions": list(quality_advisory_dimensions),
+                    "policy_reasons": list(quality_policy_reasons),
+                    "recorded_at_ms": int(time.time() * 1000),
+                }
+                output_hashes[quality_sidecar_path] = stable_json_fingerprint(quality_sidecar_obj)
             control_plane_obj: dict[str, Any] = {
                 "stable_intent_sha256": stable_intent_hash,
                 "policy_decisions": [
@@ -824,7 +933,17 @@ class CompileSession:
                 "promotion_mode": promotion_mode,
                 "promotion_state": promotion_mode,
                 "developer_role_profile": profile_mode,
+                "quality_contract_fingerprint": quality_contract_fp,
+                "quality_dimension_scores": dict(quality_dimension_scores),
+                "quality_gate_failed_dimensions": list(quality_gate_failed_dimensions),
+                "quality_advisory_dimensions": list(quality_advisory_dimensions),
+                "quality_policy_reasons": list(quality_policy_reasons),
+                "quality_evidence_refs": dict(quality_evidence_refs),
             }
+            if isinstance(quality_scorecard, dict):
+                overall_raw = quality_scorecard.get("overall_weighted_score")
+                if isinstance(overall_raw, (int, float)) and not isinstance(overall_raw, bool):
+                    control_plane_obj["quality_overall_score"] = float(overall_raw)
             control_plane_obj["lifecycle_timestamps"] = {
                 # Current intent authority enters at compile invocation.
                 "intent_received_at": int(compile_started_at_ms),
@@ -871,8 +990,30 @@ class CompileSession:
                     "path": scoped_apply_path,
                     "sha256": output_hashes.get(scoped_apply_path),
                 }
-            success_eval_modes = tuple(sorted({str(sc.evaluation_mode) for sc in intent_spec.success_criteria}))
-            intent_acceptance_fp = intent_acceptance_slice_fingerprint(success_criteria=intent_spec.success_criteria)
+            if quality_sidecar_obj is not None:
+                control_plane_obj["quality_sidecar_ref"] = {
+                    "path": quality_sidecar_path,
+                    "sha256": output_hashes.get(quality_sidecar_path),
+                }
+            action_intent_id = str(cfg_meta.get("action_intent_id", "")).strip()
+            if action_intent_id:
+                action_result_rel = f".akc/actions/{action_intent_id}/result.json"
+                action_result_abs = Path.cwd() / action_result_rel
+                action_result_sha: str | None = None
+                if action_result_abs.is_file():
+                    action_result_sha = sha256(action_result_abs.read_bytes()).hexdigest()
+                control_plane_obj["action_run_ref"] = {
+                    "path": action_result_rel,
+                    "sha256": action_result_sha,
+                }
+            success_mode_set = {str(sc.evaluation_mode) for sc in intent_spec.success_criteria}
+            if intent_spec.quality_contract is not None:
+                success_mode_set.add("quality_contract")
+            success_eval_modes = tuple(sorted(success_mode_set))
+            intent_acceptance_fp = intent_acceptance_slice_fingerprint(
+                success_criteria=intent_spec.success_criteria,
+                quality_contract=intent_spec.quality_contract,
+            )
             run_manifest = RunManifest(
                 run_id=result.plan.id,
                 tenant_id=result.plan.tenant_id,
@@ -1040,6 +1181,14 @@ class CompileSession:
                         metadata={"plan_id": result.plan.id, "kind": "compile_scoped_apply"},
                     )
                 )
+            if quality_sidecar_obj is not None:
+                artifacts.append(
+                    OutputArtifact.from_json(
+                        path=quality_sidecar_path,
+                        obj=quality_sidecar_obj,
+                        metadata={"plan_id": result.plan.id, "kind": "quality_scorecard"},
+                    )
+                )
             validate_artifact_json(
                 obj=apply_schema_envelope(
                     obj={
@@ -1060,6 +1209,8 @@ class CompileSession:
                 repo_id=self.repo_id,
                 run_id=result.plan.id,
                 stable_intent_sha256=stable_intent_hash,
+                quality_summary=quality_scorecard,
+                quality_contract_fingerprint=quality_contract_fp,
             )
             if str(otel_export_text).strip():
                 artifacts.append(
@@ -1352,11 +1503,11 @@ class CompileSession:
                 wp_r = wp.resolve()
                 if not wp_r.name.endswith(".manifest.json"):
                     continue
-                parts = wp_r.parts
-                if ".akc" not in parts:
+                wp_parts = wp_r.parts
+                if ".akc" not in wp_parts:
                     continue
-                akc_i = parts.index(".akc")
-                if akc_i + 1 < len(parts) and parts[akc_i + 1] == "run":
+                akc_i = wp_parts.index(".akc")
+                if akc_i + 1 < len(wp_parts) and wp_parts[akc_i + 1] == "run":
                     try_upsert_operations_index_from_manifest(wp_r, outputs_root=resolved_root)
                     break
 
@@ -1480,6 +1631,17 @@ class CompileSession:
                             last_intent_accept.get("evaluated_success_criteria"), default=0
                         ),
                         "failures": list(last_intent_accept.get("failures", []) or []),
+                        "quality_contract_fingerprint": (
+                            str(last_intent_accept.get("quality_contract_fingerprint"))
+                            if last_intent_accept.get("quality_contract_fingerprint")
+                            else None
+                        ),
+                        "quality_gate_failed_dimensions": list(
+                            last_intent_accept.get("quality_gate_failed_dimensions", []) or []
+                        ),
+                        "quality_advisory_dimensions": list(
+                            last_intent_accept.get("quality_advisory_dimensions", []) or []
+                        ),
                     },
                 )
             )

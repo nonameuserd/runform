@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from akc.compile.artifact_passes import parse_patch_artifact_strict
-from akc.compile.controller_config import Budget, ControllerConfig
+from akc.compile.change_scope import categorize_touched_paths
+from akc.compile.controller_config import Budget, ControllerConfig, controller_test_promotion_is_smoke_first
 from akc.compile.controller_patch_utils import (
     _best_of,
     _escalate_tier,
@@ -40,6 +41,7 @@ from akc.compile.patch_emitter import (
     resolve_patch_candidate_from_prompt,
 )
 from akc.compile.planner import advance_plan
+from akc.compile.project_conventions import build_conventions_system_preamble
 from akc.compile.repair import parse_execution_failure
 from akc.compile.scoped_apply import ScopedApplyAccounting, run_scoped_apply_pipeline
 from akc.compile.skills.pipeline import build_compile_skill_system_append
@@ -118,6 +120,7 @@ def run_budgeted_generate_execute_repair_loop(
     intent_store: IntentStore | None = None,
     intent_contract_shape: IntentContractShape = "full",
     skills_project_root: Path | None = None,
+    project_root: Path | None = None,
     compile_skills_resolved: tuple[str | None, list[dict[str, Any]], str] | None = None,
 ) -> ControllerResult:
     """ARCS-style bounded tiered generate/execute/repair loop."""
@@ -206,6 +209,8 @@ def run_budgeted_generate_execute_repair_loop(
     # IR-first prompt passes (compiler pass contract).
     generate_prompt_pass = DefaultIRGeneratePromptPass()
     repair_prompt_pass = DefaultIRRepairPromptPass()
+
+    conventions_system_preamble: str | None = build_conventions_system_preamble(project_root=project_root)
 
     while True:
         if accounting["iterations_total"] >= max_iters_total:
@@ -366,6 +371,7 @@ def run_budgeted_generate_execute_repair_loop(
             should_call_model=pass_decision.should_call_model,
             generate_prompt_pass=generate_prompt_pass,
             repair_prompt_pass=repair_prompt_pass,
+            system_preamble=conventions_system_preamble,
             skill_system_append=skill_append,
             compile_skills_active=llm_skills_active,
             compile_skills_mode=llm_skills_mode,
@@ -463,23 +469,24 @@ def run_budgeted_generate_execute_repair_loop(
         if pass_decision.should_call_tools:
             if not _tool_budget_ok():
                 break
+            promo_smoke_first = controller_test_promotion_is_smoke_first(config)
             try:
                 smoke_res = run_stage(
                     executor=policy_executor,
                     scope=scope,
-                    stage=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
-                    command=list(smoke_command if config.test_mode == "smoke" else full_command),
-                    timeout_s=(smoke_timeout_s_effective if config.test_mode == "smoke" else full_timeout_s_effective),
+                    stage=smoke_stage_name if promo_smoke_first else full_stage_name,
+                    command=list(smoke_command if promo_smoke_first else full_command),
+                    timeout_s=(smoke_timeout_s_effective if promo_smoke_first else full_timeout_s_effective),
                     run_id=plan.id,
-                    policy_context=(smoke_policy_context if config.test_mode == "smoke" else full_policy_context),
+                    policy_context=(smoke_policy_context if promo_smoke_first else full_policy_context),
                     policy_base_capability=exec_base_capability,
                 )
             except ToolAuthorizationError as exc:
-                smoke_policy_ctx = smoke_policy_context if config.test_mode == "smoke" else full_policy_context
+                smoke_policy_ctx = smoke_policy_context if promo_smoke_first else full_policy_context
                 plan = _record_policy_failure(
                     action="executor.run",
                     reason=exc.decision.reason,
-                    stage_name=smoke_stage_name if config.test_mode == "smoke" else full_stage_name,
+                    stage_name=smoke_stage_name if promo_smoke_first else full_stage_name,
                     context=smoke_policy_ctx,
                 )
                 break
@@ -540,7 +547,11 @@ def run_budgeted_generate_execute_repair_loop(
 
         full_res = None
         should_run_full = False
-        if pass_decision.should_call_tools and config.test_mode == "smoke" and int(exec_result.exit_code) == 0:
+        if (
+            pass_decision.should_call_tools
+            and controller_test_promotion_is_smoke_first(config)
+            and int(exec_result.exit_code) == 0
+        ):
             n = config.full_test_every_n_iterations
             if n is None:
                 should_run_full = True
@@ -610,7 +621,9 @@ def run_budgeted_generate_execute_repair_loop(
                 status="ok" if int(exec_result.exit_code) == 0 else "error",
             )
 
-        promotable = int(exec_result.exit_code) == 0 and (config.test_mode != "smoke" or full_res is not None)
+        promotable = int(exec_result.exit_code) == 0 and (
+            not controller_test_promotion_is_smoke_first(config) or full_res is not None
+        )
 
         # Compute verifier result early so monotonic "improvement" can take it
         # into account. We only persist the verification output if we reach the
@@ -781,6 +794,12 @@ def run_budgeted_generate_execute_repair_loop(
                 accounting=accounting,
                 wall_time_ms=int((time.monotonic() - start) * 1000.0),
                 verifier_passed=bool(vres.passed),
+                quality_contract=(
+                    resolved_intent_context.spec.quality_contract
+                    if resolved_intent_context is not None
+                    else intent_spec.quality_contract
+                ),
+                retrieved_context=ctx,
             )
             plan = _set_step_outputs(
                 plan=plan,
@@ -798,6 +817,11 @@ def run_budgeted_generate_execute_repair_loop(
                 attributes={
                     "passed": bool(acceptance.passed),
                     "evaluated_success_criteria": int(acceptance.evaluated_count),
+                    "quality_contract_fingerprint": (
+                        acceptance.quality_contract_fingerprint if acceptance.quality_contract_fingerprint else None
+                    ),
+                    "quality_gate_failed_count": int(len(acceptance.quality_gate_failed_dimensions)),
+                    "quality_advisory_count": int(len(acceptance.quality_advisory_dimensions)),
                 },
                 status="ok" if bool(acceptance.passed) else "error",
             )
@@ -821,11 +845,67 @@ def run_budgeted_generate_execute_repair_loop(
             intent_satisfied = True
 
             if config.compile_realization_mode == "scoped_apply":
+                change_scope = categorize_touched_paths(touched_paths)
+                deny_scope = tuple(getattr(config, "change_scope_deny_categories", ()))
+                blocked_scope_cats = sorted({c for c in change_scope.counts_by_category if c in set(deny_scope)})
+                if blocked_scope_cats:
+                    scope_root_str_cs: str | None = None
+                    ar_cs = str(config.apply_scope_root or "").strip()
+                    if ar_cs:
+                        scope_root_str_cs = str(Path(ar_cs).expanduser().resolve())
+                    block_msg = (
+                        "change_scope_category_denied: patch touches "
+                        f"{blocked_scope_cats} which are listed in change_scope_deny_categories"
+                    )
+                    csa_scope = ScopedApplyAccounting(
+                        compile_realization_mode="scoped_apply",
+                        attempted=True,
+                        applied=False,
+                        deny_reason="change_scope_category_denied",
+                        reject_reason=block_msg,
+                        policy_blocked=False,
+                        scope_root=scope_root_str_cs,
+                        patch_sha256=patch_sha256,
+                        patch_binary=None,
+                        mutation_paths=tuple(config.mutation_paths),
+                        rollback_snapshot_ref=None,
+                        git=None,
+                        files=(),
+                    ).to_json_obj()
+                    accounting["compile_scoped_apply"] = csa_scope
+                    plan = _set_step_outputs(
+                        plan=plan,
+                        step_id=step_id,
+                        outputs_patch={
+                            "last_change_scope_denial": {
+                                "blocked_categories": list(blocked_scope_cats),
+                                "change_scope": change_scope.to_json_obj(),
+                                "message": block_msg,
+                            }
+                        },
+                    )
+                    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                    scope_exec = ExecutionResult(exit_code=2, stdout="", stderr=block_msg, duration_ms=0)
+                    last_exec = scope_exec
+                    if repairs_used >= max_repairs:
+                        break
+                    repairs_used += 1
+                    accounting["repair_iterations"] = repairs_used
+                    stage = "repair"
+                    current_tier = _escalate_tier(current=current_tier, config=config)
+                    continue
+
                 apply_policy_ctx: dict[str, Any] = {
                     "plan_id": plan.id,
                     "step_id": step_id,
                     "patch_sha256": patch_sha256,
                     "compile_realization_mode": "scoped_apply",
+                    "touched_paths": sorted(set(touched_paths)),
+                    "mutation_paths": list(config.mutation_paths),
+                    "change_scope": change_scope.to_json_obj(),
+                    "rollback_snapshots_enabled": bool(getattr(config, "rollback_snapshots_enabled", True)),
+                    "git_branch_per_run": bool(getattr(config, "git_branch_per_run", False)),
+                    "git_commit": bool(getattr(config, "git_commit", False)),
                 }
                 apply_token = policy_engine.issuer.issue(
                     scope=scope,
@@ -873,6 +953,9 @@ def run_budgeted_generate_execute_repair_loop(
                         scope_root=scope_root_str,
                         patch_sha256=patch_sha256,
                         patch_binary=None,
+                        mutation_paths=tuple(config.mutation_paths),
+                        rollback_snapshot_ref=None,
+                        git=None,
                         files=(),
                     ).to_json_obj()
                 else:
@@ -881,6 +964,11 @@ def run_budgeted_generate_execute_repair_loop(
                         apply_scope_root=config.apply_scope_root,
                         patch_text=patch_text,
                         patch_sha256=patch_sha256,
+                        mutation_paths=tuple(config.mutation_paths),
+                        rollback_snapshots_enabled=bool(getattr(config, "rollback_snapshots_enabled", True)),
+                        git_branch_per_run=bool(getattr(config, "git_branch_per_run", False)),
+                        git_commit=bool(getattr(config, "git_commit", False)),
+                        git_commit_message=getattr(config, "git_commit_message", None),
                     )
             else:
                 csa_obj = run_scoped_apply_pipeline(
@@ -888,6 +976,11 @@ def run_budgeted_generate_execute_repair_loop(
                     apply_scope_root=config.apply_scope_root,
                     patch_text=patch_text,
                     patch_sha256=patch_sha256,
+                    mutation_paths=tuple(config.mutation_paths),
+                    rollback_snapshots_enabled=bool(getattr(config, "rollback_snapshots_enabled", True)),
+                    git_branch_per_run=bool(getattr(config, "git_branch_per_run", False)),
+                    git_commit=bool(getattr(config, "git_commit", False)),
+                    git_commit_message=getattr(config, "git_commit_message", None),
                 )
             accounting["compile_scoped_apply"] = csa_obj
             csa_applied = bool(isinstance(csa_obj, dict) and csa_obj.get("applied"))
@@ -1051,7 +1144,11 @@ def run_budgeted_generate_execute_repair_loop(
 
         # Smoke-only pass without a full gate:
         # keep iterating without consuming a repair.
-        if config.test_mode == "smoke" and int(smoke_res.result.exit_code) == 0 and full_res is None:
+        if (
+            controller_test_promotion_is_smoke_first(config)
+            and int(smoke_res.result.exit_code) == 0
+            and full_res is None
+        ):
             stage = "generate"
             continue
 

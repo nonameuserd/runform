@@ -43,6 +43,11 @@ dev = [
     "PyJWT[crypto]>=2.8.0",
 ]
 
+detect-tree-sitter = [
+    "tree-sitter",
+    "tree-sitter-languages",
+]
+
 # Ingestion extras (Phase 1)
 #
 # Keep core `akc` dependency-free; ingestion connectors/backends can be installed

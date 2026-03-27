@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from akc.cli import main
-from akc.cli.compile import resolve_compile_policies
+from akc.cli.compile import _quality_expectations_from_domain_matrix, resolve_compile_policies
 from akc.memory.facade import build_memory
 from akc.run import PassRecord, RetrievalSnapshot, RunManifest
 
@@ -151,6 +151,31 @@ def test_cli_compile_empty_plan_exits_success_and_emits_run_contracts(tmp_path: 
     assert manifest.exists(), "empty plan should still emit manifest"
     assert any((base / ".akc" / "run").rglob("*.manifest.json"))
     assert any((base / ".akc" / "ir").rglob("*.json"))
+
+
+def test_quality_expectations_from_domain_matrix_default_fixture() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    expectations = _quality_expectations_from_domain_matrix(
+        cwd=repo_root,
+        domain_id="security_network_secrets",
+        matrix_path=None,
+    )
+    assert isinstance(expectations, dict)
+    assert expectations.get("engineering_discipline") == ["tests_touched", "execution_passed", "verifier_passed"]
+
+
+def test_quality_expectations_from_domain_matrix_missing_domain_returns_none(tmp_path: Path) -> None:
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(
+        json.dumps({"domains": [{"id": "x", "quality_evidence_expectations": {"taste": ["retrieval_documents"]}}]}),
+        encoding="utf-8",
+    )
+    expectations = _quality_expectations_from_domain_matrix(
+        cwd=tmp_path,
+        domain_id="does-not-exist",
+        matrix_path=str(matrix),
+    )
+    assert expectations is None
 
 
 def test_cli_compile_emerging_profile_auto_seeds_deployable_empty_plan(tmp_path: Path) -> None:
@@ -407,6 +432,118 @@ def test_cli_compile_custom_goal_used(tmp_path: Path) -> None:
         )
     assert excinfo.value.code == 0
     assert (base / "manifest.json").exists()
+
+
+def test_cli_compile_artifact_only_alias_sets_compile_realization_mode(tmp_path: Path) -> None:
+    """`--artifact-only` should behave like `--compile-realization-mode artifact_only`."""
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+                "--artifact-only",
+            ]
+        )
+    assert excinfo.value.code == 0
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.control_plane is not None
+    caa = run_manifest.control_plane.get("compile_apply_attestation")
+    assert isinstance(caa, dict)
+    assert caa.get("compile_realization_mode") == "artifact_only"
+
+
+def test_cli_compile_native_smoke_mode_uses_project_toolchain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--test-mode native_smoke should derive commands from the project root."""
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    repo_root = _executor_cwd(outputs_root, tenant_id, repo_id)
+    _write_minimal_repo(repo_root)
+    # Some executor shells/sandboxes can drop implicit cwd-from-sys.path behavior;
+    # make it explicit so `import src` is stable under native toolchain commands.
+    (repo_root / "conftest.py").write_text(
+        "import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(__file__).resolve().parent))\n",
+        encoding="utf-8",
+    )
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+
+    # Native test mode uses `project_root=cwd`; chdir into the repo work tree.
+    monkeypatch.chdir(repo_root)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+                "--test-mode",
+                "native_smoke",
+            ]
+        )
+    assert excinfo.value.code == 0
+    assert (base / "manifest.json").exists()
+
+
+def test_cli_compile_adoption_advisor_forces_artifact_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When .akc/project.json adoption_level=advisor, scoped_apply is downgraded to artifact_only."""
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    repo_root = _executor_cwd(outputs_root, tenant_id, repo_id)
+    _write_minimal_repo(repo_root)
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+
+    (repo_root / ".akc").mkdir(parents=True, exist_ok=True)
+    (repo_root / ".akc" / "project.json").write_text(json.dumps({"adoption_level": "advisor"}), encoding="utf-8")
+    monkeypatch.chdir(repo_root)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--mode",
+                "quick",
+            ]
+        )
+    assert excinfo.value.code == 0
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.control_plane is not None
+    caa = run_manifest.control_plane.get("compile_apply_attestation")
+    assert isinstance(caa, dict)
+    assert caa.get("compile_realization_mode") == "artifact_only"
 
 
 def test_cli_compile_non_dev_defaults_to_staged_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

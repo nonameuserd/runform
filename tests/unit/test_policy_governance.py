@@ -57,6 +57,8 @@ def test_apply_env_overrides_existing(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_describe_policy_reason_known_and_unknown() -> None:
     assert "allowlist" in describe_policy_reason("policy.default_deny.action_not_allowlisted").lower()
     assert "prod/base" in describe_policy_reason("policy.prod.docker.memory_limit_required").lower()
+    assert "quality-contract" in describe_policy_reason("policy.quality_contract.gate_failed").lower()
+    assert "advisory" in describe_policy_reason("policy.quality_contract.advisory").lower()
     assert "custom.vendor.reason" in describe_policy_reason("custom.vendor.reason")
 
 

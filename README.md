@@ -7,6 +7,7 @@ Unlike “summarize & hope”, AKC is built around **grounding + replay + safety
 
 - **Retrieval-first** from a structured index + **code memory**
 - **Tenant + repo isolation** threaded through ingest/compile/runtime artifacts
+- **Intent quality contracts** (taste, domain knowledge, judgment, instincts, user empathy, engineering discipline) with advisory/gate stages
 - **Policy gates (OPA/Rego)** for tool use and mutation (default-deny posture)
 - **Tests-by-default** with repair loops and evidence artifacts (manifests, spans, decisions)
 
@@ -36,6 +37,7 @@ akc view --tenant-id demo --repo-id runform --outputs-root ./out web
 ## What you get
 
 - **Artifacts**: versioned IR, run manifests, retrieval snapshots, policy decisions, test outputs
+- **Quality evidence**: per-dimension scorecards (`.akc/run/<run_id>.quality.json`) and control-plane quality fingerprints/summaries
 - **Runtime bundles**: scheduler/reconciler-ready bundles and replayable evidence
 - **Optional delivery**: named-recipient packaging/distribution via `akc deliver`
 
@@ -99,7 +101,7 @@ Bootstrap a project (creates `.akc/project.json` and optional local policy stub)
 akc init
 ```
 
-Then use **[Getting started](docs/getting-started.md)** for ingest → compile → verify, scope resolution (`CLI` → `AKC_*` → `.akc/project.json`), and deployment notes.
+Then use **[Getting started](docs/getting-started.md)** for ingest → compile → verify, scope resolution (`CLI` → `AKC_*` → `.akc/project.json`), and deployment notes. For the full `akc` command tree and mode flags (compile, runtime, adoption ladder, and more), see **[CLI command reference](docs/cli-commands.md)**.
 
 ### Optional install extras
 
@@ -129,7 +131,7 @@ uv sync --extra vectorstore-pg --extra delivery-providers
 
 ## CLI surface (top level)
 
-Run `uv run akc --help` for the full tree. High-level commands:
+Authoritative detail: **[CLI command reference](docs/cli-commands.md)**. Run `uv run akc --help` for the exact tree for your install. High-level commands:
 
 - **`init`** — project bootstrap
 - **`ingest`** — pluggable connectors: **`docs`**, **`openapi`**, **messaging** (**`slack`**, **`discord`**, **`telegram`**, **`whatsapp`**), **`mcp`**; index backends **`memory`**, **`sqlite`**, **`pgvector`**
@@ -178,6 +180,7 @@ akc deliver \
 
 ## Documentation
 
+- **[CLI command reference](docs/cli-commands.md)** — full `akc` command listing, subcommands, and mode tables
 - **[Getting started](docs/getting-started.md)** — install, first run, configuration, embedding providers
 - **[Architecture](docs/architecture.md)** — end-to-end flow and components
 - **[Delivery architecture](docs/delivery-architecture.md)** — `akc deliver`, `.akc/delivery/` artifacts, packaging and distribution

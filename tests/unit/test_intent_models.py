@@ -13,13 +13,17 @@ from akc.intent import (
     OperationalValidityParams,
     OperationalValidityParamsError,
     PolicyRef,
+    QualityContract,
+    QualityDimensionSpec,
     SQLiteIntentStore,
     SuccessCriterion,
     compile_intent_spec,
     compute_intent_fingerprint,
     parse_operational_validity_params,
+    quality_contract_fingerprint,
     stable_intent_sha256,
 )
+from akc.intent.models import CRITICAL_QUALITY_GATE_DIMENSION_IDS
 
 
 def _make_intent(*, goal_statement: str) -> IntentSpecV1:
@@ -54,11 +58,62 @@ def _make_intent(*, goal_statement: str) -> IntentSpecV1:
     )
 
 
+def _make_quality_contract() -> QualityContract:
+    dims: dict[str, QualityDimensionSpec] = {}
+    for dim in (
+        "taste",
+        "domain_knowledge",
+        "judgment",
+        "instincts",
+        "user_empathy",
+        "engineering_discipline",
+    ):
+        dims[dim] = QualityDimensionSpec(
+            target_score=0.75,
+            gate_min_score=0.6,
+            weight=1.0,
+            evidence_requirements=(),
+            enforcement_stage="advisory",
+        )
+    return QualityContract(dimensions=dims)
+
+
 def test_intent_json_roundtrip() -> None:
     intent = _make_intent(goal_statement="goal v1")
     payload = intent.to_json_obj()
     again = IntentSpecV1.from_json_obj(json.loads(json.dumps(payload)))
     assert again.to_json_obj() == payload
+
+
+def test_intent_quality_contract_roundtrip_and_fingerprint() -> None:
+    qc = _make_quality_contract()
+    intent = _make_intent(goal_statement="goal v1")
+    intent_with_qc = IntentSpecV1.from_json_obj({**intent.to_json_obj(), "quality_contract": qc.to_json_obj()})
+    payload = intent_with_qc.to_json_obj()
+    again = IntentSpecV1.from_json_obj(json.loads(json.dumps(payload)))
+    assert again.to_json_obj()["quality_contract"] == payload["quality_contract"]
+    assert quality_contract_fingerprint(quality_contract=intent_with_qc.quality_contract) is not None
+
+
+def test_quality_contract_critical_gate_defaults_gate_only_critical_dimensions() -> None:
+    qc = QualityContract.critical_gate_defaults()
+    for dim, spec in qc.dimensions.items():
+        if dim in CRITICAL_QUALITY_GATE_DIMENSION_IDS:
+            assert spec.enforcement_stage == "gate"
+        else:
+            assert spec.enforcement_stage == "advisory"
+
+
+def test_quality_contract_defaults_accept_dimension_evidence_expectations() -> None:
+    qc = QualityContract.advisory_defaults(
+        evidence_expectations={
+            "engineering_discipline": ("tests_touched", "execution_passed"),
+            "judgment": ("policy_decisions",),
+        }
+    )
+    assert qc.dimensions["engineering_discipline"].evidence_requirements == ("tests_touched", "execution_passed")
+    assert qc.dimensions["judgment"].evidence_requirements == ("policy_decisions",)
+    assert qc.dimensions["taste"].evidence_requirements == ()
 
 
 def test_intent_fingerprints_distinguish_semantic_vs_goal_text() -> None:
