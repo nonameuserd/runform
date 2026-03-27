@@ -24,6 +24,7 @@ from akc.control.operator_workflows import (
 )
 from akc.control.policy_explain import build_policy_explain_payload, policy_provenance_from_control_plane
 from akc.memory.models import normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.run.manifest import RunManifest
 
 
@@ -110,7 +111,7 @@ def run_operator_playbook(
 
     require_non_empty(tenant_id, name="tenant_id")
     repo_norm = normalize_repo_id(repo_id)
-    root = Path(outputs_root).expanduser().resolve()
+    root = safe_resolve_path(outputs_root)
     ra = str(run_id_a).strip()
     rb = str(run_id_b).strip()
     if not ra or not rb:

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from akc.memory.models import normalize_repo_id
+from akc.path_security import safe_resolve_path
 from akc.runtime.models import RuntimeAction, RuntimeContext
 
 if TYPE_CHECKING:
@@ -60,7 +61,7 @@ class ResolvedActionRoute:
 
 def tenant_scoped_runtime_cwd(*, context: RuntimeContext, outputs_root: str | Path) -> Path:
     """Absolute cwd under ``outputs_root``, matching :class:`FileSystemRuntimeStateStore` layout."""
-    base = Path(outputs_root).expanduser().resolve()
+    base = safe_resolve_path(outputs_root)
     return (
         base
         / context.tenant_id.strip()

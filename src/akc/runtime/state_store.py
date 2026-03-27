@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from akc.control.otel_export import append_line_to_run_otel_jsonl, mirror_line_to_callbacks
 from akc.control.tracing import TraceSpan
 from akc.memory.models import normalize_repo_id
+from akc.path_security import safe_resolve_path
 from akc.runtime.models import RuntimeAction, RuntimeCheckpoint, RuntimeContext, RuntimeEvent
 from akc.runtime.policy import ensure_runtime_context_match, require_runtime_context
 from akc.runtime.scheduler import (
@@ -43,7 +44,7 @@ def runtime_state_scope_dir(*, root: str | Path, context: RuntimeContext) -> Pat
     """Tenant/repo/run-scoped directory under ``root`` (same layout as :class:`FileSystemRuntimeStateStore`)."""
 
     require_runtime_context(context)
-    base = Path(root).expanduser()
+    base = safe_resolve_path(root)
     return (
         base
         / context.tenant_id.strip()

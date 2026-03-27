@@ -80,6 +80,7 @@ from akc.memory.why_graph import WhyGraphStore
 from akc.outputs.emitters import Emitter, JsonManifestEmitter
 from akc.outputs.models import OutputArtifact, OutputBundle
 from akc.pass_registry import CONTROLLER_LOOP_PASS_ORDER, assert_expected_artifact_pass_order
+from akc.path_security import safe_resolve_path
 from akc.promotion import (
     canonical_sha256,
     latest_allow_decision_for_action,
@@ -419,7 +420,7 @@ class CompileSession:
             and outputs_root is not None
         ):
             try:
-                bootstrap_store = JsonFileIntentStore(base_dir=Path(outputs_root).expanduser())
+                bootstrap_store = JsonFileIntentStore(base_dir=safe_resolve_path(outputs_root))
                 active_id = bootstrap_store.get_active_intent_id(tenant_id=self.tenant_id, repo_id=self.repo_id)
                 if active_id is not None:
                     loaded = bootstrap_store.load_intent(
@@ -457,7 +458,7 @@ class CompileSession:
         elif replay_mode != "live" and loaded_replay_manifest is not None and outputs_root is not None:
             intent_path: Path | None = None
             try:
-                scope_root = Path(outputs_root).expanduser() / self.tenant_id / self.repo_id
+                scope_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
                 intent_path = scope_root / ".akc" / "intent" / f"{loaded_replay_manifest.run_id}.json"
                 raw = json.loads(intent_path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
@@ -514,10 +515,10 @@ class CompileSession:
 
         intent_store_for_controller: IntentStore | None = None
         if outputs_root is not None:
-            intent_store_for_controller = JsonFileIntentStore(base_dir=Path(outputs_root).expanduser())
+            intent_store_for_controller = JsonFileIntentStore(base_dir=safe_resolve_path(outputs_root))
 
         knowledge_artifact_root = (
-            Path(outputs_root).expanduser() / self.tenant_id / self.repo_id if outputs_root is not None else None
+            safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id if outputs_root is not None else None
         )
         result = run_compile_loop(
             tenant_id=self.tenant_id,
@@ -576,7 +577,7 @@ class CompileSession:
             stable_intent_hash = stable_intent_sha256(intent=intent_spec.normalized())
             # Persist intent under the IntentStore namespace so future replay can
             # recover the active intent without relying on run_id-named artifacts.
-            intent_store = JsonFileIntentStore(base_dir=Path(outputs_root).expanduser())
+            intent_store = JsonFileIntentStore(base_dir=safe_resolve_path(outputs_root))
             intent_store.create_intent(intent=intent_spec)
 
             scope = TenantRepoScope(tenant_id=result.plan.tenant_id, repo_id=result.plan.repo_id)
@@ -752,7 +753,7 @@ class CompileSession:
             if outputs_root is not None and isinstance(ks_raw, dict):
                 try:
                     ks_obj = KnowledgeSnapshot.from_json_obj(ks_raw)
-                    scope_root_p = Path(outputs_root).expanduser() / self.tenant_id / self.repo_id
+                    scope_root_p = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
                     intent_ids: frozenset[str] | None = None
                     raw_intent = step_outputs.get("knowledge_intent_assertion_ids")
                     if isinstance(raw_intent, list):
@@ -793,7 +794,7 @@ class CompileSession:
                     knowledge_snapshot_pointer = None
                     persisted_knowledge_artifacts = []
             if outputs_root is not None and output_hashes is not None:
-                scope_root_for_knowledge = Path(outputs_root).expanduser() / self.tenant_id / self.repo_id
+                scope_root_for_knowledge = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
                 km_fp_raw = step_outputs.get("knowledge_mediation_fingerprint")
                 med_path = scope_root_for_knowledge / KNOWLEDGE_MEDIATION_RELPATH
                 if (
@@ -1498,7 +1499,7 @@ class CompileSession:
                 },
             )
             written_paths = (emitter or JsonManifestEmitter()).emit(bundle=bundle, root=outputs_root)
-            resolved_root = Path(outputs_root).expanduser().resolve()
+            resolved_root = safe_resolve_path(outputs_root)
             for wp in written_paths:
                 wp_r = wp.resolve()
                 if not wp_r.name.endswith(".manifest.json"):
@@ -1727,7 +1728,7 @@ class CompileSession:
             "runtime": [],
             "deployment_configs": [],
         }
-        scope_root = Path(outputs_root).expanduser() / self.tenant_id / self.repo_id
+        scope_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
         linked_trace_id = (
             str(controller_accounting.get("trace_id")).strip()
             if isinstance(controller_accounting, dict) and str(controller_accounting.get("trace_id", "")).strip()
@@ -2420,7 +2421,7 @@ class CompileSession:
         plan_id: str,
         ir_doc: IRDocument,
     ) -> OutputArtifact | None:
-        ir_root = Path(outputs_root).expanduser() / self.tenant_id / self.repo_id / ".akc" / "ir"
+        ir_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id / ".akc" / "ir"
         if not ir_root.exists():
             return None
         candidates = sorted(
@@ -2497,7 +2498,7 @@ class CompileSession:
     ) -> dict[str, JSONValue]:
         """Persist current run costs and query tenant totals via control-plane index."""
 
-        metrics_db = Path(outputs_root).expanduser() / self.tenant_id / ".akc" / "control" / "metrics.sqlite"
+        metrics_db = safe_resolve_path(outputs_root) / self.tenant_id / ".akc" / "control" / "metrics.sqlite"
         index = CostIndex(sqlite_path=metrics_db)
         index.upsert_run_cost(
             record=RunCostRecord(

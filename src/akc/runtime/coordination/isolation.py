@@ -13,6 +13,7 @@ from akc.coordination.models import (
     RoleIsolationProfile,
 )
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
+from akc.path_security import safe_resolve_path
 from akc.runtime.action_routing import tenant_scoped_runtime_cwd
 from akc.runtime.coordination.external_identity import stub_external_identity_metadata
 from akc.runtime.models import RuntimeContext
@@ -88,7 +89,7 @@ def subprocess_cwd_for_runtime_action(
 def tenant_repo_root(*, context: RuntimeContext, outputs_root: str | Path) -> Path:
     """``<outputs_root>/<tenant>/<repo_id>`` (same base as :func:`tenant_scoped_runtime_cwd`)."""
 
-    base = Path(outputs_root).expanduser().resolve()
+    base = safe_resolve_path(outputs_root)
     return base / context.tenant_id.strip() / normalize_repo_id(context.repo_id)
 
 
