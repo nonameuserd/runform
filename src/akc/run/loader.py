@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from akc.memory.models import normalize_repo_id, normalize_tenant_id
-from akc.path_security import safe_resolve_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 from akc.run.manifest import RunManifest
 
 
@@ -33,14 +33,12 @@ def find_latest_run_manifest(
         return None
     tenant_seg = normalize_tenant_id(tenant_id)
     repo_seg = normalize_repo_id(repo_id)
-    base = root / tenant_seg / repo_seg / ".akc" / "run"
-    try:
-        base_resolved = base.resolve()
-    except OSError:
+    base = safe_resolve_scoped_path(root, tenant_seg, repo_seg, ".akc", "run")
+    if not base.exists():
         return None
-    if not base_resolved.is_relative_to(root):
-        return None
-    if not base_resolved.exists():
-        return None
-    files = sorted(base_resolved.glob("*.manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        [p for p in base.iterdir() if p.is_file() and p.name.endswith(".manifest.json")],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     return files[0] if files else None

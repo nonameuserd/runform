@@ -476,7 +476,8 @@ class CompileSession:
         elif replay_mode != "live" and loaded_replay_manifest is not None and outputs_root is not None:
             intent_path: Path | None = None
             try:
-                scope_root = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
+                root = safe_resolve_path(outputs_root)
+                scope_root = safe_resolve_scoped_path(root, self.tenant_id, self.repo_id)
                 replay_run_id = _sanitize_artifact_token(loaded_replay_manifest.run_id, label="run_id")
                 intent_path = safe_resolve_scoped_path(scope_root, ".akc", "intent", f"{replay_run_id}.json")
                 raw = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -793,8 +794,8 @@ class CompileSession:
                         path=KNOWLEDGE_SNAPSHOT_RELPATH,
                         sha256=snap_sha,
                     )
-                    snap_path = scope_root_p / KNOWLEDGE_SNAPSHOT_RELPATH
-                    fp_path = scope_root_p / KNOWLEDGE_SNAPSHOT_FINGERPRINT_RELPATH
+                    snap_path = safe_resolve_scoped_path(scope_root_p, KNOWLEDGE_SNAPSHOT_RELPATH)
+                    fp_path = safe_resolve_scoped_path(scope_root_p, KNOWLEDGE_SNAPSHOT_FINGERPRINT_RELPATH)
                     snap_obj = json.loads(snap_path.read_text(encoding="utf-8"))
                     fp_obj = json.loads(fp_path.read_text(encoding="utf-8"))
                     persisted_knowledge_artifacts = [
@@ -815,7 +816,7 @@ class CompileSession:
             if outputs_root is not None and output_hashes is not None:
                 scope_root_for_knowledge = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
                 km_fp_raw = step_outputs.get("knowledge_mediation_fingerprint")
-                med_path = scope_root_for_knowledge / KNOWLEDGE_MEDIATION_RELPATH
+                med_path = safe_resolve_scoped_path(scope_root_for_knowledge, KNOWLEDGE_MEDIATION_RELPATH)
                 if (
                     isinstance(km_fp_raw, str)
                     and len(km_fp_raw.strip()) == 64
@@ -1786,21 +1787,27 @@ class CompileSession:
             for artifact_path in artifact_paths:
                 if not isinstance(artifact_path, str) or not artifact_path.strip():
                     return None
-                full_path = safe_resolve_scoped_path(scope_root, artifact_path)
+                ap = artifact_path.strip()
+                # Reject path traversal/absolute paths; otherwise scope to the tenant root.
+                if Path(ap).is_absolute():
+                    return None
+                if ".." in ap.replace("\\", "/").split("/"):
+                    return None
+                full_path = safe_resolve_scoped_path(scope_root, ap)
                 if not full_path.exists():
                     return None
                 loaded_artifacts.append(
                     _clone_replay_artifact(
                         artifact=OutputArtifact(
-                            path=artifact_path,
+                            path=ap,
                             content=full_path.read_bytes(),
                             media_type=(
                                 "application/json; charset=utf-8"
-                                if artifact_path.endswith(".json")
+                                if ap.endswith(".json")
                                 else "application/yaml; charset=utf-8"
-                                if artifact_path.endswith((".yml", ".yaml"))
+                                if ap.endswith((".yml", ".yaml"))
                                 else "text/markdown; charset=utf-8"
-                                if artifact_path.endswith(".md")
+                                if ap.endswith(".md")
                                 else "text/plain; charset=utf-8"
                             ),
                             metadata=None,
@@ -2446,8 +2453,9 @@ class CompileSession:
         ir_root = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id, ".akc", "ir")
         if not ir_root.exists():
             return None
+        current_ir_path = (ir_root / f"{plan_id_safe}.json").resolve()
         candidates = sorted(
-            [p for p in ir_root.glob("*.json") if p.name != f"{plan_id_safe}.json"],
+            [p for p in ir_root.iterdir() if p.is_file() and p.suffix == ".json" and p.resolve() != current_ir_path],
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
