@@ -35,7 +35,7 @@ from akc.living.automation_profile import LivingAutomationProfile, resolve_livin
 from akc.memory.models import PlanState, normalize_repo_id, normalize_tenant_id, require_non_empty
 from akc.outputs.drift import DriftFinding, drift_report, extend_drift_report, write_baseline, write_drift_artifacts
 from akc.outputs.fingerprints import IngestStateFingerprint, stable_json_fingerprint
-from akc.path_security import expanduser_resolve_trusted_invoker
+from akc.path_security import expanduser_resolve_trusted_invoker, safe_resolve_scoped_path
 from akc.run.loader import find_latest_run_manifest, load_run_manifest
 from akc.run.recompile_triggers import (
     evaluate_recompile_triggers,
@@ -46,6 +46,58 @@ from akc.runtime.policy import RuntimePolicyRuntime
 
 _TenantKeySep = "::"
 RuntimeImpactClass = Literal["service_degradation", "agent_degradation", "workflow_degradation"]
+
+_SENSITIVE_KEY_MARKERS: frozenset[str] = frozenset(
+    {
+        "secret",
+        "secrets",
+        "token",
+        "password",
+        "passphrase",
+        "private_key",
+        "client_secret",
+        "api_key",
+        "apikey",
+        "access_key",
+        "secret_key",
+        "authorization",
+        "cookie",
+        "set_cookie",
+    }
+)
+
+
+def _looks_sensitive_key(key: str) -> bool:
+    k = "".join(ch for ch in str(key).strip().lower() if ch.isalnum() or ch in {"_", "-"})
+    if not k:
+        return False
+    if k in _SENSITIVE_KEY_MARKERS:
+        return True
+    for marker in _SENSITIVE_KEY_MARKERS:
+        if (
+            k.endswith(f"_{marker}")
+            or k.endswith(f"-{marker}")
+            or k.startswith(f"{marker}_")
+            or k.startswith(f"{marker}-")
+        ):
+            return True
+    return False
+
+
+def _redact_sensitive_payload(obj: Any) -> Any:
+    """Redact secret-like fields before writing JSON artifacts to disk."""
+    if isinstance(obj, Mapping):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            ks = str(k)
+            if _looks_sensitive_key(ks):
+                out[ks] = "<redacted>"
+            else:
+                out[ks] = _redact_sensitive_payload(v)
+        return out
+    if isinstance(obj, list):
+        return [_redact_sensitive_payload(v) for v in obj]
+    return obj
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,8 +472,10 @@ def _latest_ir_document_path(
     tenant_id: str,
     repo_id: str,
 ) -> Path | None:
-    base = outputs_root / tenant_id / normalize_repo_id(repo_id)
-    ir_dir = base / ".akc" / "ir"
+    from akc.path_security import safe_resolve_scoped_path
+
+    base = safe_resolve_scoped_path(outputs_root, tenant_id, normalize_repo_id(repo_id))
+    ir_dir = safe_resolve_scoped_path(base, ".akc", "ir")
     if not ir_dir.exists():
         return None
     candidates = [
@@ -641,7 +695,14 @@ def safe_recompile_on_drift(
         raise ValueError("invalid outputs_root") from e
     ingest_state_p = expanduser_resolve_trusted_invoker(ingest_state_path)
     if baseline_path is None:
-        baseline_path_p = outputs_root_p / tenant_id / repo_id / ".akc" / "living" / "baseline.json"
+        baseline_path_p = safe_resolve_scoped_path(
+            outputs_root_p,
+            tenant_id,
+            repo_id,
+            ".akc",
+            "living",
+            "baseline.json",
+        )
     else:
         try:
             baseline_path_p = expanduser_resolve_trusted_invoker(baseline_path)
@@ -650,14 +711,8 @@ def safe_recompile_on_drift(
         if not baseline_path_p.is_relative_to(outputs_root_p):
             raise ValueError("baseline_path must be under outputs_root")
 
-    standard_base = outputs_root_p / tenant_id / repo_id
-    try:
-        scope_resolved = standard_base.resolve()
-    except OSError as e:
-        raise ValueError("invalid tenant/repo scope under outputs_root") from e
-    if not scope_resolved.is_relative_to(outputs_root_p):
-        raise ValueError("tenant/repo scope escapes outputs_root")
-    memory_db = standard_base / ".akc" / "memory.sqlite"
+    standard_base = safe_resolve_scoped_path(outputs_root_p, tenant_id, repo_id)
+    memory_db = safe_resolve_scoped_path(standard_base, ".akc", "memory.sqlite")
     memory_db.parent.mkdir(parents=True, exist_ok=True)
 
     baseline_exists = baseline_path_p.exists()
@@ -967,7 +1022,7 @@ def safe_recompile_on_drift(
         living_automation_profile=profile,
     )
 
-    canary_outputs_root = outputs_root_p / ".akc" / "living" / "canary"
+    canary_outputs_root = safe_resolve_scoped_path(outputs_root_p, ".akc", "living", "canary")
     canary_outputs_root.mkdir(parents=True, exist_ok=True)
 
     # Canary compile: iteratively run compile loop until impacted steps are done.
@@ -1028,11 +1083,20 @@ def safe_recompile_on_drift(
         ],
         "regression_thresholds": regression_thresholds,
     }
-    canary_suite_path = canary_outputs_root / tenant_id / repo_id / ".akc" / "living" / "canary_eval_suite.json"
+    canary_suite_path = safe_resolve_scoped_path(
+        canary_outputs_root,
+        tenant_id,
+        repo_id,
+        ".akc",
+        "living",
+        "canary_eval_suite.json",
+    )
     canary_suite_path.parent.mkdir(parents=True, exist_ok=True)
-    # codeql[py/clear-text-storage-sensitive-data]
+    canary_suite_safe = _redact_sensitive_payload(canary_suite)
+    if not isinstance(canary_suite_safe, dict):
+        raise ValueError("canary eval suite must serialize to a JSON object")
     canary_suite_path.write_text(
-        json.dumps(canary_suite, indent=2, sort_keys=True),
+        json.dumps(canary_suite_safe, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 

@@ -8,6 +8,7 @@ from akc.artifacts.validate import validate_obj
 from akc.memory.code_memory import SQLiteCodeMemoryStore
 from akc.memory.models import MemoryModelError, PlanState, normalize_repo_id, require_non_empty
 from akc.memory.plan_state import JsonFilePlanStateStore, SQLitePlanStateStore
+from akc.path_security import safe_resolve_scoped_path
 
 from .control_panels import load_operator_panels_for_scope
 from .models import EvidenceIndex, EvidenceKind, EvidenceRef, Manifest, ViewerInputs, ViewerSnapshot
@@ -20,7 +21,7 @@ class ViewerError(Exception):
 def _scoped_outputs_dir(*, outputs_root: Path, tenant_id: str, repo_id: str) -> Path:
     require_non_empty(tenant_id, name="tenant_id")
     repo_n = normalize_repo_id(repo_id)
-    return outputs_root / tenant_id / repo_n
+    return safe_resolve_scoped_path(outputs_root, tenant_id, repo_n)
 
 
 def _read_json_object(p: Path, *, what: str) -> dict[str, Any]:

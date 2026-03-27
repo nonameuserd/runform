@@ -185,7 +185,9 @@ def run_living_unattended_checks(
             "living_loop_unattended_v1"
         )
 
-    scope_root = outputs_root.expanduser().resolve() / tenant_id / repo_id
+    from akc.path_security import safe_resolve_scoped_path
+
+    scope_root = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id)
     if profile.id == "living_loop_unattended_v1":
         if not scope_root.is_dir():
             ok = False
@@ -201,9 +203,13 @@ def run_living_unattended_checks(
 
         if ingest_state_path is None:
             ing_s, ingest_src = _resolve_ingest_state_path(cli_value=None, env=env, project=project)
-            ingest_resolved = Path(ing_s).expanduser().resolve() if ing_s else None
+            from akc.path_security import safe_resolve_path
+
+            ingest_resolved = safe_resolve_path(ing_s) if ing_s else None
         else:
-            ingest_resolved = ingest_state_path.expanduser().resolve()
+            from akc.path_security import safe_resolve_path
+
+            ingest_resolved = safe_resolve_path(ingest_state_path)
             ingest_src = "cli"
         if ingest_resolved is None or not ingest_resolved.is_file():
             ok = False
@@ -217,9 +223,13 @@ def run_living_unattended_checks(
         ep = eval_suite_path
         if ep is None:
             default = Path("configs/evals/intent_system_v1.json")
-            ep = (cwd / default).resolve() if not default.is_absolute() else default
+            from akc.path_security import safe_resolve_scoped_path
+
+            ep = safe_resolve_scoped_path(cwd, str(default)) if not default.is_absolute() else default
         else:
-            ep = ep.expanduser().resolve()
+            from akc.path_security import safe_resolve_path
+
+            ep = safe_resolve_path(ep)
         if not ep.is_file():
             ok = False
             lines.append(f"eval suite not found: {ep}")

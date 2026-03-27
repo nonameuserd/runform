@@ -10,7 +10,7 @@ from typing import Any, Literal, cast
 from akc.compile import Budget, CompileSession, ControllerConfig, SubprocessExecutor, TierConfig
 from akc.compile.interfaces import LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
 from akc.memory.models import normalize_repo_id, require_non_empty
-from akc.path_security import safe_resolve_path
+from akc.path_security import resolve_absolute_path_under_allowlist_bases, safe_resolve_path, safe_resolve_scoped_path
 from akc.run import PassRecord, RunManifest, RuntimeEvidenceRecord, replay_runtime_execution
 from akc.run.loader import load_run_manifest
 
@@ -469,22 +469,25 @@ def _resolve_artifact_path_for_scope(
     raw = pointer_path.strip()
     if not raw:
         return None
-    p = Path(raw).expanduser()
-    candidates: list[Path] = []
-    if p.is_absolute():
-        candidates.append(p)
-    scope_root = outputs_root / tenant_id / repo_id
-    candidates.extend(
-        [
-            scope_root / raw,
-            manifest_path.parent / raw,
-            p,
-        ]
+    scope_root = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id)
+    bases = (
+        scope_root,
+        manifest_path.parent,
+        outputs_root,
     )
-    for cand in candidates:
-        resolved = cand.resolve()
-        if resolved.exists():
-            return resolved
+    if Path(raw).is_absolute():
+        resolved_abs = resolve_absolute_path_under_allowlist_bases(raw, allowed_bases=bases)
+        if resolved_abs is not None and resolved_abs.exists():
+            return resolved_abs
+        return None
+
+    for base in bases:
+        try:
+            cand = safe_resolve_scoped_path(base, raw)
+        except ValueError:
+            continue
+        if cand.exists():
+            return cand
     return None
 
 
@@ -555,11 +558,15 @@ def _runtime_multi_signal_check(
             manifest_path=manifest_path,
         )
     if bundle_abs is None:
-        fallback_bundle = (
-            outputs_root / tenant_id / repo_id / ".akc" / "runtime" / f"{manifest.run_id}.runtime_bundle.json"
+        scope_root = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id)
+        fallback_bundle = safe_resolve_scoped_path(
+            scope_root,
+            ".akc",
+            "runtime",
+            f"{manifest.run_id}.runtime_bundle.json",
         )
         if fallback_bundle.exists():
-            bundle_abs = fallback_bundle.resolve()
+            bundle_abs = fallback_bundle
     if bundle_abs is None:
         return ("runtime bundle path from manifest could not be resolved on disk",), {}
 
@@ -567,7 +574,8 @@ def _runtime_multi_signal_check(
 
     from akc.cli.runtime import cmd_runtime_start
 
-    before_records = list((outputs_root / tenant_id / repo_id / ".akc" / "runtime").rglob("runtime_run.json"))
+    runtime_dir = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id, ".akc", "runtime")
+    before_records = list(runtime_dir.rglob("runtime_run.json"))
     before_paths = {p.resolve() for p in before_records}
 
     # Runtime eval signal uses simulate mode by default for deterministic, non-mutating checks.
@@ -589,15 +597,19 @@ def _runtime_multi_signal_check(
         if int(exc.code or 0) != 0:
             return (f"runtime start for eval exited non-zero: {int(exc.code or 0)}",), {}
 
-    runtime_records = list((outputs_root / tenant_id / repo_id / ".akc" / "runtime").rglob("runtime_run.json"))
+    runtime_records = list(runtime_dir.rglob("runtime_run.json"))
     candidates = [p.resolve() for p in runtime_records if p.resolve() not in before_paths]
     if not candidates:
         return ("runtime eval could not find a newly emitted runtime_run.json record",), {}
     latest = max(candidates, key=lambda p: p.stat().st_mtime)
     record = json.loads(latest.read_text(encoding="utf-8"))
 
-    events_path = Path(str(record.get("events_path", ""))).expanduser().resolve()
-    evidence_path = Path(str(record.get("runtime_evidence_path", ""))).expanduser().resolve()
+    events_path_raw = str(record.get("events_path", "")).strip()
+    evidence_path_raw = str(record.get("runtime_evidence_path", "")).strip()
+    events_path = resolve_absolute_path_under_allowlist_bases(events_path_raw, allowed_bases=(outputs_root,))
+    evidence_path = resolve_absolute_path_under_allowlist_bases(evidence_path_raw, allowed_bases=(outputs_root,))
+    if events_path is None or evidence_path is None:
+        return ("runtime eval events/evidence paths could not be resolved under outputs_root",), {}
     if not events_path.exists() or not evidence_path.exists():
         return ("runtime eval missing events/evidence artifacts after runtime start",), {}
 
@@ -744,7 +756,7 @@ def _run_single_task(
     if isinstance(manifest_path_raw, str) and manifest_path_raw.strip():
         manifest_path = Path(manifest_path_raw).expanduser()
         if not manifest_path.is_absolute():
-            manifest_path = (suite_dir / manifest_path).resolve()
+            manifest_path = safe_resolve_scoped_path(suite_dir, str(manifest_path))
         manifest = load_run_manifest(
             path=manifest_path,
             expected_tenant_id=tenant_id,
@@ -753,8 +765,8 @@ def _run_single_task(
         computed_status = "failed" if any(p.status == "failed" for p in manifest.passes) else "succeeded"
         run_status = str(task.get("status_override", computed_status))
     else:
-        base = outputs_root / tenant_id / repo_id
-        memory_db = base / ".akc" / "memory.sqlite"
+        base = safe_resolve_scoped_path(outputs_root, tenant_id, repo_id)
+        memory_db = safe_resolve_scoped_path(base, ".akc", "memory.sqlite")
         memory_db.parent.mkdir(parents=True, exist_ok=True)
         session = CompileSession.from_sqlite(
             tenant_id=tenant_id,
@@ -773,7 +785,7 @@ def _run_single_task(
             repo_id=repo_id,
             plan_id=plan.id,
         )
-        work_root = outputs_root / tenant_id / repo_id
+        work_root = base
         executor = SubprocessExecutor(
             work_root=work_root,
             home_under_cwd=True,
@@ -787,7 +799,7 @@ def _run_single_task(
             outputs_root=outputs_root,
         )
         run_status = str(result.status)
-        run_dir = outputs_root / tenant_id / repo_id / ".akc" / "run"
+        run_dir = safe_resolve_scoped_path(base, ".akc", "run")
         candidates = sorted(
             run_dir.glob("*.manifest.json"),
             key=lambda p: p.stat().st_mtime,

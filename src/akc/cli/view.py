@@ -5,6 +5,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 from akc.viewer import ViewerInputs, load_viewer_snapshot
 from akc.viewer.export import export_bundle
 from akc.viewer.models import ViewerSnapshot
@@ -24,11 +25,19 @@ def _print_view_tui_text_fallback(snap: ViewerSnapshot) -> None:
 
 def _default_out_dir(*, outputs_root: Path, tenant_id: str, repo_id: str, kind: str) -> Path:
     ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    return outputs_root / tenant_id / repo_id / ".akc" / "viewer" / kind / ts
+    return safe_resolve_scoped_path(
+        safe_resolve_path(outputs_root),
+        tenant_id,
+        repo_id,
+        ".akc",
+        "viewer",
+        kind,
+        ts,
+    )
 
 
 def cmd_view(args: argparse.Namespace) -> int:
-    outputs_root = Path(args.outputs_root).expanduser()
+    outputs_root = safe_resolve_path(args.outputs_root)
     plan_base = Path(args.plan_base_dir).expanduser() if args.plan_base_dir else None
 
     inputs = ViewerInputs(

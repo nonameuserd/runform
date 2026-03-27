@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -80,7 +81,7 @@ from akc.memory.why_graph import WhyGraphStore
 from akc.outputs.emitters import Emitter, JsonManifestEmitter
 from akc.outputs.models import OutputArtifact, OutputBundle
 from akc.pass_registry import CONTROLLER_LOOP_PASS_ORDER, assert_expected_artifact_pass_order
-from akc.path_security import safe_resolve_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 from akc.promotion import (
     canonical_sha256,
     latest_allow_decision_for_action,
@@ -103,6 +104,23 @@ from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_s
 from akc.run.loader import find_latest_run_manifest, load_run_manifest
 from akc.run.time_compression import derive_time_compression_metrics
 from akc.utils.fingerprint import stable_json_fingerprint
+
+_ARTIFACT_TOKEN_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _sanitize_artifact_token(raw: str, *, label: str) -> str:
+    """Return a filesystem-safe token for artifact paths.
+
+    Tokens may be influenced by external inputs (e.g. plan_id, step_id). We avoid letting
+    those inputs shape filesystem paths by enforcing a strict allowlist. If a value does
+    not match the allowlist, we fall back to a short stable hash.
+    """
+    s = str(raw).strip()
+    if _ARTIFACT_TOKEN_RE.match(s) and "/" not in s and "\\" not in s:
+        return s
+    digest = sha256(s.encode("utf-8")).hexdigest()[:16]
+    return f"{label}_{digest}"
+
 
 logger = logging.getLogger(__name__)
 
@@ -458,8 +476,9 @@ class CompileSession:
         elif replay_mode != "live" and loaded_replay_manifest is not None and outputs_root is not None:
             intent_path: Path | None = None
             try:
-                scope_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
-                intent_path = scope_root / ".akc" / "intent" / f"{loaded_replay_manifest.run_id}.json"
+                scope_root = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
+                replay_run_id = _sanitize_artifact_token(loaded_replay_manifest.run_id, label="run_id")
+                intent_path = safe_resolve_scoped_path(scope_root, ".akc", "intent", f"{replay_run_id}.json")
                 raw = json.loads(intent_path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     loaded_intent = IntentSpecV1.from_json_obj(raw)
@@ -518,7 +537,7 @@ class CompileSession:
             intent_store_for_controller = JsonFileIntentStore(base_dir=safe_resolve_path(outputs_root))
 
         knowledge_artifact_root = (
-            safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id if outputs_root is not None else None
+            safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id) if outputs_root is not None else None
         )
         result = run_compile_loop(
             tenant_id=self.tenant_id,
@@ -753,7 +772,7 @@ class CompileSession:
             if outputs_root is not None and isinstance(ks_raw, dict):
                 try:
                     ks_obj = KnowledgeSnapshot.from_json_obj(ks_raw)
-                    scope_root_p = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
+                    scope_root_p = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
                     intent_ids: frozenset[str] | None = None
                     raw_intent = step_outputs.get("knowledge_intent_assertion_ids")
                     if isinstance(raw_intent, list):
@@ -794,7 +813,7 @@ class CompileSession:
                     knowledge_snapshot_pointer = None
                     persisted_knowledge_artifacts = []
             if outputs_root is not None and output_hashes is not None:
-                scope_root_for_knowledge = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
+                scope_root_for_knowledge = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
                 km_fp_raw = step_outputs.get("knowledge_mediation_fingerprint")
                 med_path = scope_root_for_knowledge / KNOWLEDGE_MEDIATION_RELPATH
                 if (
@@ -1677,9 +1696,11 @@ class CompileSession:
         step_id: str,
         ir_doc: IRDocument,
     ) -> dict[str, str]:
-        hashes: dict[str, str] = {f".akc/ir/{plan_id}.json": ir_doc.fingerprint()}
+        plan_id_safe = _sanitize_artifact_token(plan_id, label="plan_id")
+        hashes: dict[str, str] = {f".akc/ir/{plan_id_safe}.json": ir_doc.fingerprint()}
         if result.best_candidate is not None and result.best_candidate.llm_text.strip():
-            hashes[f".akc/patches/{plan_id}_{step_id}.diff"] = stable_json_fingerprint(
+            step_id_safe = _sanitize_artifact_token(step_id, label="step_id")
+            hashes[f".akc/patches/{plan_id_safe}_{step_id_safe}.diff"] = stable_json_fingerprint(
                 {"patch": result.best_candidate.llm_text}
             )
         return hashes
@@ -1728,7 +1749,7 @@ class CompileSession:
             "runtime": [],
             "deployment_configs": [],
         }
-        scope_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id
+        scope_root = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id)
         linked_trace_id = (
             str(controller_accounting.get("trace_id")).strip()
             if isinstance(controller_accounting, dict) and str(controller_accounting.get("trace_id", "")).strip()
@@ -1765,7 +1786,7 @@ class CompileSession:
             for artifact_path in artifact_paths:
                 if not isinstance(artifact_path, str) or not artifact_path.strip():
                     return None
-                full_path = scope_root / artifact_path
+                full_path = safe_resolve_scoped_path(scope_root, artifact_path)
                 if not full_path.exists():
                     return None
                 loaded_artifacts.append(
@@ -2421,11 +2442,12 @@ class CompileSession:
         plan_id: str,
         ir_doc: IRDocument,
     ) -> OutputArtifact | None:
-        ir_root = safe_resolve_path(outputs_root) / self.tenant_id / self.repo_id / ".akc" / "ir"
+        plan_id_safe = _sanitize_artifact_token(plan_id, label="plan_id")
+        ir_root = safe_resolve_scoped_path(outputs_root, self.tenant_id, self.repo_id, ".akc", "ir")
         if not ir_root.exists():
             return None
         candidates = sorted(
-            [p for p in ir_root.glob("*.json") if p.name != f"{plan_id}.json"],
+            [p for p in ir_root.glob("*.json") if p.name != f"{plan_id_safe}.json"],
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -2439,13 +2461,13 @@ class CompileSession:
                 prev = IRDocument.from_json_obj(raw)
                 d = diff_ir(before=prev, after=ir_doc)
                 return OutputArtifact.from_json(
-                    path=f".akc/ir/{plan_id}.diff.json",
+                    path=f".akc/ir/{plan_id_safe}.diff.json",
                     obj={
                         "before_ir_path": f".akc/ir/{fp.stem}.json",
-                        "after_ir_path": f".akc/ir/{plan_id}.json",
+                        "after_ir_path": f".akc/ir/{plan_id_safe}.json",
                         "diff": d.to_json_obj(),
                     },
-                    metadata={"plan_id": plan_id, "kind": "ir_diff"},
+                    metadata={"plan_id": plan_id_safe, "kind": "ir_diff"},
                 )
             except Exception:
                 continue
@@ -2498,7 +2520,13 @@ class CompileSession:
     ) -> dict[str, JSONValue]:
         """Persist current run costs and query tenant totals via control-plane index."""
 
-        metrics_db = safe_resolve_path(outputs_root) / self.tenant_id / ".akc" / "control" / "metrics.sqlite"
+        metrics_db = safe_resolve_scoped_path(
+            outputs_root,
+            self.tenant_id,
+            ".akc",
+            "control",
+            "metrics.sqlite",
+        )
         index = CostIndex(sqlite_path=metrics_db)
         index.upsert_run_cost(
             record=RunCostRecord(
