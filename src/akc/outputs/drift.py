@@ -31,6 +31,59 @@ DriftKind = Literal[
 ]
 DriftSeverity = Literal["low", "med", "high"]
 
+_SENSITIVE_KEY_MARKERS: frozenset[str] = frozenset(
+    {
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+        "password",
+        "passphrase",
+        "private_key",
+        "client_secret",
+        "api_key",
+        "apikey",
+        "access_key",
+        "secret_key",
+        "authorization",
+        "cookie",
+        "set_cookie",
+    }
+)
+
+
+def _looks_sensitive_key(key: str) -> bool:
+    k = "".join(ch for ch in str(key).strip().lower() if ch.isalnum() or ch in {"_", "-"})
+    if not k:
+        return False
+    if k in _SENSITIVE_KEY_MARKERS:
+        return True
+    for marker in _SENSITIVE_KEY_MARKERS:
+        if (
+            k.endswith(f"_{marker}")
+            or k.endswith(f"-{marker}")
+            or k.startswith(f"{marker}_")
+            or k.startswith(f"{marker}-")
+        ):
+            return True
+    return False
+
+
+def _redact_sensitive_payload(obj: Any) -> Any:
+    """Redact secret-like fields before persisting artifacts to disk."""
+    if isinstance(obj, Mapping):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            ks = str(k)
+            if _looks_sensitive_key(ks):
+                out[ks] = "<redacted>"
+            else:
+                out[ks] = _redact_sensitive_payload(v)
+        return out
+    if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes, bytearray)):
+        return [_redact_sensitive_payload(v) for v in obj]
+    return obj
+
 
 @dataclass(frozen=True, slots=True)
 class DriftFinding:
@@ -517,12 +570,16 @@ def write_drift_artifacts(
 
     drift_path = living_dir / f"{check_id}.drift.json"
     triggers_path = living_dir / f"{check_id}.triggers.json"
+    drift_payload_safe = _redact_sensitive_payload(drift_payload)
+    triggers_payload_safe = _redact_sensitive_payload(triggers_payload)
+    if not isinstance(drift_payload_safe, dict) or not isinstance(triggers_payload_safe, dict):
+        raise ValueError("living artifacts must serialize to JSON objects")
     drift_path.write_text(
-        json.dumps(drift_payload, indent=2, sort_keys=True) + "\n",
+        json.dumps(drift_payload_safe, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     triggers_path.write_text(
-        json.dumps(triggers_payload, indent=2, sort_keys=True) + "\n",
+        json.dumps(triggers_payload_safe, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     _update_manifest_living_metadata(
