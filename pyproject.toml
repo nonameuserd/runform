@@ -102,6 +102,8 @@ akc = "akc.cli:main"
 
 [tool.uv]
 constraint-dependencies = [
+    # GHSA-m959-cc7f-wv43 / CVE-2026-34073: fixed in 46.0.6 (transitive via PyJWT[crypto], mcp, etc.).
+    "cryptography>=46.0.6",
     # GHSA-gc5v-m9x4-r6x2: fixed in 2.33.0 (transitive via pip-audit, semantic-release, etc.).
     "requests>=2.33.0",
 ]
