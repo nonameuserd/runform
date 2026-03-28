@@ -1,0 +1,102 @@
+# MkDocs site for GitHub Pages — see .github/workflows/docs.yml
+site_name: Agentic Knowledge Compiler
+site_description: Documentation for the AKC CLI, architecture, and operator workflows
+site_url: https://nonameuserd.github.io/runform/
+repo_url: https://github.com/nonameuserd/runform
+repo_name: nonameuserd/runform
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.expand
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/nonameuserd/runform
+
+nav:
+  - Home: index.md
+  - Start here:
+      - Getting started: getting-started.md
+      - Configuration: configuration.md
+      - CLI commands: cli-commands.md
+      - Architecture: architecture.md
+      - Environment model: environment-model.md
+      - Validation: validation.md
+      - Runtime execution: runtime-execution.md
+      - Viewer: viewer.md
+  - Deeper references:
+      - Compile-time skills: compile-skills.md
+      - Artifact contracts: artifact-contracts.md
+      - IR schema: ir-schema.md
+      - Delivery architecture: delivery-architecture.md
+      - Viewer trust boundary: viewer-trust-boundary.md
+      - Ops runbook: ops-runbook.md
+      - Security: security.md
+      - Research: research.md
+  - Project & governance:
+      - README: https://github.com/nonameuserd/runform/blob/main/README.md
+      - Contributing: https://github.com/nonameuserd/runform/blob/main/CONTRIBUTING.md
+      - Governance: https://github.com/nonameuserd/runform/blob/main/GOVERNANCE.md
+      - Security policy: https://github.com/nonameuserd/runform/blob/main/SECURITY.md
+      - Contributing (docs hub): contributing.md
+  - Open source & ops:
+      - OSS direction memo: oss-direction-memo.md
+      - OSS evidence map: oss-evidence-map.md
+      - OSS security requirements: oss-security-requirements.md
+      - Release signing: release-signing.md
+  - Product vision:
+      - AKC vision: akc-vision.md
+      - AKC alignment: akc-alignment.md
+  - Coordination & observability:
+      - Coordination semantics: coordination-semantics.md
+      - Logging schema: observability/logging_schema.md

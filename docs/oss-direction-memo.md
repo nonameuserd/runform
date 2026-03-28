@@ -4,7 +4,7 @@
 
 This memo defines the recommended open-source (OSS) direction for the Agentic Knowledge Compiler (AKC) with an explicit goal: ship a CLI-first, safety/correctness builder that compiles evidence-backed artifacts while keeping execution trust boundaries local and well-defined.
 
-It is written to be actionable for maintainers and contributors, and to document what AKC already does well (and what it intentionally does not do yet). It should stay aligned with the **actual** CLI and packages under `src/akc/` (see [README](../README.md) and [artifact contracts](artifact-contracts.md)).
+It is written to be actionable for maintainers and contributors, and to document what AKC already does well (and what it intentionally does not do yet). It should stay aligned with the **actual** CLI and packages under `src/akc/` (see [README](https://github.com/nonameuserd/runform/blob/main/README.md) and [artifact contracts](artifact-contracts.md)).
 
 ## MVP (what we should ship first)
 
@@ -95,7 +95,7 @@ The viewer is schema-driven and local-first by design: a read-only consumer of a
 This memo documents alignment and a shared contract mindset; it is not a mandate to stop shipping features. Suggested sequencing:
 
 1. **Phase 0 (direction):** publish direction + evidence mapping; document viewer non-goals — **this memo** (living document).
-2. **Phase 1:** align repository hygiene with OpenSSF OSPS baseline concepts (security reporting, release hygiene, access control). **Partial:** private disclosure is documented in [SECURITY.md](../SECURITY.md); continue hardening releases and governance.
+2. **Phase 1:** align repository hygiene with OpenSSF OSPS baseline concepts (security reporting, release hygiene, access control). **Partial:** private disclosure is documented in [SECURITY.md](https://github.com/nonameuserd/runform/blob/main/SECURITY.md); continue hardening releases and governance.
 3. **Phase 2:** supply-chain hardening with SLSA provenance and keyless release signing (CI/dev extras include dependency audit hooks; Rust supply-chain config under `rust/supply-chain/`).
 4. **Phase 3:** deepen machine validation of artifact schemas (manifest + evidence JSONs) so viewers and auditors stay compatible — **in progress** (`SchemaKind`, coordination JSON Schema under `src/akc/coordination/schemas/`, validation in `src/akc/artifacts/validate.py`).
 5. **Phase 4:** strengthen tenant isolation and correctness gates with adversarial test cases (ongoing via `tests/unit/` and `tests/integration/`).

@@ -72,7 +72,7 @@ Notes:
 
 ## Example registry
 
-See [configs/validation/validator_bindings.example.yaml](../configs/validation/validator_bindings.example.yaml) for a ready-to-copy example.
+See [configs/validation/validator_bindings.example.yaml](https://github.com/nonameuserd/runform/blob/main/configs/validation/validator_bindings.example.yaml) for a ready-to-copy example.
 
 Example:
 
