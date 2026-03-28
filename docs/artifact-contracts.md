@@ -39,6 +39,7 @@ All compile outputs are scoped under:
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/autopilot/leases/<scope_name>.json` (filesystem lease metadata for single-writer controllers)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/runtime/<run_id>.runtime_bundle.json`
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.manifest.json` (per-run manifest; additive compile/runtime fields on top of the bundle manifest contract)
+- `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.scoped_apply.json` (compile realization accounting sidecar for `scoped_apply`: apply outcome, deny/reject reason, touched-file before/after hashes, rollback snapshot ref, and optional Git branch/commit metadata)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.spans.json`
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.otel.jsonl` (NDJSON trace export for external telemetry; runtime may append after compile)
 - `<output_dir>/<tenant_id>/<repo_id>/.akc/run/<run_id>.otel_metrics.jsonl` (optional NDJSON metric export for offline operational checks)
@@ -109,7 +110,7 @@ Machine-checkable schemas live in `src/akc/artifacts/schemas.py`:
 - **autopilot_decision**: `.akc/autopilot/decisions/*.decision.json`
 - **autopilot_human_escalation**: `.akc/autopilot/escalations/*.json` when the controller records a human-required state
 - **control_plane_envelope**: `RunManifest.control_plane` committed keys (`stable_intent_sha256`, `policy_decisions`, `runtime_evidence_ref`, `policy_decisions_ref`, `replay_decisions_ref`, `recompile_triggers_ref`, runtime replay hints, and additive quality keys such as `quality_contract_fingerprint`, `quality_overall_score`, per-dimension scores, gate/advisory sets, and quality evidence refs)
-- Additional optional refs include `promotion_packet_ref`, `operational_assurance_ref`, `governance_profile_ref`, and `quality_sidecar_ref` (tenant-scoped pointer+sha entries, additive-only), plus optional policy-as-code fields such as `policy_bundle_id`, `policy_git_sha`, and `rego_pack_version` on `control_plane` when present
+- Additional optional refs include `promotion_packet_ref`, `compile_scoped_apply_ref`, `operational_assurance_ref`, `governance_profile_ref`, and `quality_sidecar_ref` (tenant-scoped pointer+sha entries, additive-only), plus optional policy-as-code fields such as `policy_bundle_id`, `policy_git_sha`, and `rego_pack_version` on `control_plane` when present
 
 ### Knowledge-layer envelopes (not SchemaKind)
 
@@ -154,6 +155,7 @@ The artifact-pass surface is now part of the viewer contract:
   - deployment hardening files use stable fixed paths under `.akc/deployment/`, including `delivery_plan` at `.akc/deployment/<run_id>.delivery_plan.json` and optional `.akc/deployment/<run_id>.delivery_summary.md`
   - promotion packets (when emitted) use `.akc/promotion/<plan_id>_<step_id>.packet.json`
   - generated GitHub workflow uses `akc_deploy_<run_id>.yml`
+  - compile realization accounting uses `.akc/run/<run_id>.scoped_apply.json`
   - run control-plane sidecars live under `.akc/run/<run_id>.*.json`
   - living drift artifacts live under `.akc/living/<check_id>.*.json` and the accepted baseline remains `.akc/living/baseline.json`
 - **JSON schema evolution is additive-only** for:
@@ -198,6 +200,7 @@ If no compile-time `RunManifest` exists, runtime commands do not create one retr
 ### Run and living control-plane sidecars
 
 - `.akc/run/<run_id>.spans.json` is the schema-versioned **manifest sidecar** for compile trace spans (`run_trace_spans` envelope).
+- `.akc/run/<run_id>.scoped_apply.json` is the compile realization sidecar for `scoped_apply`: it records whether apply was attempted and succeeded, why apply was denied or rejected when it did not, touched-file before/after hashes, the rollback snapshot ref when snapshots are enabled, and optional Git metadata such as branch name, commit intent, commit message, or commit errors.
 - `.akc/run/<run_id>.otel.jsonl` is the **canonical NDJSON sink** for observability export (omitted at compile time when there are zero compile `TraceSpan` rows, since text artifacts must be non-empty): one **AKC trace export** object per line (versioned JSON Schema: `src/akc/control/schemas/akc_trace_export.v1.schema.json`). Compile emits an initial file from controller `TraceSpan` records; the local runtime **appends** additional lines for kernel `TraceSpan` rows and coordination audit spans mapped from `otel_trace_json_from_akc_event`. Use this path for log shippers and OTLP-adjacent pipelines—do not duplicate the same spans into another parallel export file. `akc runtime` also mirrors each appended line to optional sinks when set: `AKC_OTEL_EXPORT_STDOUT=1`, `AKC_OTEL_EXPORT_HTTP_URL`, `AKC_OTEL_EXPORT_FILE`, and optional `AKC_OTEL_EXPORT_HTTP_TIMEOUT_SEC` (see `otel_export_extra_callbacks_from_env` in `akc.control.otel_export`). Programmatic use of `StdoutOtelExportSink`, `HttpPostOtelExportSink`, `FileAppendOtelExportSink`, and `MultiOtelExportSink` remains available for custom hosts. Each record carries **`tenant_id`, `repo_id`, `run_id`**, and **`akc.stable_intent_sha256`** on both `resource.attributes` and `span.attributes` when known (aligned with deployment annotations in [akc-alignment.md](akc-alignment.md)).
 - `.akc/run/<run_id>.otel_metrics.jsonl` is the optional **metric export** sidecar: one **AKC metric export** object per line (`src/akc/control/schemas/akc_metric_export.v1.schema.json`). Runtime operational validity evaluation reads it when present (tenant/repo outputs path-scoped). Operators may append lines from their own exporters as long as records satisfy the schema; there is no implicit OTLP/Prometheus translation in core AKC.
 - `.akc/run/<run_id>.costs.json` is the schema-versioned source of truth for immutable per-run cost attribution.

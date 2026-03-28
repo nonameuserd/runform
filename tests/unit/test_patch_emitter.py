@@ -139,8 +139,16 @@ def test_resolve_patch_candidate_uses_llm_vcr_prompt_key_and_extracts_touched_pa
     temperature = 0.0
     max_output_tokens = 123
 
+    system_content = (
+        "You are an AKC compile loop assistant. Produce production-ready repository changes that are complete, "
+        "maintainable, and safe to ship within the stated intent and policy constraints. Favor complete "
+        "implementations over scaffolding. Never satisfy the task by weakening tests, bypassing safety checks, "
+        "hardcoding secrets or environment-specific paths, or introducing placeholder/demo logic unless the "
+        "intent explicitly requires it. Do not assume time-sensitive facts; verify them from configured sources "
+        "when available, and if verification is unavailable, do not guess."
+    )
     llm_messages = [
-        LLMMessage(role="system", content="You are an AKC compile loop assistant."),
+        LLMMessage(role="system", content=system_content),
         LLMMessage(role="user", content="GEN_PROMPT"),
     ]
     llm_metadata = {
@@ -279,8 +287,16 @@ def test_resolve_patch_candidate_fails_closed_for_invalid_cached_vcr_text() -> N
     replay_mode: Literal["llm_vcr"] = "llm_vcr"
     temperature = 0.0
     max_output_tokens = 123
+    system_content = (
+        "You are an AKC compile loop assistant. Produce production-ready repository changes that are complete, "
+        "maintainable, and safe to ship within the stated intent and policy constraints. Favor complete "
+        "implementations over scaffolding. Never satisfy the task by weakening tests, bypassing safety checks, "
+        "hardcoding secrets or environment-specific paths, or introducing placeholder/demo logic unless the "
+        "intent explicitly requires it. Do not assume time-sensitive facts; verify them from configured sources "
+        "when available, and if verification is unavailable, do not guess."
+    )
     llm_messages = [
-        LLMMessage(role="system", content="You are an AKC compile loop assistant."),
+        LLMMessage(role="system", content=system_content),
         LLMMessage(role="user", content="GEN_PROMPT"),
     ]
     llm_metadata = {

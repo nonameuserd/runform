@@ -7,6 +7,9 @@ import pytest
 
 from akc.artifacts.schemas import (
     CONVERGENCE_CERTIFICATE_V1,
+    DEVICE_CAPTURE_RESULT_V1,
+    MOBILE_JOURNEY_RESULT_V1,
+    OBSERVABILITY_QUERY_RESULT_V1,
     OPERATIONAL_ASSURANCE_RESULT_V1,
     OPERATIONAL_EVIDENCE_WINDOW_V1,
     OPERATIONAL_VALIDITY_REPORT_V1,
@@ -77,6 +80,57 @@ def test_operational_evidence_window_minimal_validates() -> None:
     assert validate_obj(obj=obj, kind="operational_evidence_window", version=1) == []
 
 
+def test_observability_query_result_minimal_validates() -> None:
+    obj = {
+        "schema_version": 1,
+        "schema_id": "akc:observability_query_result:v1",
+        "binding_id": "obs.login",
+        "query_kind": "logql_query",
+        "target": "loki-main",
+        "window_start_ms": 1,
+        "window_end_ms": 2,
+        "status": "ok",
+        "summary": {"count": 1},
+        "attachments": [],
+        "fingerprint_sha256": "a" * 64,
+    }
+    assert validate_obj(obj=obj, kind="observability_query_result", version=1) == []
+
+
+def test_mobile_journey_result_minimal_validates() -> None:
+    obj = {
+        "schema_version": 1,
+        "schema_id": "akc:mobile_journey_result:v1",
+        "binding_id": "mobile.login.android",
+        "platform": "android",
+        "device_id": "emulator-5554",
+        "journey_id": "login",
+        "status": "passed",
+        "started_at_ms": 1,
+        "ended_at_ms": 2,
+        "assertions_passed": 1,
+        "assertions_failed": 0,
+        "artifacts": [],
+        "fingerprint_sha256": "b" * 64,
+    }
+    assert validate_obj(obj=obj, kind="mobile_journey_result", version=1) == []
+
+
+def test_device_capture_result_minimal_validates() -> None:
+    obj = {
+        "schema_version": 1,
+        "schema_id": "akc:device_capture_result:v1",
+        "binding_id": "android.failure.screenshot",
+        "platform": "android",
+        "capture_kind": "screenshot",
+        "status": "ok",
+        "artifact_path": ".akc/verification/validators/run-1/attachments/screen.png",
+        "metadata": {},
+        "fingerprint_sha256": "c" * 64,
+    }
+    assert validate_obj(obj=obj, kind="device_capture_result", version=1) == []
+
+
 def test_operational_evidence_window_json_file_matches_python_schema() -> None:
     path = (
         Path(__file__).resolve().parents[2]
@@ -114,6 +168,45 @@ def test_operational_assurance_result_json_file_matches_python_schema() -> None:
     )
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert on_disk == OPERATIONAL_ASSURANCE_RESULT_V1
+
+
+def test_observability_query_result_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "observability_query_result.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == OBSERVABILITY_QUERY_RESULT_V1
+
+
+def test_mobile_journey_result_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "mobile_journey_result.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == MOBILE_JOURNEY_RESULT_V1
+
+
+def test_device_capture_result_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "device_capture_result.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == DEVICE_CAPTURE_RESULT_V1
 
 
 def test_convergence_certificate_json_file_matches_python_schema() -> None:

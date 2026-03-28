@@ -432,6 +432,9 @@ def _terminal_health_candidates(
 ) -> tuple[RuntimeEvidenceRecord, ...]:
     et = selector.evidence_type.strip()
     candidates = [r for r in evidence if r.evidence_type == et]
+    binding_stub = selector.binding_stub
+    if binding_stub:
+        candidates = [r for r in candidates if str(r.payload.get("binding_id", "")).strip() == binding_stub]
     if et == "terminal_health":
         path = (selector.payload_path or "").strip()
         first_seg = path.split(".", 1)[0] if path else ""

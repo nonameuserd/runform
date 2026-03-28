@@ -247,6 +247,37 @@ def test_project_runtime_intent_projection_embeds_observability_stubs() -> None:
     assert "intent.oteld_stub:otel_bind_a" in obs["intent_trace_tags"]
 
 
+def test_project_runtime_intent_projection_embeds_validator_stubs() -> None:
+    intent = IntentSpecV1(
+        intent_id="intent_validator",
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        goal_statement="Run validator-bound operational checks",
+        success_criteria=(
+            SuccessCriterion(
+                id="sc_op",
+                evaluation_mode="operational_spec",
+                description="Validator-backed gate",
+                params={
+                    "spec_version": 1,
+                    "window": "single_run",
+                    "predicate_kind": "presence",
+                    "signals": [
+                        {"evidence_type": "akc_mobile_journey_result", "validator_stub": "mobile.login.android"}
+                    ],
+                },
+            ),
+        ),
+    )
+    projection = project_runtime_intent_projection(intent=intent)
+    summary = projection.success_criteria_summary
+    assert summary is not None
+    obs = summary.get("observability")
+    assert isinstance(obs, dict)
+    assert obs["otel_query_stubs"] == ["mobile.login.android"]
+    assert "intent.oteld_stub:mobile.login.android" in obs["intent_trace_tags"]
+
+
 def test_build_handoff_intent_ref_matches_runtime_and_deployment_projections() -> None:
     intent = _intent_spec()
     handoff = build_handoff_intent_ref(intent=intent)

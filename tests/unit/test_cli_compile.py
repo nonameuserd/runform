@@ -1845,3 +1845,54 @@ def test_resolve_compile_policies_rejects_bad_env(monkeypatch: pytest.MonkeyPatc
             cli_ir_graph=None,
             cli_artifact_consistency=None,
         )
+
+
+def test_cli_compile_run_manifest_records_offline_llm_metadata(tmp_path: Path) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    base = outputs_root / tenant_id / repo_id
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["compile", "--tenant-id", tenant_id, "--repo-id", repo_id, "--outputs-root", str(outputs_root)])
+    assert excinfo.value.code == 0
+    run_manifest_path = next((base / ".akc" / "run").glob("*.manifest.json"))
+    run_manifest = RunManifest.from_json_file(run_manifest_path)
+    assert run_manifest.model == "offline-small"
+    assert run_manifest.control_plane is not None
+    assert run_manifest.control_plane.get("llm_backend") == "offline"
+    assert run_manifest.control_plane.get("llm_provider") == "offline"
+    assert run_manifest.control_plane.get("llm_model") == "offline-small"
+    assert run_manifest.control_plane.get("llm_mode") == "offline"
+
+
+def test_cli_compile_hosted_llm_requires_explicit_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tenant_id = "t1"
+    repo_id = "repo1"
+    outputs_root = tmp_path
+    _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "compile",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--llm-backend",
+                "openai",
+            ]
+        )
+    assert excinfo.value.code == 2
+    assert "requires explicit network opt-in" in capsys.readouterr().out

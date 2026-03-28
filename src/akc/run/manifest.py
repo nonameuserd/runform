@@ -294,6 +294,9 @@ RuntimeEvidenceType = Literal[
     "terminal_health",
     "convergence_certificate",
     "delivery_lifecycle",
+    "akc_observability_query_result",
+    "akc_mobile_journey_result",
+    "akc_device_capture_result",
 ]
 ALLOWED_RUNTIME_EVIDENCE_TYPES: tuple[str, ...] = (
     "action_decision",
@@ -308,6 +311,9 @@ ALLOWED_RUNTIME_EVIDENCE_TYPES: tuple[str, ...] = (
     "terminal_health",
     "convergence_certificate",
     "delivery_lifecycle",
+    "akc_observability_query_result",
+    "akc_mobile_journey_result",
+    "akc_device_capture_result",
 )
 
 

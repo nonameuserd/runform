@@ -10,6 +10,7 @@ Design goals:
 
 from __future__ import annotations
 
+import json
 import shlex
 import sys
 import time
@@ -94,6 +95,7 @@ from akc.memory.models import (
 from akc.memory.plan_state import PlanStateStore
 from akc.memory.why_conflicts import enrich_conflict_reports_from_mediation
 from akc.memory.why_graph import ConflictDetector
+from akc.path_security import safe_resolve_scoped_path
 from akc.promotion import intent_declares_deployable_objective
 from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_success_criteria
 from akc.run.manifest import McpReplayEvent, ReplayMode, RunManifest
@@ -757,6 +759,12 @@ def run_compile_loop(
             ir_document=ir_doc_for_knowledge,
             knowledge_snapshot_for_query=prior_knowledge,
             knowledge_query_budget_chars=800,
+            weighted_memory_enabled=bool(config.weighted_memory_enabled),
+            weighted_memory_policy_path=config.weighted_memory_policy_path,
+            weighted_memory_budget_tokens=config.weighted_memory_budget_tokens,
+            weighted_memory_pins=config.weighted_memory_pins,
+            weighted_memory_boosts=config.weighted_memory_boosts,
+            weighted_memory_policy_root=project_root,
         )
 
     ctx = dict(ctx)
@@ -922,9 +930,29 @@ def run_compile_loop(
         )
     for item in ctx.get("code_memory_items") or []:
         if isinstance(item, dict):
-            item_id = item.get("item_id")
+            item_id = item.get("item_id") if item.get("item_id") is not None else item.get("id")
             if isinstance(item_id, str) and item_id.strip():
                 retrieval_item_ids.append(item_id.strip())
+    ranking_trace = ctx.get("memory_trace")
+    ranking_trace_obj = dict(ranking_trace) if isinstance(ranking_trace, Mapping) else None
+    compaction_ref: str | None = None
+    compaction_payload = ctx.get("memory_compaction")
+    if (
+        isinstance(compaction_payload, Mapping)
+        and knowledge_artifact_root is not None
+        and isinstance(plan.id, str)
+        and isinstance(step_id, str)
+    ):
+        target = safe_resolve_scoped_path(
+            Path(knowledge_artifact_root),
+            ".akc",
+            "knowledge",
+            "memory_compaction",
+            f"{plan.id}_{step_id}.json",
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(dict(compaction_payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        compaction_ref = str(target.relative_to(Path(knowledge_artifact_root))).replace("\\", "/")
     plan = _set_step_outputs(
         plan=plan,
         step_id=step_id,
@@ -937,6 +965,15 @@ def run_compile_loop(
                 "provenance": list(retrieval_provenance),
                 "replayed_from_manifest": replayed_ctx is not None,
                 "mcp_events": [e.to_json_obj() for e in mcp_replay_events],
+                "ranking_trace": ranking_trace_obj,
+                "compaction_ref": compaction_ref,
+                "score_version": (
+                    str(ranking_trace_obj.get("score_version"))
+                    if isinstance(ranking_trace_obj.get("score_version"), str)
+                    else None
+                )
+                if isinstance(ranking_trace_obj, Mapping)
+                else None,
             },
             "knowledge_snapshot": knowledge_snapshot.to_json_obj(),
             "knowledge_intent_assertion_ids": sorted(intent_assertion_map.keys()),

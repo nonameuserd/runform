@@ -591,14 +591,24 @@ def _mk_compile_config(
     opa_decision_path: str = "data.akc.allow",
     cost_rates: CostRates | None = None,
     living_automation_profile: LivingAutomationProfile | None = None,
+    llm_backend_name: str = "offline",
+    llm_model: str | None = None,
 ) -> ControllerConfig:
     from akc.compile.controller_config import ControllerConfig as CC
 
-    tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
-        "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
-        "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
-        "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
-    }
+    if llm_backend_name == "offline":
+        tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
+            "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
+            "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
+            "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
+        }
+    else:
+        selected_model = str(llm_model or "hosted-model").strip()
+        tiers = {
+            "small": TierConfig(name="small", llm_model=selected_model, temperature=0.0),
+            "medium": TierConfig(name="medium", llm_model=selected_model, temperature=0.2),
+            "large": TierConfig(name="large", llm_model=selected_model, temperature=0.3),
+        }
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=8, max_repairs_per_step=3, max_iterations_total=6)
@@ -618,6 +628,9 @@ def _mk_compile_config(
         meta["living_automation_profile_id"] = living_automation_profile.id
         if living_automation_profile.baseline_duration_hours is not None:
             meta["baseline_duration_hours"] = float(living_automation_profile.baseline_duration_hours)
+    meta["llm_backend"] = llm_backend_name
+    if llm_model is not None:
+        meta["llm_model"] = str(llm_model)
 
     return CC(
         tiers=tiers,
@@ -794,6 +807,9 @@ def safe_recompile_on_drift(
 
     # Phase 6: intent fingerprint is part of the living recompile contract.
     # Use the acceptance budget because that is what ultimately gets emitted.
+    llm_runtime_cfg = getattr(llm_backend, "runtime_config", None) if llm_backend is not None else None
+    llm_backend_name = str(getattr(llm_runtime_cfg, "backend", "offline"))
+    llm_model_name = str(getattr(llm_runtime_cfg, "model", "")).strip() or None
     accept_config = _mk_compile_config(
         mode=accept_mode,
         test_mode="full",
@@ -802,6 +818,8 @@ def safe_recompile_on_drift(
         opa_policy_path=opa_policy_path,
         opa_decision_path=opa_decision_path,
         living_automation_profile=profile,
+        llm_backend_name=llm_backend_name,
+        llm_model=llm_model_name,
     )
     intent_spec = compile_intent_spec(
         tenant_id=tenant_id,
@@ -1020,6 +1038,8 @@ def safe_recompile_on_drift(
         opa_policy_path=opa_policy_path,
         opa_decision_path=opa_decision_path,
         living_automation_profile=profile,
+        llm_backend_name=llm_backend_name,
+        llm_model=llm_model_name,
     )
 
     canary_outputs_root = safe_resolve_scoped_path(outputs_root_p, ".akc", "living", "canary")

@@ -252,6 +252,43 @@ def test_convergence_certificate_aggregate_check_when_expected_type() -> None:
     assert any("convergence_certificate_aggregate" in str(x.get("check_name", "")) for x in verdict.per_criterion)
 
 
+def test_operational_eval_filters_validator_evidence_by_binding_stub() -> None:
+    params = OperationalValidityParams.from_mapping(
+        {
+            "spec_version": 1,
+            "window": "single_run",
+            "predicate_kind": "presence",
+            "expected_evidence_types": ["akc_observability_query_result"],
+            "signals": [
+                {
+                    "evidence_type": "akc_observability_query_result",
+                    "validator_stub": "obs.expected",
+                    "payload_path": "status",
+                }
+            ],
+        }
+    )
+    evidence = (
+        RuntimeEvidenceRecord(
+            evidence_type="akc_observability_query_result",
+            timestamp=1,
+            runtime_run_id="r1",
+            payload={
+                "binding_id": "obs.other",
+                "query_kind": "logql_query",
+                "status": "ok",
+                "summary": {},
+                "fingerprint_sha256": "a" * 64,
+            },
+        ),
+    )
+    verdict = evaluate_operational_spec(params=params, evidence=evidence, success_criterion_id="sc")
+    assert not verdict.passed
+    assert any(
+        row["check_name"] == "presence_signal:akc_observability_query_result:status" for row in verdict.per_criterion
+    )
+
+
 def test_akc_metric_export_schema_validates_sample_record() -> None:
     pkg = Path(akc.control.__file__).resolve().parent
     schema = json.loads((pkg / "schemas" / "akc_metric_export.v1.schema.json").read_text(encoding="utf-8"))

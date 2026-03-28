@@ -157,6 +157,13 @@ def test_default_ir_generate_prompt_excludes_full_plan_json() -> None:
     assert '"budgets"' not in p
     assert "Plan execution trace" in p
     assert "IR (compact structural graph)" in p
+    assert "Production-readiness contract" in p
+    assert "Implement complete behavior for the touched path" in p
+    assert "Do not assume time-sensitive facts" in p
+    assert "If current behavior cannot be verified from configured sources, do not guess" in p
+    assert "Do not hardcode secrets" in p
+    assert "Do not remove, bypass, or weaken existing tests" in p
+    assert "Preserve surrounding interface and data compatibility" in p
 
 
 def test_default_ir_repair_prompt_excludes_full_plan_json() -> None:
