@@ -441,6 +441,12 @@ class ControllerConfig:
     toolchain_preflight_timeout_s: float = 2.0
     # Optional toolchain override mapping (typically from `.akc/project.json`) or a pre-resolved profile.
     toolchain: ToolchainProfile | Mapping[str, Any] | None = None
+    # Shared weighted-memory ranking + compaction for retrieval context.
+    weighted_memory_enabled: bool = False
+    weighted_memory_policy_path: str | None = None
+    weighted_memory_pins: tuple[str, ...] = ()
+    weighted_memory_boosts: Mapping[str, float] | None = None
+    weighted_memory_budget_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if not self.tiers:
@@ -600,6 +606,20 @@ class ControllerConfig:
             raise ValueError("toolchain_preflight_timeout_s must be > 0")
         if self.toolchain is not None and not isinstance(self.toolchain, (ToolchainProfile, Mapping)):
             raise ValueError("toolchain must be a ToolchainProfile, a mapping, or None")
+        if not isinstance(self.weighted_memory_enabled, bool):
+            raise ValueError("weighted_memory_enabled must be a bool")
+        if self.weighted_memory_policy_path is not None and not str(self.weighted_memory_policy_path).strip():
+            raise ValueError("weighted_memory_policy_path must be non-empty when set")
+        if any(not isinstance(p, str) or not p.strip() for p in self.weighted_memory_pins):
+            raise ValueError("weighted_memory_pins must contain non-empty entries")
+        if self.weighted_memory_boosts is not None:
+            for k, v in self.weighted_memory_boosts.items():
+                if not isinstance(k, str) or not k.strip():
+                    raise ValueError("weighted_memory_boosts keys must be non-empty strings")
+                if not isinstance(v, (int, float)) or not float("-inf") < float(v) < float("inf"):
+                    raise ValueError(f"weighted_memory_boosts[{k!r}] must be a finite float")
+        if self.weighted_memory_budget_tokens is not None and int(self.weighted_memory_budget_tokens) <= 0:
+            raise ValueError("weighted_memory_budget_tokens must be > 0 when set")
 
     def effective_deployment_intents_ir_alignment_policy(self) -> Literal["off", "warn", "error"]:
         """Policy for ``deployment_intents`` vs IR deployable nodes (runtime bundle projection check)."""

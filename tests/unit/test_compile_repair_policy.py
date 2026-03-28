@@ -53,6 +53,13 @@ FAILED tests/test_x.py::test_addition - boom
     assert "Execution failure summary (parsed)" in prompt
     assert "max" not in prompt  # prompt builder itself does not enforce budgets
     assert "Return ONLY a unified diff" in prompt
+    assert "production-ready" in prompt
+    assert "Do not assume time-sensitive facts" in prompt
+    assert "if they cannot be verified, do not guess" in prompt
+    assert "hardcode secrets" in prompt
+    assert "weakening tests" in prompt
+    assert "silent no-op fallbacks" in prompt
+    assert "Preserve surrounding interface and data compatibility" in prompt
     assert "Plan JSON" not in prompt
     assert "IR (compact structural graph)" in prompt
     assert "Plan execution trace" in prompt

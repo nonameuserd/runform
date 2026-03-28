@@ -1,0 +1,59 @@
+schema_version: 1
+schema_kind: validator_bindings
+bindings:
+  obs.login_5xx:
+    kind: logql_query
+    url: https://loki.example.internal/loki/api/v1/query
+    query: 'sum(count_over_time({app="mobile-api"} |= "POST /login" |= " 5" [5m]))'
+    target: loki-main
+
+  obs.checkout_p95:
+    kind: promql_query
+    url: https://prometheus.example.internal/api/v1/query
+    query: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route="/checkout"}[5m])) by (le))
+    target: prometheus-main
+
+  traces.login_errors:
+    kind: traceql_query
+    url: https://tempo.example.internal/api/search
+    query: '{ span.http.route = "/login" && status = error }'
+    target: tempo-main
+
+  mobile.login.android:
+    kind: maestro_flow
+    platform: android
+    journey_id: login
+    flow_path: ./flows/android/login.yaml
+    device_id: emulator-5554
+    app_id: com.example.app
+
+  android.login.clear_data:
+    kind: android_helper
+    operation: clear_data
+    device_id: emulator-5554
+    package_name: com.example.app
+
+  android.login.failure_screenshot:
+    kind: android_helper
+    operation: screenshot
+    device_id: emulator-5554
+    artifact_name: login_failure
+
+  ios.login.simulator:
+    kind: maestro_flow
+    platform: ios
+    journey_id: login
+    flow_path: ./flows/ios/login.yaml
+    device_id: booted
+    app_id: com.example.ios
+
+  ios.login.boot:
+    kind: ios_simulator_helper
+    operation: boot
+    device_id: booted
+
+  ios.login.failure_screenshot:
+    kind: ios_simulator_helper
+    operation: screenshot
+    device_id: booted
+    artifact_name: login_failure

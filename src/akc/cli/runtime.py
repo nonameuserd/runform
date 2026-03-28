@@ -74,6 +74,7 @@ from akc.runtime.resync_backoff import compute_resync_sleep_ms, parse_resync_bac
 from akc.runtime.scheduler import InMemoryRuntimeScheduler
 from akc.runtime.state_store import FileSystemRuntimeStateStore
 from akc.utils.fingerprint import stable_json_fingerprint
+from akc.validation import execute_validator_bindings, merge_validator_evidence, resolve_validator_bindings_path
 
 from .common import configure_logging
 from .profile_defaults import (
@@ -81,7 +82,7 @@ from .profile_defaults import (
     resolve_optional_project_string,
     resolve_runtime_start_profile_defaults,
 )
-from .project_config import load_akc_project_config
+from .project_config import AkcProjectConfig, load_akc_project_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +228,7 @@ def _runtime_context_from_record(record: dict[str, Any]) -> RuntimeContext:
         run_id=str(record["run_id"]).strip(),
         runtime_run_id=str(record["runtime_run_id"]).strip(),
         policy_mode=cast(RuntimePolicyMode, mode_raw),
-        adapter_id="native",
+        adapter_id=str(record.get("adapter_id", "native")).strip() or "native",
     )
 
 
@@ -569,9 +570,17 @@ def _build_runtime_kernel(
         )
         else NativeRuntimeAdapter()
     )
+    runtime_context = RuntimeContext(
+        tenant_id=context.tenant_id,
+        repo_id=context.repo_id,
+        run_id=context.run_id,
+        runtime_run_id=context.runtime_run_id,
+        policy_mode=context.policy_mode,
+        adapter_id=adapter.adapter_id,
+    )
     kernel = RuntimeKernel(
-        context=context,
-        bundle=_placeholder_bundle(context, bundle_ref),
+        context=runtime_context,
+        bundle=_placeholder_bundle(runtime_context, bundle_ref),
         adapter=adapter,
         scheduler=InMemoryRuntimeScheduler(),
         state_store=FileSystemRuntimeStateStore(
@@ -587,7 +596,7 @@ def _build_runtime_kernel(
         strict_intent_authority=strict_intent_authority,
         coordination_execution_overrides=coordination_execution_overrides,
     )
-    return kernel, context
+    return kernel, runtime_context
 
 
 def _record_template(
@@ -610,6 +619,7 @@ def _record_template(
         "repo_id": context.repo_id,
         "run_id": context.run_id,
         "runtime_run_id": context.runtime_run_id,
+        "adapter_id": context.adapter_id,
         "outputs_root": str(outputs_root.expanduser().resolve()),
         "mode": mode,
         "status": status,
@@ -1241,11 +1251,33 @@ def _build_runtime_evidence(
 
 
 def _persist_runtime_evidence(record: dict[str, Any], *, evidence: tuple[RuntimeEvidenceRecord, ...]) -> None:
-    existing = list(_load_runtime_evidence(record))
-    merged = existing + list(evidence)
-    payload = [item.to_json_obj() for item in merged]
+    # `evidence` is always the full in-memory snapshot for this persist (build + optional validator augment).
+    # Merging with the previous file would duplicate rows that do not carry `binding_id` (e.g. terminal_health).
+    payload = [item.to_json_obj() for item in evidence]
     validate_artifact_json(obj=payload, kind="runtime_evidence_stream")
     _write_json(_evidence_path(record), payload)
+
+
+def _augment_evidence_with_validators(
+    record: dict[str, Any],
+    *,
+    evidence: tuple[RuntimeEvidenceRecord, ...],
+    specs: Sequence[tuple[str, OperationalValidityParams]],
+    cwd: Path,
+    project: AkcProjectConfig | None,
+) -> tuple[RuntimeEvidenceRecord, ...]:
+    if not specs:
+        return evidence
+    bindings_path = resolve_validator_bindings_path(cwd=cwd, project=project, cli_value=None)
+    result = execute_validator_bindings(
+        scope_root=_scope_root(record),
+        run_id=str(record["run_id"]).strip(),
+        runtime_run_id=str(record["runtime_run_id"]).strip(),
+        specs=specs,
+        bindings_path=bindings_path,
+        adapter_id=str(record.get("adapter_id", "native")).strip() or "native",
+    )
+    return merge_validator_evidence(existing=evidence, updates=result.evidence)
 
 
 def _pointer_for_json_file(path: Path, *, record: dict[str, Any] | None = None) -> ArtifactPointer:
@@ -1882,6 +1914,13 @@ def cmd_runtime_start(args: argparse.Namespace) -> int:
             provider_contract=_deployment_provider_contract_from_bundle(kernel.bundle),
             bundle_metadata=kernel.bundle.metadata,
         )
+        evidence = _augment_evidence_with_validators(
+            record,
+            evidence=evidence,
+            specs=_post_runtime_operational_criteria_from_bundle(bundle_path),
+            cwd=cwd,
+            project=proj,
+        )
         expectations_raw = kernel.bundle.metadata.get("runtime_evidence_expectations") or ()
         expectations_list: list[str] = []
         if isinstance(expectations_raw, Sequence) and not isinstance(expectations_raw, (str, bytes)):
@@ -2160,6 +2199,15 @@ def cmd_runtime_reconcile(args: argparse.Namespace) -> int:
             total_resync_wait_ms=r_loop.total_resync_wait_ms,
             provider_contract=_deployment_provider_contract_from_bundle(kernel.bundle),
             bundle_metadata=kernel.bundle.metadata,
+        )
+        cwd = Path.cwd()
+        proj = load_akc_project_config(cwd)
+        built = _augment_evidence_with_validators(
+            record,
+            evidence=built,
+            specs=_post_runtime_operational_criteria_from_bundle(bundle_path),
+            cwd=cwd,
+            project=proj,
         )
         _persist_runtime_evidence(record, evidence=built)
         ov_summary = _maybe_write_operational_validity_report(record, evidence=built)

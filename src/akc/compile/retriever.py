@@ -11,7 +11,10 @@ be score-boosted using the current compile snapshot (see
 
 from __future__ import annotations
 
+import math
+import time
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from akc.compile.interfaces import Index, IndexQuery, TenantRepoScope
@@ -19,7 +22,14 @@ from akc.compile.ir_prompt_context import ir_structural_hints_for_retrieval_quer
 from akc.ir import IRDocument
 from akc.knowledge.models import KnowledgeSnapshot
 from akc.memory.code_memory import CodeMemoryStore
-from akc.memory.models import PlanState, normalize_repo_id, require_non_empty
+from akc.memory.models import JSONValue, PlanState, normalize_repo_id, require_non_empty
+from akc.memory.salience import (
+    SalienceCandidate,
+    build_extractive_compaction,
+    load_memory_policy,
+    pack_by_token_budget,
+    score_candidates,
+)
 from akc.memory.why_graph import WhyGraphStore
 
 
@@ -133,6 +143,184 @@ def boost_retrieved_documents_for_knowledge_evidence(
     return out
 
 
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, float(v)))
+
+
+def _trust_reliability(meta: Mapping[str, Any]) -> float:
+    tier = str(meta.get("trust_tier") or meta.get("connector_trust_tier") or "default").strip().lower()
+    if tier in {"trusted", "high"}:
+        return 1.0
+    if tier in {"untrusted", "low"}:
+        return 0.25
+    return 0.65
+
+
+def _score_hint_to_relevance(score: Any) -> float | None:
+    if isinstance(score, bool):
+        return None
+    if not isinstance(score, (int, float)):
+        return None
+    s = float(score)
+    if not math.isfinite(s):
+        return None
+    # Conservative normalization for cosine-style and additive score ranges.
+    if s <= 0.0:
+        return 0.0
+    if s >= 1.0:
+        return 1.0
+    return _clamp01(s)
+
+
+def _apply_weighted_memory_ranking(
+    *,
+    query_text: str,
+    docs: Sequence[Mapping[str, Any]],
+    code_memory_items: Sequence[Mapping[str, Any]],
+    knowledge_constraints: Sequence[Mapping[str, Any]] | None,
+    now_ms: int,
+    root: Path,
+    policy_path: str | None,
+    budget_tokens: int | None,
+    pins: Sequence[str] | None,
+    boosts: Mapping[str, float] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, JSONValue] | None]:
+    policy = load_memory_policy(root=root, policy_path=policy_path)
+
+    candidates: list[SalienceCandidate] = []
+    by_id_doc: dict[str, dict[str, Any]] = {}
+    by_id_mem: dict[str, dict[str, Any]] = {}
+    for raw in docs:
+        row = dict(raw)
+        did = str(row.get("doc_id") or "").strip()
+        if not did:
+            continue
+        sid = f"document:{did}"
+        meta_raw = row.get("metadata")
+        meta = meta_raw if isinstance(meta_raw, Mapping) else {}
+        created_at_raw = meta.get("indexed_at_ms")
+        created_at = (
+            int(created_at_raw)
+            if isinstance(created_at_raw, (int, float)) and not isinstance(created_at_raw, bool)
+            else now_ms
+        )
+        rel_hint = _score_hint_to_relevance(row.get("score"))
+        importance = meta.get("importance")
+        importance_f = (
+            float(importance) if isinstance(importance, (int, float)) and not isinstance(importance, bool) else 0.60
+        )
+        usage_raw = meta.get("usage_count")
+        usage = int(usage_raw) if isinstance(usage_raw, (int, float)) and not isinstance(usage_raw, bool) else 0
+        candidates.append(
+            SalienceCandidate(
+                stable_id=sid,
+                source="document",
+                text=f"{str(row.get('title') or '')}\n{str(row.get('content') or '')}".strip(),
+                created_at_ms=created_at,
+                use_count=usage,
+                pinned=bool(meta.get("pinned") is True),
+                relevance_hint=rel_hint,
+                importance=_clamp01(importance_f),
+                reliability=_trust_reliability(meta),
+                explicit_boost=0.0,
+                metadata=meta,
+            )
+        )
+        by_id_doc[sid] = row
+
+    for raw in code_memory_items:
+        row = dict(raw)
+        item_id = str(row.get("item_id") or row.get("id") or "").strip()
+        if not item_id:
+            continue
+        row.setdefault("item_id", item_id)
+        sid = f"code_memory:{item_id}"
+        metadata_raw = row.get("metadata")
+        md = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+        created_at_raw = row.get("updated_at_ms")
+        created_at = (
+            int(created_at_raw)
+            if isinstance(created_at_raw, (int, float)) and not isinstance(created_at_raw, bool)
+            else now_ms
+        )
+        usage_raw = md.get("usage_count")
+        usage = int(usage_raw) if isinstance(usage_raw, (int, float)) and not isinstance(usage_raw, bool) else 0
+        kind = str(row.get("kind") or "").strip().lower()
+        importance = 0.75 if kind in {"patch", "test_result"} else 0.55
+        candidates.append(
+            SalienceCandidate(
+                stable_id=sid,
+                source="code_memory",
+                text=str(row.get("content") or ""),
+                created_at_ms=created_at,
+                use_count=usage,
+                pinned=False,
+                relevance_hint=None,
+                importance=importance,
+                reliability=0.90,
+                explicit_boost=0.0,
+                metadata=md if isinstance(md, Mapping) else None,
+            )
+        )
+        by_id_mem[sid] = row
+
+    for i, raw in enumerate(knowledge_constraints or ()):
+        row = dict(raw)
+        text = str(row.get("summary") or row.get("statement") or "").strip()
+        if not text:
+            continue
+        cid = str(row.get("constraint_id") or row.get("assertion_id") or f"idx_{i}").strip()
+        sid = f"knowledge:{cid}"
+        candidates.append(
+            SalienceCandidate(
+                stable_id=sid,
+                source="knowledge",
+                text=text,
+                created_at_ms=now_ms,
+                importance=0.70,
+                reliability=0.80,
+            )
+        )
+
+    scored = score_candidates(
+        candidates=candidates,
+        query=query_text,
+        policy=policy,
+        now_ms=now_ms,
+        pins=pins,
+        boosts=boosts,
+    )
+    selected, evicted = pack_by_token_budget(
+        scored=scored,
+        budget_tokens=policy.budget_tokens(surface="compile", runtime_override=budget_tokens),
+    )
+
+    selected_ids = {s.candidate.stable_id for s in selected}
+    selected_docs = [by_id_doc[s.candidate.stable_id] for s in selected if s.candidate.stable_id in by_id_doc]
+    selected_mem = [by_id_mem[s.candidate.stable_id] for s in selected if s.candidate.stable_id in by_id_mem]
+    ranking_trace = {
+        "score_version": str(policy.score_version),
+        "policy_fingerprint": policy.fingerprint(),
+        "policy_path": policy.path,
+        "selected_ids": [s.candidate.stable_id for s in selected],
+        "evicted_ids": [e.candidate.stable_id for e in evicted],
+        "budget_tokens": int(policy.budget_tokens(surface="compile", runtime_override=budget_tokens)),
+        "scores": [
+            {
+                "memory_id": s.candidate.stable_id,
+                "source": s.candidate.source,
+                "total_score": float(s.total_score),
+                "token_estimate": int(s.token_estimate),
+                "selected": s.candidate.stable_id in selected_ids,
+                "breakdown": {str(k): float(v) for k, v in s.score_breakdown.items()},
+            }
+            for s in scored
+        ],
+    }
+    compaction_obj = build_extractive_compaction(evicted=evicted) if evicted else None
+    return selected_docs, selected_mem, ranking_trace, compaction_obj
+
+
 def retrieve_context(
     *,
     tenant_id: str,
@@ -145,6 +333,12 @@ def retrieve_context(
     ir_document: IRDocument | None = None,
     knowledge_snapshot_for_query: KnowledgeSnapshot | None = None,
     knowledge_query_budget_chars: int = 1200,
+    weighted_memory_enabled: bool = False,
+    weighted_memory_policy_path: str | None = None,
+    weighted_memory_budget_tokens: int | None = None,
+    weighted_memory_pins: Sequence[str] | None = None,
+    weighted_memory_boosts: Mapping[str, float] | None = None,
+    weighted_memory_policy_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Retrieve context for the compile loop.
 
@@ -167,6 +361,12 @@ def retrieve_context(
             raise ValueError("IR repo_id must match plan repo_id for retrieval queries")
 
     mem_items = code_memory.list_items(tenant_id=tenant_id, repo_id=repo, limit=int(limit))
+    mem_items_json: list[dict[str, Any]] = []
+    for item in mem_items:
+        row = dict(item.to_json_obj())
+        if "item_id" not in row and isinstance(row.get("id"), str):
+            row["item_id"] = str(row["id"])
+        mem_items_json.append(row)
 
     why: dict[str, Any] | None = None
     if why_graph is not None:
@@ -181,7 +381,7 @@ def retrieve_context(
         knowledge_snapshot_for_query,
         max_chars=max(0, int(knowledge_query_budget_chars)),
     )
-    docs: list[Mapping[str, Any]] = []
+    docs: list[dict[str, Any]] = []
     if index is not None:
         scope = TenantRepoScope(tenant_id=tenant_id, repo_id=repo)
         q = IndexQuery(
@@ -201,8 +401,34 @@ def retrieve_context(
             for d in results
         ]
 
+    ranking_trace: dict[str, Any] | None = None
+    compaction_obj: dict[str, JSONValue] | None = None
+    if weighted_memory_enabled:
+        root = (
+            Path(weighted_memory_policy_root).expanduser().resolve()
+            if weighted_memory_policy_root is not None
+            else Path.cwd()
+        )
+        docs, mem_items_json, ranking_trace, compaction_obj = _apply_weighted_memory_ranking(
+            query_text=_build_query_text(plan, ir_document=ir_document, knowledge_query_suffix=suffix),
+            docs=docs,
+            code_memory_items=mem_items_json,
+            knowledge_constraints=(why or {}).get("constraints") if isinstance(why, dict) else None,
+            now_ms=int(time.time() * 1000),
+            root=root,
+            policy_path=weighted_memory_policy_path,
+            budget_tokens=weighted_memory_budget_tokens,
+            pins=weighted_memory_pins,
+            boosts=weighted_memory_boosts,
+        )
+        mem_items_out = mem_items_json
+    else:
+        mem_items_out = mem_items_json
+
     return {
-        "code_memory_items": [i.to_json_obj() for i in mem_items],
+        "code_memory_items": mem_items_out,
         "documents": docs,
         "why_graph": why,
+        "memory_trace": ranking_trace,
+        "memory_compaction": compaction_obj,
     }

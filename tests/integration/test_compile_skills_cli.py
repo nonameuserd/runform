@@ -9,6 +9,8 @@ import pytest
 from akc.cli import compile as compile_cli
 from akc.cli import main
 from akc.compile.interfaces import LLMRequest, LLMResponse, TenantRepoScope
+from akc.llm.config import LlmRuntimeConfig
+from akc.llm.providers import OfflineLlmBackend
 from akc.memory.facade import build_memory
 
 _SKILL_BODY_MARKER = "INTEGRATION_AGENT_SKILLS_BODY_MARKER_7e4a91c2"
@@ -38,7 +40,7 @@ def test_compile_cli_generate_system_prompt_includes_skill_body(
 ) -> None:
     captured_system: list[str] = []
 
-    class _CapturingOfflineLLM(compile_cli._OfflineLLM):
+    class _CapturingOfflineLLM(OfflineLlmBackend):
         def complete(
             self,
             *,
@@ -53,7 +55,10 @@ def test_compile_cli_generate_system_prompt_includes_skill_body(
                         break
             return super().complete(scope=scope, stage=stage, request=request)
 
-    monkeypatch.setattr(compile_cli, "_OfflineLLM", _CapturingOfflineLLM)
+    def _build_capturing_llm(*, config: LlmRuntimeConfig) -> _CapturingOfflineLLM:
+        return _CapturingOfflineLLM(config=config)
+
+    monkeypatch.setattr(compile_cli, "build_llm_backend", _build_capturing_llm)
 
     tenant_id = "skill-cli-tenant"
     repo_id = "skill-cli-repo"

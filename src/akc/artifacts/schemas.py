@@ -20,6 +20,9 @@ SchemaKind = Literal[
     "delivery_events",
     "delivery_provider_state",
     "delivery_activation_evidence",
+    "observability_query_result",
+    "mobile_journey_result",
+    "device_capture_result",
     "runtime_evidence_stream",
     "run_trace_spans",
     "run_cost_attribution",
@@ -1271,6 +1274,114 @@ CONVERGENCE_CERTIFICATE_V1: Final[dict[str, Any]] = {
 }
 
 
+_ARTIFACT_ATTACHMENT_ITEM_V1: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "media_type": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    "required": ["path", "media_type", "sha256"],
+}
+
+
+OBSERVABILITY_QUERY_RESULT_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="observability_query_result", version=1),
+    "title": "AKC observability query result",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="observability_query_result"),
+        "binding_id": {"type": "string", "minLength": 1},
+        "query_kind": {"type": "string", "enum": ["logql_query", "promql_query", "traceql_query"]},
+        "target": {"type": "string", "minLength": 1},
+        "window_start_ms": {"type": "integer", "minimum": 0},
+        "window_end_ms": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["ok", "error"]},
+        "summary": {"type": "object", "additionalProperties": True},
+        "attachments": {"type": "array", "items": _ARTIFACT_ATTACHMENT_ITEM_V1},
+        "fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    "required": [
+        "binding_id",
+        "query_kind",
+        "target",
+        "window_start_ms",
+        "window_end_ms",
+        "status",
+        "summary",
+        "attachments",
+        "fingerprint_sha256",
+    ],
+}
+
+
+MOBILE_JOURNEY_RESULT_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="mobile_journey_result", version=1),
+    "title": "AKC mobile journey result",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="mobile_journey_result"),
+        "binding_id": {"type": "string", "minLength": 1},
+        "platform": {"type": "string", "enum": ["android", "ios"]},
+        "device_id": {"type": "string", "minLength": 1},
+        "journey_id": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["passed", "failed", "error"]},
+        "started_at_ms": {"type": "integer", "minimum": 0},
+        "ended_at_ms": {"type": "integer", "minimum": 0},
+        "assertions_passed": {"type": "integer", "minimum": 0},
+        "assertions_failed": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "array", "items": _ARTIFACT_ATTACHMENT_ITEM_V1},
+        "fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    "required": [
+        "binding_id",
+        "platform",
+        "device_id",
+        "journey_id",
+        "status",
+        "started_at_ms",
+        "ended_at_ms",
+        "assertions_passed",
+        "assertions_failed",
+        "artifacts",
+        "fingerprint_sha256",
+    ],
+}
+
+
+DEVICE_CAPTURE_RESULT_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="device_capture_result", version=1),
+    "title": "AKC device capture result",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="device_capture_result"),
+        "binding_id": {"type": "string", "minLength": 1},
+        "platform": {"type": "string", "enum": ["android", "ios"]},
+        "capture_kind": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["ok", "error"]},
+        "artifact_path": {"type": ["string", "null"]},
+        "metadata": {"type": "object", "additionalProperties": True},
+        "fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    "required": [
+        "binding_id",
+        "platform",
+        "capture_kind",
+        "status",
+        "artifact_path",
+        "metadata",
+        "fingerprint_sha256",
+    ],
+}
+
+
 def _runtime_evidence_item_schema(*, evidence_type: str, required_payload_keys: list[str]) -> dict[str, Any]:
     return {
         "type": "object",
@@ -1360,6 +1471,33 @@ RUNTIME_EVIDENCE_STREAM_V1: Final[dict[str, Any]] = {
             _runtime_evidence_item_schema(
                 evidence_type="delivery_lifecycle",
                 required_payload_keys=["event"],
+            ),
+            _runtime_evidence_item_schema(
+                evidence_type="akc_observability_query_result",
+                required_payload_keys=["binding_id", "query_kind", "status", "summary", "fingerprint_sha256"],
+            ),
+            _runtime_evidence_item_schema(
+                evidence_type="akc_mobile_journey_result",
+                required_payload_keys=[
+                    "binding_id",
+                    "platform",
+                    "journey_id",
+                    "status",
+                    "assertions_passed",
+                    "assertions_failed",
+                    "fingerprint_sha256",
+                ],
+            ),
+            _runtime_evidence_item_schema(
+                evidence_type="akc_device_capture_result",
+                required_payload_keys=[
+                    "binding_id",
+                    "platform",
+                    "capture_kind",
+                    "status",
+                    "metadata",
+                    "fingerprint_sha256",
+                ],
             ),
         ]
     },
@@ -1895,6 +2033,12 @@ def get_schema(*, kind: SchemaKind, version: int = ARTIFACT_SCHEMA_VERSION) -> d
         return OPERATIONAL_ASSURANCE_RESULT_V1
     if kind == "operational_evidence_window":
         return OPERATIONAL_EVIDENCE_WINDOW_V1
+    if kind == "observability_query_result":
+        return OBSERVABILITY_QUERY_RESULT_V1
+    if kind == "mobile_journey_result":
+        return MOBILE_JOURNEY_RESULT_V1
+    if kind == "device_capture_result":
+        return DEVICE_CAPTURE_RESULT_V1
     if kind == "runtime_evidence_stream":
         return RUNTIME_EVIDENCE_STREAM_V1
     if kind == "run_trace_spans":

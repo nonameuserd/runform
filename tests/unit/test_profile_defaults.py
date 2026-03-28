@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from akc.cli.profile_defaults import (
     ResolvedValue,
     normalize_developer_role_profile,
@@ -127,6 +129,24 @@ def test_load_akc_project_config_json(tmp_path: Path) -> None:
     assert cfg.opa_decision_path is None
 
 
+def test_load_akc_project_config_validation_bindings_nested_key(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps(
+            {
+                "tenant_id": "t",
+                "repo_id": "r",
+                "outputs_root": "/tmp/out",
+                "validation": {"bindings_path": "configs/validation/validator_bindings.v1.yaml"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_akc_project_config(tmp_path)
+    assert cfg is not None
+    assert cfg.validation_bindings_path == "configs/validation/validator_bindings.v1.yaml"
+
+
 def test_load_akc_project_config_compile_skill_byte_caps(tmp_path: Path) -> None:
     (tmp_path / ".akc").mkdir(parents=True)
     (tmp_path / ".akc" / "project.json").write_text(
@@ -179,6 +199,66 @@ def test_load_akc_project_config_json_opa_fields(tmp_path: Path) -> None:
     assert cfg is not None
     assert cfg.opa_policy_path == ".akc/policy/compile_tools.rego"
     assert cfg.opa_decision_path == "data.akc.allow"
+
+
+def test_load_akc_project_config_assistant_fields(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps(
+            {
+                "tenant_id": "t",
+                "repo_id": "r",
+                "outputs_root": "out",
+                "assistant_default_format": "json",
+                "assistant_session_retention_days": 21,
+                "assistant_model_hint": "gpt-5.4",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_akc_project_config(tmp_path)
+    assert cfg is not None
+    assert cfg.assistant_default_format == "json"
+    assert cfg.assistant_session_retention_days == 21
+    assert cfg.assistant_model_hint == "gpt-5.4"
+
+
+def test_load_akc_project_config_rejects_llm_secret_fields(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps({"llm": {"backend": "openai", "api_key": "should-not-be-here"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="not allowed"):
+        load_akc_project_config(tmp_path)
+
+
+def test_load_akc_project_config_memory_fields(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps(
+            {
+                "tenant_id": "t",
+                "repo_id": "r",
+                "outputs_root": "out",
+                "memory_policy_path": ".akc/memory_policy.json",
+                "memory_budget_tokens": 900,
+                "compile_memory_budget_tokens": 1200,
+                "assistant_memory_budget_tokens": 700,
+                "memory_pins": ["document:alpha", "code_memory:beta"],
+                "memory_boosts": {"document:alpha": 0.2, "code_memory:beta": -0.1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_akc_project_config(tmp_path)
+    assert cfg is not None
+    assert cfg.memory_policy_path == ".akc/memory_policy.json"
+    assert cfg.memory_budget_tokens == 900
+    assert cfg.compile_memory_budget_tokens == 1200
+    assert cfg.assistant_memory_budget_tokens == 700
+    assert cfg.memory_pins == ("document:alpha", "code_memory:beta")
+    assert cfg.memory_boosts == {"document:alpha": 0.2, "code_memory:beta": -0.1}
 
 
 def test_resolve_compile_profile_precedence_cli_over_governance_over_profile() -> None:

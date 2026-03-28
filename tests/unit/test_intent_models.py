@@ -392,6 +392,41 @@ def test_operational_validity_params_rejects_non_opaque_otel_query_stub() -> Non
         )
 
 
+def test_operational_validity_params_accepts_validator_stub_and_serializes_canonically() -> None:
+    params = OperationalValidityParams.from_mapping(
+        {
+            "spec_version": 1,
+            "window": "single_run",
+            "predicate_kind": "presence",
+            "expected_evidence_types": ["akc_observability_query_result"],
+            "signals": [{"evidence_type": "akc_observability_query_result", "validator_stub": "obs.primary"}],
+        }
+    )
+    assert params.signals[0].binding_stub == "obs.primary"
+    assert params.to_json_obj()["signals"] == [
+        {"evidence_type": "akc_observability_query_result", "validator_stub": "obs.primary"}
+    ]
+
+
+def test_operational_validity_params_rejects_conflicting_validator_stub_and_legacy_otel_stub() -> None:
+    with pytest.raises(OperationalValidityParamsError, match="validator_stub"):
+        OperationalValidityParams.from_mapping(
+            {
+                "spec_version": 1,
+                "window": "single_run",
+                "predicate_kind": "presence",
+                "expected_evidence_types": ["akc_observability_query_result"],
+                "signals": [
+                    {
+                        "evidence_type": "akc_observability_query_result",
+                        "validator_stub": "obs.primary",
+                        "otel_query_stub": "obs.secondary",
+                    }
+                ],
+            }
+        )
+
+
 def test_parse_operational_validity_params_empty_is_none() -> None:
     assert parse_operational_validity_params({}) is None
     assert parse_operational_validity_params(None) is None

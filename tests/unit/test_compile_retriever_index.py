@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +12,7 @@ from akc.compile.retriever import boost_retrieved_documents_for_knowledge_eviden
 from akc.ir import IRDocument
 from akc.knowledge.models import CanonicalConstraint, CanonicalDecision, EvidenceMapping, KnowledgeSnapshot
 from akc.memory.facade import build_memory
-from akc.memory.models import PlanState, PlanStep, now_ms
+from akc.memory.models import CodeArtifactRef, CodeMemoryItem, PlanState, PlanStep, now_ms
 
 
 @dataclass(frozen=True)
@@ -221,3 +223,110 @@ def test_retrieve_context_rejects_plan_scope_mismatch() -> None:
             index=None,
             limit=5,
         )
+
+
+def test_retrieve_context_weighted_memory_ranking_and_trace(tmp_path: Path) -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="prefer pinned",
+        initial_steps=["first"],
+    )
+    idx = _SpyIndex(
+        docs=[
+            IndexDocument(
+                doc_id="d1",
+                title="Low relevance",
+                content="noise",
+                score=0.2,
+                metadata={"repo_id": "repo1"},
+            ),
+            IndexDocument(
+                doc_id="d2",
+                title="Pinned doc",
+                content="prefer pinned",
+                score=0.2,
+                metadata={"repo_id": "repo1"},
+            ),
+        ]
+    )
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "memory_policy.json").write_text(
+        json.dumps({"token_budget": {"compile": 32}}),
+        encoding="utf-8",
+    )
+    ctx = retrieve_context(
+        tenant_id="t1",
+        repo_id="repo1",
+        plan=plan,
+        code_memory=mem.code_memory,
+        index=idx,
+        limit=5,
+        weighted_memory_enabled=True,
+        weighted_memory_policy_root=tmp_path,
+        weighted_memory_pins=("document:d2",),
+    )
+    trace = ctx.get("memory_trace")
+    assert isinstance(trace, dict)
+    assert trace.get("score_version") == "salience-v1"
+    selected_ids = trace.get("selected_ids")
+    assert isinstance(selected_ids, list)
+    assert "document:d2" in selected_ids
+
+
+def test_retrieve_context_weighted_memory_filters_code_memory_by_scope() -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="memory scope",
+        initial_steps=["first"],
+    )
+    mem.code_memory.upsert_items(
+        tenant_id="t1",
+        repo_id="repo1",
+        artifact_id=None,
+        items=[
+            CodeMemoryItem(
+                id="local-item",
+                ref=CodeArtifactRef(tenant_id="t1", repo_id="repo1", artifact_id=None),
+                kind="note",
+                content="local tenant memory",
+                metadata={},
+                created_at_ms=1,
+                updated_at_ms=1,
+            )
+        ],
+    )
+    mem.code_memory.upsert_items(
+        tenant_id="t2",
+        repo_id="repo1",
+        artifact_id=None,
+        items=[
+            CodeMemoryItem(
+                id="other-tenant-item",
+                ref=CodeArtifactRef(tenant_id="t2", repo_id="repo1", artifact_id=None),
+                kind="note",
+                content="must not leak",
+                metadata={},
+                created_at_ms=1,
+                updated_at_ms=1,
+            )
+        ],
+    )
+
+    ctx = retrieve_context(
+        tenant_id="t1",
+        repo_id="repo1",
+        plan=plan,
+        code_memory=mem.code_memory,
+        index=None,
+        limit=10,
+        weighted_memory_enabled=True,
+    )
+    rows = ctx.get("code_memory_items")
+    assert isinstance(rows, list)
+    ids = {str(r.get("item_id")) for r in rows if isinstance(r, dict)}
+    assert "local-item" in ids
+    assert "other-tenant-item" not in ids

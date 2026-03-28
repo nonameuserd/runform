@@ -33,12 +33,14 @@ from akc.compile.executors import (
     _validate_docker_ulimit,
     _validate_docker_user,
 )
-from akc.compile.interfaces import Executor, LLMBackend, LLMRequest, LLMResponse, TenantRepoScope
+from akc.compile.interfaces import Executor, TenantRepoScope
 from akc.compile.rust_bridge import BackendMode, ExecLane, RustExecConfig
 from akc.control.policy_bundle import resolve_governance_profile_for_scope
 from akc.control.policy_denial_explain import compile_extract_policy_denial, print_policy_denial
 from akc.intent import IntentCompilerError
+from akc.llm import build_llm_backend, llm_metadata, resolve_llm_runtime_config
 from akc.memory.models import JSONValue
+from akc.memory.salience import parse_memory_boost_overrides, parse_memory_pin_overrides
 from akc.promotion import normalize_promotion_mode, requires_deployable_steps, resolve_default_promotion_mode
 from akc.run.manifest import REPLAYABLE_PASSES, ReplayMode
 from akc.utils.fingerprint import stable_json_fingerprint
@@ -429,108 +431,6 @@ def _preflight_docker_hardening(
     return None
 
 
-class _OfflineLLM(LLMBackend):
-    """Deterministic, offline LLM backend for the CLI.
-
-    This backend never calls external services. It produces a minimal, valid
-    unified diff that touches both code and tests so the controller's
-    tests-by-default and policy logic remain exercised.
-    """
-
-    def complete(
-        self,
-        *,
-        scope: TenantRepoScope,
-        stage: str,
-        request: LLMRequest,
-    ) -> LLMResponse:
-        # The offline backend ignores the incoming request and returns
-        # deterministic stage-specific payloads.
-        _ = request
-        if stage == "system_design":
-            return LLMResponse(
-                text=json.dumps(
-                    {
-                        "spec_version": 1,
-                        "tenant_id": scope.tenant_id,
-                        "repo_id": scope.repo_id,
-                        "system_id": "offline-system",
-                        "services": [{"name": "compile-controller", "role": "orchestrator"}],
-                    },
-                    sort_keys=True,
-                ),
-                raw=None,
-                usage=None,
-            )
-        if stage == "orchestration_spec":
-            return LLMResponse(
-                text=json.dumps(
-                    {
-                        "spec_version": 1,
-                        "tenant_id": scope.tenant_id,
-                        "repo_id": scope.repo_id,
-                        "state_machine": {
-                            "initial_state": "start",
-                            "transitions": [
-                                {"from": "start", "event": "compile", "to": "done"},
-                            ],
-                        },
-                    },
-                    sort_keys=True,
-                ),
-                raw=None,
-                usage=None,
-            )
-        if stage == "agent_coordination":
-            return LLMResponse(
-                text=json.dumps(
-                    {
-                        "spec_version": 1,
-                        "tenant_id": scope.tenant_id,
-                        "repo_id": scope.repo_id,
-                        "agent_roles": {"planner": {"tools": ["llm.complete"]}},
-                        "coordination_graph": {"nodes": ["planner"], "edges": []},
-                    },
-                    sort_keys=True,
-                ),
-                raw=None,
-                usage=None,
-            )
-        if stage == "deployment_config":
-            return LLMResponse(
-                text=json.dumps(
-                    {
-                        "docker_compose": {"services": {"app": {"read_only": True}}},
-                        "kubernetes": {"securityContext": {"runAsNonRoot": True}},
-                    },
-                    sort_keys=True,
-                ),
-                raw=None,
-                usage=None,
-            )
-
-        # Default controller stages return a deterministic unified diff that
-        # exercises both code and tests. Hunks must be valid for GNU ``patch(1)``
-        # so opt-in ``scoped_apply`` can apply offline stubs under a scope root.
-        text = "\n".join(
-            [
-                "--- /dev/null",
-                "+++ b/src/akc_compiled.py",
-                "@@ -0,0 +1,1 @@",
-                f"+# compiled stage={stage} tenant={scope.tenant_id} repo={scope.repo_id}",
-                "",
-                "--- /dev/null",
-                "+++ b/tests/test_akc_compiled.py",
-                "@@ -0,0 +1,3 @@",
-                "+def test_compiled_smoke():",
-                "+    assert True",
-                "+",
-                "",
-            ]
-        )
-        return LLMResponse(text=text, raw=None, usage=None)
-
-
 def _extend_tool_allowlist_for_mcp(base: tuple[str, ...]) -> tuple[str, ...]:
     extra = ("mcp.resource.read", "mcp.tool.call")
     seen = set(base)
@@ -612,6 +512,8 @@ def _build_compile_config(
     test_mode: TestMode,
     compile_realization_mode: Literal["artifact_only", "scoped_apply"],
     apply_scope_root: str | None,
+    llm_backend: str = "offline",
+    llm_model: str | None = None,
 ) -> ControllerConfig:
     """Construct a ControllerConfig preset for CLI compile.
 
@@ -619,11 +521,19 @@ def _build_compile_config(
     - thorough: larger budget, full tests every iteration.
     """
 
-    tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
-        "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
-        "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
-        "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
-    }
+    if llm_backend == "offline":
+        tiers: dict[Literal["small", "medium", "large"], TierConfig] = {
+            "small": TierConfig(name="small", llm_model="offline-small", temperature=0.0),
+            "medium": TierConfig(name="medium", llm_model="offline-medium", temperature=0.2),
+            "large": TierConfig(name="large", llm_model="offline-large", temperature=0.3),
+        }
+    else:
+        selected_model = str(llm_model or "hosted-model").strip()
+        tiers = {
+            "small": TierConfig(name="small", llm_model=selected_model, temperature=0.0),
+            "medium": TierConfig(name="medium", llm_model=selected_model, temperature=0.2),
+            "large": TierConfig(name="large", llm_model=selected_model, temperature=0.3),
+        }
 
     if mode == "thorough":
         budget = Budget(max_llm_calls=12, max_repairs_per_step=4, max_iterations_total=8)
@@ -656,7 +566,7 @@ def _build_compile_config(
         opa_decision_path=opa_decision_path,
         compile_realization_mode=compile_realization_mode,
         apply_scope_root=apply_scope_root,
-        metadata={"mode": mode},
+        metadata={"mode": mode, "llm_backend": llm_backend, "llm_model": str(llm_model or "")},
     )
 
 
@@ -1056,6 +966,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
             effective_test_mode = "native_full" if str(args.mode) == "thorough" else "native_smoke"
         else:
             effective_test_mode = "full" if str(args.mode) == "thorough" else "smoke"
+    try:
+        llm_cfg = resolve_llm_runtime_config(
+            args=args,
+            env=os.environ,
+            project=(proj.llm if proj is not None else None),
+            surface="compile",
+        )
+    except ValueError as e:
+        print(f"LLM config error: {e}")
+        return 2
     config = _build_compile_config(
         mode=str(args.mode),
         policy_mode=policy_mode_effective,
@@ -1067,6 +987,8 @@ def cmd_compile(args: argparse.Namespace) -> int:
         test_mode=effective_test_mode,
         compile_realization_mode=compile_rm,
         apply_scope_root=apply_scope_root,
+        llm_backend=llm_cfg.backend,
+        llm_model=llm_cfg.model,
     )
     # Toolchain override mapping from `.akc/project.json` (used by preflight gate).
     if proj is not None and proj.toolchain is not None:
@@ -1153,6 +1075,39 @@ def cmd_compile(args: argparse.Namespace) -> int:
         apply_operator_knowledge_decisions=not bool(getattr(args, "no_operator_knowledge_decisions", False)),
         runtime_bundle_embed_system_ir=bool(getattr(args, "runtime_bundle_embed_system_ir", False)),
     )
+    policy_path_raw = str(getattr(args, "memory_policy_path", "") or "").strip()
+    if not policy_path_raw and proj is not None and proj.memory_policy_path is not None:
+        policy_path_raw = str(proj.memory_policy_path).strip()
+    memory_policy_path: str | None = None
+    if policy_path_raw:
+        p = Path(policy_path_raw).expanduser()
+        memory_policy_path = str((cwd / p).resolve()) if not p.is_absolute() else str(p.resolve())
+
+    merged_pins = parse_memory_pin_overrides(
+        tuple(proj.memory_pins if proj is not None else ()) + tuple(getattr(args, "memory_pin", []) or [])
+    )
+    merged_boosts = dict(proj.memory_boosts or {}) if proj is not None and proj.memory_boosts is not None else {}
+    cli_boosts = parse_memory_boost_overrides(list(getattr(args, "memory_boost", []) or []))
+    merged_boosts.update(cli_boosts)
+    weighted_budget: int | None = None
+    cli_budget = getattr(args, "memory_budget_tokens", None)
+    if cli_budget is not None:
+        weighted_budget = int(cli_budget)
+    elif proj is not None and proj.compile_memory_budget_tokens is not None:
+        weighted_budget = int(proj.compile_memory_budget_tokens)
+    elif proj is not None and proj.memory_budget_tokens is not None:
+        weighted_budget = int(proj.memory_budget_tokens)
+    weighted_enabled = bool(str(os.environ.get("AKC_WEIGHTED_MEMORY_ENABLED", "")).strip() == "1")
+    if memory_policy_path is not None or merged_pins or merged_boosts or weighted_budget is not None:
+        weighted_enabled = True
+    config = replace(
+        config,
+        weighted_memory_enabled=weighted_enabled,
+        weighted_memory_policy_path=memory_policy_path,
+        weighted_memory_pins=tuple(merged_pins),
+        weighted_memory_boosts=(dict(merged_boosts) if merged_boosts else None),
+        weighted_memory_budget_tokens=weighted_budget,
+    )
     if governance_profile is not None:
         config = config.with_governance_profile(
             assurance_mode=governance_profile.assurance_mode,
@@ -1228,6 +1183,16 @@ def cmd_compile(args: argparse.Namespace) -> int:
         md2["quality_evidence_expectations"] = dict(qee_effective)
     md2["developer_profile_auto_seed_step"] = bool(profile_resolved["auto_seed_deployable_step"].value)
     md2["developer_profile_intent_bootstrap_from_store"] = bool(profile_resolved["intent_bootstrap_from_store"].value)
+    md2.update(cast(dict[str, JSONValue], llm_metadata(config=llm_cfg, surface="compile")))
+    md2["weighted_memory_enabled"] = bool(config.weighted_memory_enabled)
+    if config.weighted_memory_policy_path is not None:
+        md2["weighted_memory_policy_path"] = str(config.weighted_memory_policy_path)
+    if config.weighted_memory_budget_tokens is not None:
+        md2["weighted_memory_budget_tokens"] = int(config.weighted_memory_budget_tokens)
+    if config.weighted_memory_pins:
+        md2["weighted_memory_pins"] = list(config.weighted_memory_pins)
+    if config.weighted_memory_boosts:
+        md2["weighted_memory_boosts"] = {str(k): float(v) for k, v in sorted(config.weighted_memory_boosts.items())}
     config = replace(config, metadata=md2)
     config = configure_compile_mcp_from_cli(
         config,
@@ -1239,7 +1204,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
         mcp_tool_jsons=list(getattr(args, "compile_mcp_tool", None) or []),
         tools_generate_only=bool(getattr(args, "compile_mcp_tools_generate_only", False)),
     )
-    llm = _OfflineLLM()
+    llm = build_llm_backend(config=llm_cfg)
 
     goal = args.goal or "Compile repository"
     intent_file = getattr(args, "intent_file", None)
@@ -1264,6 +1229,8 @@ def cmd_compile(args: argparse.Namespace) -> int:
         f"{sandbox_mode} (allow_network={allow_network}, memory_mb={sandbox_memory_mb}, "
         f"cpu_fuel={sandbox_cpu_fuel if sandbox_cpu_fuel is not None else 'none'})"
     )
+    print(f"  llm_backend: {llm_cfg.backend}")
+    print(f"  llm_model: {llm_cfg.model}")
     if sandbox_mode == "strong":
         print(f"  strong_lane_preference: {strong_lane_preference}")
         ulimit_nofile_s = docker_ulimit_nofile if docker_ulimit_nofile is not None else "unset"
@@ -1283,6 +1250,21 @@ def cmd_compile(args: argparse.Namespace) -> int:
         print(f"  apply_scope_root: {apply_scope_root}")
     print(f"  developer_role_profile: {developer_role_profile}")
     print(f"  promotion_mode: {promotion_mode} (require_deployable_steps={bool(require_deployable)})")
+    if config.weighted_memory_enabled:
+        wm_budget = (
+            config.weighted_memory_budget_tokens
+            if config.weighted_memory_budget_tokens is not None
+            else "policy_default"
+        )
+        print(
+            "  weighted_memory: enabled "
+            f"(policy={config.weighted_memory_policy_path or '.akc/memory_policy.json'}, "
+            f"budget_tokens={wm_budget})"
+        )
+        if config.weighted_memory_pins:
+            print(f"    pins: {list(config.weighted_memory_pins)}")
+        if config.weighted_memory_boosts:
+            print(f"    boosts: {dict(config.weighted_memory_boosts)}")
     if bool(getattr(args, "compile_mcp", False)):
         print(f"  compile_mcp: enabled (config={config.compile_mcp_config_path})")
         print(f"    resources: {list(config.compile_mcp_resource_uris)}")

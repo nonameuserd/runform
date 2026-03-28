@@ -1,464 +1,312 @@
-# AKC CLI commands
+# AKC CLI Reference
 
-This document lists the `akc` command-line interface as implemented in `src/akc/cli/`. Run `akc --version` for the installed package version.
+This page summarizes the current `akc` command tree implemented under `src/akc/cli/`.
 
-**Global:** `akc` requires a subcommand. Root parser program name is `akc` with description “Agentic Knowledge Compiler”.
+For exact flags, run `akc <command> --help` or `uv run akc <command> --help`.
+
+## Top-level commands
 
-**Optional feature gate**
+Current top-level commands:
 
-- `**action` subtree** — Only registered when the environment variable `AKC_ACTION_PLANE=1` is set (intent parse / plan / execute for the action plane).
+- `init`
+- `assistant`
+- `ingest`
+- `mcp`
+- `slack`
+- `drift`
+- `watch`
+- `living-recompile`
+- `living-webhook-serve`
+- `living-doctor`
+- `verify`
+- `compile`
+- `eval`
+- `runtime`
+- `metrics`
+- `policy`
+- `control`
+- `control-bot`
+- `deliver`
+- `fleet`
+- `view`
 
-**Optional install extras**
+Optional top-level command:
 
-- `**akc mcp serve`** — Requires the `mcp-serve` extra (`uv sync --extra mcp-serve`). Ingest with the MCP connector may require the `ingest-mcp` extra (see `akc ingest --help`).
+- `action` only when `AKC_ACTION_PLANE=1`
 
-**Top-level commands** (see sections below for subcommands):
+## Feature-gated or extra-backed surfaces
 
-`init`, `ingest`, `mcp`, `slack`, `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor`, `verify`, `compile`, `eval`, `runtime`, `metrics`, `policy`, `control`, `**control-bot`**, `deliver`, `fleet`, `view`, and — when `AKC_ACTION_PLANE=1` — `action`.
+- `akc mcp serve` requires the `mcp-serve` extra
+- `akc ingest --connector mcp` requires the `ingest-mcp` extra
+- `akc deliver` store-provider integrations use the `delivery-providers` extra
 
----
+## Command guide
 
-## `akc init`
+### `akc init`
 
-Create `.akc/project.json` with repo-scoped defaults (tenant, repo, outputs root, developer role profile) and, by default, a local OPA policy stub under `.akc/policy/`. With `--detect`, also emits `.akc/project_profile.json` from repository analysis. Optional `--adoption-level` can record the progressive-takeover ladder hint in the project file.
+Creates `.akc/project.json` and, by default, a local compile policy stub under `.akc/policy/`.
 
-Same **Observer** step as [getting-started.md](getting-started.md): `akc init --detect`.
+Useful flags:
 
-**Progressive takeover (`adoption_level` in `.akc/project.json`)** — informational hint set via `akc init --adoption-level …` (or edited in the project file). Accepted tokens:
+- `--detect` to write `.akc/project_profile.json`
+- `--adoption-level` to store a progressive-adoption hint
 
+### `akc assistant`
 
-| Level        | Tokens (examples)                | Typical CLI surface                                                                                                                                 |
-| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0 — Observer | `observer`, `0`, `read_only`     | `init --detect`, `ingest --connector codebase`, `view`                                                                                              |
-| 1 — Advisor  | `advisor`, `1`, `artifact_only`  | `compile --artifact-only` / `--compile-realization-mode artifact_only`                                                                              |
-| 2 — Copilot  | `copilot`, `2`, `scoped_apply`   | `compile --compile-realization-mode scoped_apply`, `--apply-scope-root`, OPA allow `compile.patch.apply`                                            |
-| 3 — Compiler | `compiler`, `3`                  | `compile` + `runtime` (`start`, `coordination-plan`, living recompile, SLO-gated `runtime autopilot`; see [getting-started.md](getting-started.md)) |
-| 4 — Autonomy | `autonomy`, `4`, `full_autonomy` | `runtime autopilot`, fleet automation; policy-only boundaries                                                                                       |
+CLI assistant surface for planning and executing existing AKC commands.
 
+Key behaviors:
 
-`**--developer-role-profile`** (stored in project.json): `classic` | `emerging` (init default when writing the file: `emerging`; global CLI fallback without a project file can differ — see getting started).
+- interactive mode with `akc assistant`
+- single-turn mode with `akc assistant -p "..."`
+- modes: `plan` or `execute`
+- default planner is offline and local
+- optional hosted planner support uses the shared LLM flags:
+  - `--llm-backend`
+  - `--llm-model`
+  - `--llm-base-url`
+  - `--llm-api-key`
+  - `--llm-timeout-s`
+  - `--llm-max-retries`
+  - `--llm-allow-network`
+  - `--llm-backend-class`
+- optional weighted-memory flags:
+  - `--memory-policy-path`
+  - `--memory-pin`
+  - `--memory-boost`
+  - `--memory-budget-tokens`
 
----
+### `akc ingest`
 
-## `akc ingest`
+Ingests sources into a vector index.
 
-Ingest sources into a pluggable vector index (connectors: `docs`, `codebase`, `openapi`, `slack`, `discord`, `telegram`, `whatsapp`, `mcp`). Supports embedders, index backends (`memory`, `sqlite`, `pgvector`), chunking, connector-specific options, assertion index merge, and post-ingest `--query`.
+Current connectors:
 
-Typical **codebase** indexing (offline / deterministic), as in getting started: `--tenant-id … --connector codebase --input . --embedder hash --index-backend sqlite` (see [getting-started.md](getting-started.md)).
+- `docs`
+- `codebase`
+- `openapi`
+- `slack`
+- `discord`
+- `telegram`
+- `whatsapp`
+- `mcp`
 
----
+Current index backends:
 
-## `akc mcp`
+- `memory`
+- `sqlite`
+- `pgvector`
 
-Run AKC as an MCP server exposing read-only tools (install extra required).
+Embedders:
 
+- `none`
+- `hash`
+- `openai`
+- `gemini`
 
-| Subcommand | Purpose                                                                                                    |
-| ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `serve`    | Start the MCP server (stdio by default, or streamable HTTP / SSE) with optional index backing for queries. |
+### `akc mcp`
 
+Runs AKC as a read-only MCP server.
 
----
+Current subcommand:
 
-## `akc slack`
+- `serve`
 
-Slack-related utilities.
+### `akc slack`
 
+Slack utilities.
 
-| Subcommand      | Purpose                                                    |
-| --------------- | ---------------------------------------------------------- |
-| `list-channels` | List Slack channels (token via flag or `AKC_SLACK_TOKEN`). |
+Current subcommand:
 
+- `list-channels`
 
----
+### `akc drift`
 
-## `akc drift`
+Detect drift between sources and emitted outputs.
 
-Detect drift between sources and emitted outputs under an outputs root (`<tenant>/<repo>/manifest.json`), using optional ingest state and living baseline paths. Can `--update-baseline` or emit `text` / `json`.
+### `akc watch`
 
----
+Poll ingest state and run drift checks.
 
-## `akc watch`
+### `akc living-recompile`
 
-Poll an ingest state file and run drift checks with debouncing; optional `--exit-on-drift`.
+Run safe recompiles when drift is detected.
 
----
+Hosted LLM support uses the same shared flags as compile. Offline remains the default.
 
-## `akc living-recompile`
+### `akc living-webhook-serve`
 
-When sources drift, run a **safe recompile** of impacted outputs (living loop): policy mode, canary/acceptance budgets, LLM mode (offline or custom backend), OPA paths, and optional baseline update after acceptance.
+Signed webhook receiver for living recompile triggers.
 
----
+### `akc living-doctor`
 
-## `akc living-webhook-serve`
+Validate unattended living wiring and related assumptions.
 
-HTTP webhook receiver (signed) for fleet `recompile_triggers` / `living_drift` payloads that triggers one-shot living recompile. Bind address, secret, allowlists, and compile-related flags mirror the living recompile surface.
+### `akc verify`
 
----
+Verify emitted artifacts for a tenant and repo.
 
-## `akc living-doctor`
+This is the post-compile validation step that pairs naturally with `akc compile`.
 
-Validate unattended living wiring: automation profile, paths, eval suite hooks, lease backend expectations (filesystem vs Kubernetes), and related claims.
+Useful validation flags:
 
----
+- `--execute-validators` to run operator-side observability/mobile validators before operational coupling verification
+- `--validator-bindings` to override the validator registry path
 
-## `akc verify`
+See [validation.md](validation.md) for the registry format and `operational_spec` examples.
 
-Verify emitted artifacts for a tenant/repo: tests, verifier results, optional formal tools (`--dafny`, `--verus`), operational coupling / replay attestation, and optional `--living-unattended` checks (same family as `living-doctor`).
+### `akc compile`
 
----
+Runs the compile loop:
 
-## `akc compile`
+**Plan -> Retrieve -> Generate -> Execute -> Repair**
 
-Run the **compile loop** (plan → retrieve → generate → execute → repair) for a tenant/repo; emit manifest and test artifacts. Default LLM backend is offline. Covers intent files, scoped apply vs artifact-only modes, sandboxing, replay modes, OPA policy, MCP hooks at compile time, promotion modes, and extensive tuning flags.
+Important defaults and flags:
 
-### Realization (working tree)
+- default realization mode is `scoped_apply`
+- `--artifact-only` is the safe alias for `--compile-realization-mode artifact_only`
+- `--mode` supports `quick` and `thorough`
+- `--test-mode` supports `smoke`, `full`, `native_smoke`, `native_full`
+- `--policy-mode` supports `audit_only` and `enforce`
+- `--replay-mode` supports `live`, `llm_vcr`, `full_replay`, `partial_replay`
 
+Weighted-memory flags on compile:
 
-| `--compile-realization-mode` | Meaning                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `scoped_apply`               | Default. Policy-gated patch apply under `--apply-scope-root` (or `--work-root` / outputs scope when that root is omitted). |
-| `artifact_only`              | No working-tree writes; patches and related outputs are artifacts only.                                                    |
+- `--memory-policy-path`
+- `--memory-pin`
+- `--memory-boost`
+- `--memory-budget-tokens`
 
+Compile-time skills and MCP integrations are also exposed here:
 
-`--artifact-only` is a boolean alias for `--compile-realization-mode artifact_only`.
+- `--compile-skills-mode`
+- `--compile-skill`
+- `--compile-skill-extra-root`
+- `--compile-mcp`
 
-**Scoped apply extras:** `--rollback-snapshots` / `--no-rollback-snapshots`, `--git-branch-per-run`, `--git-commit`, `--git-commit-message`.
+Hosted/offline generation backend flags on compile:
 
-### Cost / coverage preset
+- `--llm-backend`
+- `--llm-model`
+- `--llm-base-url`
+- `--llm-api-key`
+- `--llm-timeout-s`
+- `--llm-max-retries`
+- `--llm-allow-network`
+- `--llm-backend-class`
 
+Git-aware `scoped_apply` flags:
 
-| `--mode`   | Meaning                              |
-| ---------- | ------------------------------------ |
-| `quick`    | Lower-cost compile preset (default). |
-| `thorough` | Higher-coverage compile preset.      |
+- `--apply-scope-root` sets the absolute repo/work-tree root allowed to receive patch mutations
+- `--git-branch-per-run` creates `akc/compile/<patch_sha_prefix>` before apply
+- `--git-commit` stages only touched paths and commits the applied patch
+- `--git-commit-message` overrides the default commit message `AKC scoped_apply <sha>`
+- `--rollback-snapshots` and `--no-rollback-snapshots` control file-copy snapshots under `.akc/rollback/`
 
+Operational notes:
 
-### Test gate
+- Git behavior is only active for `scoped_apply`; `artifact_only` never touches the work tree
+- If git flags are requested and `git` is unavailable, or `--apply-scope-root` is not a git repo, AKC fails closed instead of silently downgrading
+- Patch application still uses `patch(1)` with strict preflight and mutation-path confinement; Git is optional provenance and rollback hygiene around that path
+- Hosted LLM backends are opt-in; offline is still the default
+- Hosted backends fail closed unless `--llm-allow-network` or `AKC_LLM_ALLOW_NETWORK=1` is set
 
+### `akc eval`
 
-| `--test-mode`  | Meaning                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------ |
-| `smoke`        | Shorter validation gate (uses controller test command, default pytest-style, unless overridden).       |
-| `full`         | Full validation gate.                                                                                  |
-| `native_smoke` | Derive lint/typecheck/build/test commands from the detected project toolchain; smoke-style scheduling. |
-| `native_full`  | Same toolchain derivation; full-style scheduling.                                                      |
+Runs a versioned evaluation suite with deterministic checks and optional regression gating.
 
+### `akc runtime`
 
-When `--test-mode` is omitted, it defaults from `--mode` (`quick` → smoke, `thorough` → full) unless `adoption_level` in the project requests native validation. `--native-test-mode` forces toolchain-resolved commands while keeping `smoke` vs `full` scheduling when paired with `--test-mode smoke|full`.
+Operates runtime bundles and runtime state.
 
-### Promotion state machine
+Current subcommands:
 
+- `start`
+- `coordination-plan`
+- `stop`
+- `status`
+- `events`
+- `reconcile`
+- `checkpoint`
+- `replay`
+- `autopilot`
 
-| `--promotion-mode` | Meaning                                                        |
-| ------------------ | -------------------------------------------------------------- |
-| `artifact_only`    | Promotion machine: artifacts only (default in dev when unset). |
-| `staged_apply`     | Staged promotion path (default in non-dev when unset).         |
-| `live_apply`       | Live promotion path.                                           |
+See [runtime-execution.md](runtime-execution.md) for the runtime model.
 
+### `akc metrics`
 
-Related: `--require-deployable-steps` / `--no-require-deployable-steps` (empty deployable plan fail-closed defaults tie to staged/live).
+Reads control-plane metrics from the scoped metrics store.
 
-### Replay policy
+### `akc policy`
 
+Policy governance and decision explainability helpers.
 
-| `--replay-mode`  | Meaning                             |
-| ---------------- | ----------------------------------- |
-| `live`           | Default: call model and tools live. |
-| `llm_vcr`        | Replay recorded model I/O.          |
-| `full_replay`    | Replay model + tools.               |
-| `partial_replay` | Replay model; execute tools live.   |
+### `akc control`
 
+Operator-oriented control-plane commands for runs, replay forensics, exports, and policy bundles.
 
-### Tool authorization policy (OPA)
+### `akc control-bot`
 
+Standalone multi-channel operator gateway.
 
-| `--policy-mode` | Meaning                                      |
-| --------------- | -------------------------------------------- |
-| `enforce`       | Default. Denied tool actions block the run.  |
-| `audit_only`    | Denied actions are logged; run may continue. |
+Current subcommands:
 
+- `validate-config`
+- `serve`
 
-Rego path: `--opa-policy-path` (or env / `.akc/project.json`).
+### `akc deliver`
 
-### Progressive takeover — same flags as [getting-started.md](getting-started.md)
+Named-recipient delivery sessions and delivery lifecycle operations.
 
+Current subcommands:
 
-| Ladder step | Key flags                                                                                                                                                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Advisor** | `--artifact-only` (or `--compile-realization-mode artifact_only`), plus `--tenant-id`, `--repo-id`, `--outputs-root`, …                                                                                             |
-| **Copilot** | `--compile-realization-mode scoped_apply`, `--apply-scope-root`, `--policy-mode enforce`, `--opa-policy-path` (e.g. `./.akc/policy/compile_tools.rego`; allow `compile.patch.apply` in Rego when applying patches). |
+- `status`
+- `events`
+- `resend`
+- `promote`
+- `gate-pass`
+- `activation-report`
+- `web-invite-open`
 
+Base command flags support creating a session directly with:
 
----
+- `--request`
+- `--recipient` or `--recipients-file`
+- `--compile`
+- `--platforms`
+- `--release-mode`
 
-## `akc eval`
+### `akc fleet`
 
-Run a versioned eval suite (intent→system tasks) with deterministic checks, selective judge scoring, and regression gates against an optional baseline report.
+Cross-shard control-plane surfaces.
 
----
+Current subcommands:
 
-## `akc runtime`
+- `serve`
+- `dashboard-serve`
+- `runs`
+- `webhooks-deliver`
+- `automation-run`
+- `policy-bundle`
 
-Operate the **runtime control plane** from runtime bundles and persisted run state.
-
-
-| Subcommand          | Purpose                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `start`             | Start a runtime run from a `runtime_bundle.json` (modes, strict intent authority, coordination overrides, delivery lane). |
-| `coordination-plan` | Print deterministic coordination schedule layers from a bundle (read-only).                                               |
-| `stop`              | Request stop for a runtime run.                                                                                           |
-| `status`            | Show runtime run status.                                                                                                  |
-| `events`            | Show runtime event transcript (`--follow` supported).                                                                     |
-| `reconcile`         | Run reconcile for an existing run (`--dry-run` or `--apply`; optional `--watch` loop).                                    |
-| `checkpoint`        | Show runtime checkpoint.                                                                                                  |
-| `replay`            | Replay runtime evidence (`runtime_replay` or `reconcile_replay` mode).                                                    |
-| `autopilot`         | Long-running controller: living recompile + reliability KPIs, leases, budgets, optional SLO gate before rollouts.         |
-
-
-### `runtime start`
-
-
-| Flag                                    | Choices / notes                                                                                                                      |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `--mode`                                | `simulate` — dry/simulated reconcile; `enforce` — normal enforcement; `canary` — canary rollout posture.                             |
-| `--coordination-parallel-dispatch`      | `inherit` (default) — use bundle contract; `enabled` / `disabled` — override.                                                        |
-| `--coordination-max-in-flight-steps`    | Integer; cap parallel steps when parallel dispatch is enabled.                                                                       |
-| `--coordination-max-in-flight-per-role` | Integer; per-role cap when parallel dispatch is enabled.                                                                             |
-| `--delivery-target-lane`                | `staging` | `production` — maps health timestamps to delivery lifecycle fields (default: env `AKC_DELIVERY_TARGET_LANE` or staging). |
-| `--developer-role-profile`              | `classic` | `emerging` (default: env, then project file, then classic).                                                              |
-| `--format`                              | `text` | `json` — diagnostics / structured policy denial on policy-related failures.                                                 |
-| `--strict-intent-authority`             | Require intent store + projection match before running (see `--help`).                                                               |
-
-
-### `runtime reconcile`
-
-Exactly one of `**--dry-run`** (simulate) or `**--apply**` (mutate) is required.
-
-
-| Flag                               | Meaning                                                          |
-| ---------------------------------- | ---------------------------------------------------------------- |
-| `--watch`                          | Bounded multi-iteration reconcile loop (level-triggered resync). |
-| `--watch-interval-sec`             | Sleep between iterations (default `5`).                          |
-| `--watch-max-iterations`           | Max iterations (default `30`).                                   |
-| `--coordination-parallel-dispatch` | Same choices as `start`: `inherit` | `enabled` | `disabled`.     |
-| `--strict-intent-authority`        | Same as `start`.                                                 |
-
-
-### `runtime replay`
-
-
-| `--mode`           | Meaning                                         |
-| ------------------ | ----------------------------------------------- |
-| `runtime_replay`   | Replay using runtime evidence path for the run. |
-| `reconcile_replay` | Replay reconcile-focused evidence.              |
-
-
-### `runtime autopilot`
-
-
-| Flag                          | Choices / notes                                                                                                                    |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `--policy-mode`               | `enforce` (default) | `audit_only` — passed through to safe recompile.                                                             |
-| `--canary-mode`               | `quick` (default) | `thorough` — canary eval depth.                                                                                |
-| `--accept-mode`               | `quick` | `thorough` (default) — acceptance eval depth.                                                                            |
-| `--lease-backend`             | `filesystem` (default) | `k8s` — controller leadership lease.                                                                      |
-| `--env-profile`               | `dev` | `staging` (default) | `prod` — safety / drift pacing profile; with `--unattended-defaults`, drives autonomy budget matrix. |
-| `--living-automation-profile` | `off` | `living_loop_v1` | `living_loop_unattended_v1` (or env / `.akc/project.json`).                                             |
-| `--unattended-defaults`       | Use env-profile matrix for autonomy budgets and drift interval (**requires** `living_loop_unattended_v1`).                         |
-
-
-**Reliability SLO gate** (block rollouts until KPIs pass): `--slo-gate`, plus tunables `--slo-min-rollouts`, `--slo-min-policy-compliance-rate`, `--slo-min-rollback-success-rate`, `--slo-max-change-instability-proxy`. When autonomy-level adoption is configured, defaults may align with gated rollouts — see [getting-started.md](getting-started.md) and `akc runtime autopilot --help`.
-
-**Autonomy budgets** (required unless `--unattended-defaults`): `--max-mutations-per-day`, `--max-concurrent-rollouts`, `--rollback-budget-per-day`, `--max-consecutive-rollout-failures`, `--max-rollbacks-per-day-before-escalation`, `--cooldown-after-failure-ms`, `--cooldown-after-policy-deny-ms`.
-
----
-
-## `akc metrics`
-
-Query control-plane cost metrics from `<outputs_root>/<tenant>/.akc/control/metrics.sqlite`.
-
----
-
-## `akc policy`
-
-Policy governance metadata and explainability (read-only).
-
-
-| Subcommand | Purpose                                                                                                                        |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `explain`  | Show policy provenance and recorded decisions for a run (via manifest path or run id + outputs layout); optional audit append. |
-
-
----
-
-## `akc control`
-
-Operator **control-plane indexes** under `<outputs_root>/<tenant>/.akc/control/` (for example `operations.sqlite`).
-
-### `akc control runs`
-
-
-| Subcommand      | Purpose                                                                                                  |
-| --------------- | -------------------------------------------------------------------------------------------------------- |
-| `list`          | List indexed runs with optional filters (time range, intent hash, recompile triggers, runtime evidence). |
-| `show`          | Show one run and indexed sidecar pointers.                                                               |
-| `label` → `set` | Set one label key/value on a run row.                                                                    |
-
-
-### `akc control index`
-
-
-| Subcommand | Purpose                                                        |
-| ---------- | -------------------------------------------------------------- |
-| `rebuild`  | Rebuild `operations.sqlite` by scanning tenant manifest files. |
-
-
-### `akc control manifest`
-
-
-| Subcommand | Purpose                                                                                               |
-| ---------- | ----------------------------------------------------------------------------------------------------- |
-| `diff`     | Diff two manifests (paths or run ids): intent hash, control-plane refs, passes, partial replay hints. |
-
-
-### `akc control replay`
-
-
-| Subcommand  | Purpose                                                                                   |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `forensics` | Summarize `replay_decisions.json` (pass triggers, input snapshots).                       |
-| `plan`      | Effective partial-replay pass set and suggested `akc compile` flags (JSON; no execution). |
-
-
-### `akc control incident`
-
-
-| Subcommand | Purpose                                                                                        |
-| ---------- | ---------------------------------------------------------------------------------------------- |
-| `export`   | Slim incident bundle: manifest, replay decisions, costs, runtime evidence, knowledge snapshot. |
-
-
-### `akc control forensics`
-
-
-| Subcommand | Purpose                                                                                  |
-| ---------- | ---------------------------------------------------------------------------------------- |
-| `export`   | Cross-signal forensics bundle (replay, coordination, OTel, knowledge, operations index). |
-
-
-### `akc control playbook`
-
-
-| Subcommand | Purpose                                                                                                                                                                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`      | Read-only playbook across two run ids: manifest diff, replay forensics, incident export; writes report under `.akc/control/playbooks/`; optional webhooks / fleet notify. |
-
-
-### `akc control policy-bundle`
-
-Tenant/repo `policy_bundle.json` lifecycle metadata (not Rego execution here).
-
-
-| Subcommand          | Purpose                                                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `validate`          | Validate against frozen JSON schema.                                                                         |
-| `show`              | Print bundle JSON, fingerprint, validation status.                                                           |
-| `effective-profile` | Resolve effective governance profile from the bundle.                                                        |
-| `write`             | Write a validated bundle from a JSON file; updates operations index and control audit (unless `--no-audit`). |
-
-
----
-
-## `akc control-bot`
-
-Dedicated multi-channel operator gateway (**top-level** command; not under `akc control`). Standalone HTTP service, not fleet HTTP.
-
-
-| Subcommand        | Purpose                                              |
-| ----------------- | ---------------------------------------------------- |
-| `validate-config` | Validate control-bot config (schema + typed checks). |
-| `serve`           | Run the control-bot gateway HTTP service.            |
-
-
----
-
-## `akc deliver`
-
-Named-recipient **delivery sessions**: capture a plain-language request, authoritative recipient list, and platform targets under `.akc/delivery/<id>/`. Packaging and release lanes consume compile-time `delivery_plan` / runtime outputs.
-
-**Default action (no subcommand):** `submit` — create session from `--request`, `--recipient` / `--recipients-file`, `--platforms`, `--release-mode`, optional `--compile` to run `akc compile` and bind outputs.
-
-
-| Subcommand          | Purpose                                                                        |
-| ------------------- | ------------------------------------------------------------------------------ |
-| `status`            | Show delivery request + session JSON for a `delivery_id`.                      |
-| `events`            | List delivery control-plane events.                                            |
-| `resend`            | Record a resend request for one recipient.                                     |
-| `promote`           | Request promotion to a release lane (`beta` or `store`).                       |
-| `gate-pass`         | Record human readiness gate (e.g. before store when `release_mode` is `both`). |
-| `activation-report` | Ingest client activation JSON (first run / heartbeat).                         |
-| `web-invite-open`   | Record a signed web invite open for beta proof.                                |
-
-
----
-
-## `akc fleet`
-
-Fleet control plane: aggregate operations indexes across many `outputs_root` trees — read-only HTTP API, optional static operator dashboard, webhook helpers, automation, and cross-shard policy bundle operations.
-
-
-| Subcommand                     | Purpose                                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------------------- |
-| `serve`                        | Run read-only HTTP query API (stdlib server).                                            |
-| `dashboard-serve`              | Serve static read-only operator dashboard.                                               |
-| `runs` → `list`                | List runs merged across shards (JSON to stdout).                                         |
-| `runs` → `show`                | Show one run across shards (first match).                                                |
-| `webhooks-deliver`             | POST paged webhooks for `recompile_triggers` / `living_drift` signals.                   |
-| `automation-run`               | Bounded cross-shard automation coordinator (control-plane only).                         |
-| `policy-bundle` → `distribute` | Distribute a validated policy bundle revision to eligible shards; optional `--activate`. |
-| `policy-bundle` → `drift`      | Report shard drift for policy revisions / activation markers.                            |
-| `serve-smoke`                  | Hidden smoke helper for tests (`argparse.SUPPRESS`).                                     |
-
-
----
-
-## `akc view`
+### `akc view`
 
 Read-only local viewer over plan state and emitted artifacts.
 
+Current subcommands:
 
-| Subcommand | Purpose                                                                     |
-| ---------- | --------------------------------------------------------------------------- |
-| `tui`      | Interactive terminal UI (curses).                                           |
-| `web`      | Generate a static HTML viewer bundle; optional local `--serve` on loopback. |
-| `export`   | Export a portable evidence bundle (directory + zip by default).             |
+- `tui`
+- `web`
+- `export`
 
+## Safe starting commands
 
----
+If you are new to the repository, these are the least surprising places to start:
 
-## `akc action` (requires `AKC_ACTION_PLANE=1`)
-
-
-| Subcommand         | Purpose                                                                                               |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `submit`           | Submit a natural-language action request (tenant/repo/channel); optional `--dry-run` or `--simulate`. |
-| `status`           | Get action intent status by `--intent-id`.                                                            |
-| `approve`          | Approve one pending action step.                                                                      |
-| `replay`           | Replay action intent execution (`simulate` or `live`).                                                |
-| `dispatch-channel` | Dispatch a channel adapter payload file into the submit flow.                                         |
-
-
----
-
-## Source of truth
-
-Command names and help strings are defined in:
-
-- `src/akc/cli/__init__.py` — main parser and most subcommands
-- `src/akc/cli/init.py` — `init`
-- `src/akc/cli/mcp_serve.py` — `mcp`
-- `src/akc/cli/deliver.py` — `deliver`
-- `src/akc/cli/fleet.py` — `fleet`
-
-When in doubt, run `akc <command> --help` for the exact flags and defaults for your installed version.
+```bash
+akc init --detect
+akc ingest --tenant-id demo --connector codebase --input . --embedder hash --index-backend sqlite
+akc compile --tenant-id demo --repo-id runform --outputs-root ./out --artifact-only
+akc verify --tenant-id demo --repo-id runform --outputs-root ./out
+akc view --tenant-id demo --repo-id runform --outputs-root ./out web
+```

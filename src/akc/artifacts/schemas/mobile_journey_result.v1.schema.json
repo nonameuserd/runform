@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:mobile_journey_result:v1",
+  "title": "AKC mobile journey result",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:mobile_journey_result:v1"
+    },
+    "binding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "android",
+        "ios"
+      ]
+    },
+    "device_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "journey_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "error"
+      ]
+    },
+    "started_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ended_at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "assertions_passed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "assertions_failed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "media_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "media_type",
+          "sha256"
+        ]
+      }
+    },
+    "fingerprint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "binding_id",
+    "platform",
+    "device_id",
+    "journey_id",
+    "status",
+    "started_at_ms",
+    "ended_at_ms",
+    "assertions_passed",
+    "assertions_failed",
+    "artifacts",
+    "fingerprint_sha256"
+  ]
+}

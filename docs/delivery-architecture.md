@@ -1,187 +1,288 @@
-# Delivery — architecture implementation
+# Delivery Architecture
 
-This document describes how **named-recipient delivery** is implemented in the Agentic Knowledge Compiler: CLI surface, on-disk control-plane artifacts, code layout, and how delivery sits **above** `akc compile` (packaging and distribution consume compile-time `delivery_plan` / manifest refs, not the core compile controller loop).
+This document describes the current delivery architecture implemented in this repository.
 
-## Goals (summary)
+AKC delivery is a **named-recipient control plane** built around `akc deliver` and tenant-scoped delivery artifacts under `.akc/delivery/<delivery_id>/`.
 
-- Capture a plain-language **request**, explicit **recipients** (never inferred only from free text), **platforms** (`web`, `ios`, `android`), and **release mode** (`beta`, `store`, `both`).
-- Optionally run **`akc compile`**, bind compile outputs to the session, run **packaging**, then **distribution** adapters (beta wave first when `release_mode=both`; store promotion after operator gate + `promote`).
-- Persist a versioned **delivery request** and **session** under `.akc/delivery/<delivery_id>/`, with events, recipient rows, provider state, and activation evidence.
-- Fail closed on missing provider prerequisites per lane; partial per-platform failure is visible in session state.
+It sits **after** compile. `akc compile` may emit a `delivery_plan` and related manifest/runtime refs, but delivery orchestration, packaging, recipient tracking, distribution, and activation evidence are separate from the core compile controller loop.
 
-## CLI commands (from the v1 plan)
+## Overview
 
-The plan defines these public workflows. Paths and placeholders are illustrative — use the `delivery_id` printed by the submit command in your project.
+Delivery turns a plain-language request plus an explicit recipient list into a tracked delivery session.
 
-**Submit** — create a delivery session from a request and explicit recipients:
+Current responsibilities:
 
-```bash
-akc deliver \
-  --request "build an app and send it to these 3 users" \
-  --recipient alice@example.com \
-  --recipient bob@example.com \
-  --recipient carol@example.com \
-  --platforms web,ios,android \
-  --release-mode both
-```
+- capture a delivery request, explicit recipients, platforms, release mode, and logical delivery version
+- persist request/session/events/sidecars under `.akc/delivery/<delivery_id>/`
+- optionally run `akc compile`, then bind compile outputs back onto the delivery request/session
+- run packaging lanes for `web`, `ios`, and `android`
+- run distribution lanes for beta and store delivery, with beta-first sequencing for `release_mode=both`
+- collect provider-side and app-side activation evidence and roll it up into session state
+- sync delivery summaries into the tenant operations index when project scoping matches the outputs layout
 
-**Status** — load request, session, and computed metrics:
+The delivery flow is intentionally **control-plane first**: state is explicit, artifacts are versioned, and every lifecycle transition is reflected in `session.json` and `events.json`.
 
-```bash
-akc deliver status --delivery-id <delivery_id>
-```
+## Current command surface
 
-**Events** — list control-plane timeline entries:
+Primary CLI entry point:
 
-```bash
-akc deliver events --delivery-id <delivery_id>
-```
+- `akc deliver` with no subcommand performs the default **submit** action
 
-**Resend** — record a resend for one recipient (adapters consume this later):
+Current subcommands:
 
-```bash
-akc deliver resend --delivery-id <delivery_id> --recipient alice@example.com
-```
+- `status`
+- `events`
+- `resend`
+- `promote`
+- `gate-pass`
+- `activation-report`
+- `web-invite-open`
 
-**Promote** — request promotion to a lane (e.g. store after beta readiness):
+Important submit flags:
 
-```bash
-akc deliver promote --delivery-id <delivery_id> --lane store
-```
+- `--project-dir`
+- `--request`
+- `--recipient`
+- `--recipients-file`
+- `--platforms`
+- `--release-mode`
+- `--delivery-version`
+- `--compile`
 
-## CLI — implementation flags and subcommands
+Important behavior:
 
-Implementation extends the plan with project scoping, compile/packaging orchestration, structured recipient files, evidence ingestion, and human gate recording.
+- recipients are **authoritative** and must come from `--recipient` and/or `--recipients-file`; they are not inferred from free text
+- `--compile` runs `akc compile` from `--project-dir`, then binds compile handoff refs and runs packaging
+- after successful packaging, delivery automatically runs the first distribution wave
+- for `release_mode=both`, the automatic post-package wave is **beta only**; store promotion requires `gate-pass` and then `promote --lane store`
 
-**Global / submit (default action when no subcommand is given)**
+## Delivery layout
 
-| Flag                 | Purpose                                                                                                                             |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `--project-dir`      | Project root containing `.akc/` (default: current directory)                                                                        |
-| `--request`          | Plain-language delivery goal (required for submit)                                                                                  |
-| `--recipient`        | Repeat per email; **authoritative** list (not parsed from `--request`)                                                              |
-| `--recipients-file`  | JSON `{"recipients": [...]}` / `{"emails": [...]}` or one email per line; merged with `--recipient`                                 |
-| `--platforms`        | Comma-separated: `web`, `ios`, `android` (default: `web,ios,android`)                                                               |
-| `--release-mode`     | `beta` \| `store` \| `both` (default: `beta`)                                                                                       |
-| `--delivery-version` | Logical version for the session; drives provider build metadata (default: `1.0.0`)                                                  |
-| `--compile`          | Run `akc compile` in the project, bind delivery_plan/manifest refs, then **packaging** (and beta distribution wave when applicable) |
+Per delivery session, AKC writes:
 
-**Additional subcommands**
+- `.akc/delivery/<delivery_id>/request.json`
+- `.akc/delivery/<delivery_id>/session.json`
+- `.akc/delivery/<delivery_id>/recipients.json`
+- `.akc/delivery/<delivery_id>/events.json`
+- `.akc/delivery/<delivery_id>/provider_state.json`
+- `.akc/delivery/<delivery_id>/activation_evidence.json`
 
-```bash
-# Record human readiness (required before store promotion when release_mode is both)
-akc deliver gate-pass --delivery-id <delivery_id> [--note "optional audit note"]
+Related local-only operator input:
 
-# Ingest activation JSON from the app client (stdin or file)
-akc deliver activation-report --delivery-id <delivery_id> [--json-file path/to/payload.json]
+- `.akc/delivery/operator_prereqs.json`
 
-# Record provider proof for web beta: signed invite open (HMAC from invite URL)
-akc deliver web-invite-open \
-  --delivery-id <delivery_id> \
-  --invite-token-id <token> \
-  --signature <hex_akc_sig>
-```
+Related compile handoff artifacts:
 
-Subcommands that accept it: `--project-dir` on `status`, `events`, `resend`, `promote`, `gate-pass`, `activation-report`, `web-invite-open`.
+- `.akc/deployment/<run_id>.delivery_plan.json`
+- `.akc/run/<run_id>.manifest.json`
+- `.akc/runtime/<run_id>.runtime_bundle.json`
 
-**Exit codes** — submit with `--compile` returns non-zero if compile fails or packaging reports failure; `promote --lane store` returns non-zero if distribution dispatch reports failure.
+The request/session documents store only **refs and summaries** of compile outputs. Delivery does not copy the full compile artifacts into its own sidecars.
 
-## Optional dependencies
+## Main modules
 
-Provider HTTP and signing (e.g. App Store Connect JWT, Google auth) are gated behind the **`delivery-providers`** extra in `pyproject.toml`:
+The delivery package lives under `src/akc/delivery/`.
 
-```bash
-uv sync --extra delivery-providers
-```
+| Module | Role |
+| --- | --- |
+| `store.py` | Creates sessions, persists JSON sidecars, updates pipeline/session state, records resend/gate/promotion/activation events |
+| `orchestrate.py` | Runs `akc compile`, packaging, activation-client contract emission, and post-package distribution |
+| `compile_handoff.py` | Loads compile manifest and `delivery_plan`, derives refs and non-secret metadata for delivery |
+| `packaging_adapters.py` | Per-platform packaging lanes and packaging preflight |
+| `adapters.py` | Distribution adapter definitions, lane scheduling, and strict prereq checks |
+| `distribution_dispatch.py` | Executes beta/store distribution jobs and updates session/provider state |
+| `provider_clients.py` | Optional provider API clients used when real provider execution is enabled |
+| `activation.py` / `activation_contract.py` | Recipient activation recompute and generated activation client contract |
+| `ingest.py` | Request parsing, recipients-file parsing, operator prereq loading, and local project probes |
+| `metrics.py` | Derived delivery funnel metrics for `akc deliver status` and control-plane indexing |
+| `control_index.py` | Sync helpers for the tenant operations index and control audit |
+| `event_types.py` | Canonical event type strings |
+| `versioning.py` | Deterministic provider/build version mapping from `delivery_version` |
+| `invites.py` | Signed web invite URL construction and verification helpers |
 
-## On-disk layout (per delivery)
+CLI wiring lives in `src/akc/cli/deliver.py`.
 
-Under `delivery_store.delivery_paths`, each session has:
+## Session model
 
-| File                                                   | Role                                                                                                                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.akc/delivery/<delivery_id>/request.json`             | Schema-enveloped **delivery request** (v1): request text, platforms, recipients, release mode, parsed block, preflight / required human inputs |
-| `.akc/delivery/<delivery_id>/session.json`             | **Session** state: pipeline stages (compile, build, package), per-platform channels, `compile_run_id`, `delivery_version`, phase               |
-| `.akc/delivery/<delivery_id>/recipients.json`          | Per-recipient rows (emails, tokens, status)                                                                                                    |
-| `.akc/delivery/<delivery_id>/events.json`              | Append-only **event** log (types in `event_types.py`)                                                                                          |
-| `.akc/delivery/<delivery_id>/provider_state.json`      | Adapter/provider bookkeeping                                                                                                                   |
-| `.akc/delivery/<delivery_id>/activation_evidence.json` | App-side activation / heartbeat evidence                                                                                                       |
+The delivery session is the operational center of the feature.
 
-`delivery_id` must match a safe path token (no `..`, `/`, or `\`); see `assert_safe_delivery_id`.
+`session.json` tracks:
 
-## Code layout (`src/akc/delivery/`)
+- `session_phase`
+- `release_mode`
+- selected `platforms`
+- `compile_run_id`
+- `delivery_version`
+- `pipeline` stages: `compile`, `build`, `package`, `distribution`, `release`
+- `per_platform` lane state for `beta` and `store`
+- `per_recipient` delivery and activation state
+- delivery-wide `activation_proof` rollups
+- `store_release` state
+- `human_readiness_gate`
+- optional `distribution_plan` sequencing state for `release_mode=both`
+- optional `compile_outputs_ref` after compile handoff is bound
 
-| Module                                           | Responsibility                                                                                                                                                                 |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `store.py`                                       | Filesystem persistence, validation, session updates, recipient normalization, promotion/resend/gate/activation records                                                         |
-| `orchestrate.py`                                 | `run_delivery_compile` (invokes compile CLI), `run_delivery_build_and_package`, ties packaging to compile handoff, triggers post-package beta distribution                     |
-| `compile_handoff.py`                             | Load compile outputs: `delivery_plan` ref, manifest presence, web hints for invites                                                                                            |
-| `packaging_adapter.py` / `packaging_adapters.py` | Packaging adapter interface and lanes (web / iOS / Android)                                                                                                                    |
-| `adapter.py` / `adapters.py`                     | Distribution adapter registry, release lanes per mode                                                                                                                          |
-| `distribution_dispatch.py`                       | Run distribution after packaging (web signed invites, TestFlight, Firebase App Distribution, Play, store lanes); `lanes_for_post_package_wave` enforces beta-first when `both` |
-| `provider_clients.py`                            | Optional provider API clients (credentials from env / local operator config)                                                                                                   |
-| `invites.py`                                     | Invite token IDs and HMAC verification for web invite URLs                                                                                                                     |
-| `activation.py` / `activation_contract.py`       | Recipient activation recompute; client contract material for generated apps                                                                                                    |
-| `ingest.py`                                      | Recipient file parsing, operator prereqs manifest loading                                                                                                                      |
-| `control_index.py`                               | Control-plane audit hooks / session sync with project index                                                                                                                    |
-| `metrics.py`                                     | Derived metrics for `akc deliver status`                                                                                                                                       |
-| `versioning.py`                                  | Deterministic mapping from logical `delivery_version` to provider build numbers                                                                                                |
-| `types.py`                                       | Shared typed helpers (`PlatformBuildSpec`, release enums)                                                                                                                      |
-| `event_types.py`                                 | Canonical event type strings (`delivery.request.accepted`, `delivery.build.packaged`, `delivery.invite.sent`, …)                                                               |
+Typical `session_phase` progression:
 
-CLI wiring: `src/akc/cli/deliver.py` registers parsers and handlers; entry point remains `akc = akc.cli:main` in `pyproject.toml`.
+- `accepted`
+- `blocked` when strict prereq preflight fails
+- `building`
+- `packaging`
+- `distributing`
+- `releasing`
+- `failed`
 
-## End-to-end flow
+For `release_mode=both`, the session also carries a distribution sequence plan:
 
-```mermaid
-flowchart TD
-  subgraph submit [akc deliver submit]
-    R[request + recipients + platforms + release_mode]
-    S[Write request.json / session.json / recipients.json]
-    R --> S
-  end
+- `beta_delivery`
+- `human_readiness_gate`
+- `store_promotion`
 
-  subgraph optional [Optional --compile]
-    C[akc compile in project_dir]
-    H[compile_handoff: delivery_plan / manifest]
-    P[packaging_adapters: per-platform package]
-    D1[distribution_dispatch: beta wave if applicable]
-    C --> H
-    H --> P
-    P --> D1
-  end
+## Compile handoff
 
-  subgraph both [release_mode both]
-    G[Beta delivery + gate-pass]
-    PR[akc deliver promote --lane store]
-    G --> PR
-  end
+When `akc deliver --compile` succeeds, delivery loads compile outputs from the scoped project artifacts and stores a slim handoff summary on both `request.json` and `session.json`.
 
-  S --> optional
-  D1 --> both
-```
+Current handoff fields include:
 
-- **Session creation** always runs preflight and may mark the session **blocked** if required lanes lack prerequisites (fail closed).
-- For **`both`**, post-package automation runs **`beta`** lanes only; **`akc deliver promote --lane store`** (after **`gate-pass`**) drives the store lane and calls `run_delivery_distribution` with `lanes=("store",)`.
+- `compile_run_id`
+- manifest presence and relative path
+- `delivery_plan` relative path and fingerprint
+- promotion readiness from the `delivery_plan` when present
+- runtime bundle relative path
 
-## Event types (control plane)
+Delivery also derives non-secret platform metadata from compile outputs, especially web distribution hints such as suggested base URLs.
 
-Implementation uses the strings declared in `event_types.py`, including:
+This is a one-way handoff:
 
-- `delivery.request.accepted`, `delivery.request.parsed`, `delivery.preflight.completed`
-- `delivery.compile.completed`, `delivery.compile.outputs.bound`
+- compile remains the producer of `delivery_plan`, manifest, and runtime bundle artifacts
+- delivery consumes those artifacts for packaging and distribution
+- delivery does not extend the compile controller loop itself
+
+## Packaging
+
+Packaging runs after compile handoff is bound.
+
+Current packaging lanes:
+
+- `web_bundle`
+- `ios_build`
+- `android_build`
+
+Current implementation status:
+
+- packaging adapters are still **v1 stubs**
+- they produce structured outputs and provider-version metadata
+- strict packaging preflight is enforced by default for `store` and `both`
+- `beta` packaging defaults to a more relaxed local-iteration posture unless overridden by `AKC_PACKAGING_ENFORCE_PREFLIGHT`
+
+On successful packaging, AKC also writes:
+
+- `.akc/delivery/<delivery_id>/activation_client_contract.v1.json`
+
+This contract gives generated clients a stable way to report activation/heartbeat evidence back into the delivery control plane.
+
+## Distribution
+
+Distribution runs after packaging succeeds.
+
+Current distribution lanes:
+
+- web beta via signed invite URLs
+- iOS beta via TestFlight
+- Android beta via Firebase App Distribution
+- iOS store via App Store Connect release flow
+- Android store via Google Play release flow
+
+Key sequencing rule:
+
+- `release_mode=both` always schedules **beta delivery before store promotion**
+
+That ordering is encoded in `src/akc/delivery/adapters.py` and mirrored into the session `distribution_plan`.
+
+Current execution behavior:
+
+- distribution adapter preflight is fail-closed by default
+- prereqs are resolved from environment variables, `.akc/delivery/operator_prereqs.json`, and local repo probes
+- provider execution is explicit; when real provider execution is not enabled, dispatch returns stub/dry-run shaped results rather than pretending a release happened
+- per-platform per-lane outcomes are recorded in both `session.json` and `provider_state.json`
+
+## Activation and recipient lifecycle
+
+Delivery tracks activation at both the per-recipient and rollup levels.
+
+Evidence sources today:
+
+- app-side activation reports ingested through `akc deliver activation-report`
+- signed web invite opens ingested through `akc deliver web-invite-open`
+- provider-side install-detected style records stored as activation evidence
+
+The activation subsystem recomputes:
+
+- recipient `status`
+- per-recipient `activation_proof`
+- session-wide `activation_proof` rollups such as fully satisfied recipient counts
+
+This is what powers delivery funnel metrics such as:
+
+- request to first invite sent
+- request to first active recipient
+- invite acceptance rate
+- install rate
+- activation rate
+- request to store live
+
+## Events and audit
+
+Delivery keeps an append-only event timeline in `events.json`.
+
+Important current event types include:
+
+- `delivery.request.accepted`
+- `delivery.request.parsed`
+- `delivery.preflight.completed`
+- `delivery.compile.completed`
+- `delivery.compile.outputs.bound`
 - `delivery.build.packaged`
-- `delivery.invite.sent`, `delivery.invite.resend_requested`
-- `delivery.provider.install_detected`, `delivery.activation.first_run`, `delivery.recipient.active`
-- `delivery.store.submitted`, `delivery.store.live`, `delivery.store.promotion_requested`
-- `delivery.human_gate.passed`, `delivery.failed`
+- `delivery.invite.sent`
+- `delivery.invite.resend_requested`
+- `delivery.provider.install_detected`
+- `delivery.activation.first_run`
+- `delivery.recipient.active`
+- `delivery.store.promotion_requested`
+- `delivery.store.submitted`
+- `delivery.store.live`
+- `delivery.human_gate.passed`
+- `delivery.failed`
 
-## Tests
+When the project is correctly scoped to tenant/repo outputs, delivery also writes control-audit events and syncs summary rows into the tenant `operations.sqlite` index. That is what powers fleet-style `deliveries` reads and aggregate reporting.
 
-- Unit: `tests/unit/test_delivery_packaging_pipeline.py` and related delivery store/preflight tests.
-- Integration: `tests/integration/test_delivery_distribution_and_gate.py` (distribution + gate sequencing).
+## Safety model
+
+Delivery follows the same general AKC posture as the rest of the system:
+
+- tenant/repo scoping is explicit
+- `delivery_id` is path-safe and cannot escape `.akc/delivery/`
+- recipients must be explicit, not guessed from prose
+- adapter and packaging prereq checks fail closed by default
+- beta and store lanes are modeled separately
+- `release_mode=both` requires a human readiness gate before store promotion
+- activation and distribution are recorded as artifacts and events instead of hidden in in-memory state
+
+## Current limitations
+
+The current implementation is intentionally narrower than a full mobile release platform.
+
+Important limits today:
+
+- packaging adapters are still stubs and require operator wiring for real build/export outputs
+- web invite generation is built-in, but outbound email sending is still an operator/provider responsibility
+- store releases require configured provider credentials and packaged artifacts such as `.ipa` or `.aab`
+- enterprise/MDM/ad-hoc/sideload channels are explicitly excluded from the current `both` sequencing model
+- there is no separate long-running delivery service; the CLI and on-disk control plane are the source of truth
 
 ## Related docs
 
-- [architecture.md](architecture.md) — package layout and delivery’s place in the AKC pipeline.
-- [artifact-contracts.md](artifact-contracts.md) — schema envelopes for emitted JSON artifacts.
+- [architecture.md](architecture.md)
+- [artifact-contracts.md](artifact-contracts.md)
+- [getting-started.md](getting-started.md)
+- [environment-model.md](environment-model.md)

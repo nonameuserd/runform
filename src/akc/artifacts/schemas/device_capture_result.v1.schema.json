@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:device_capture_result:v1",
+  "title": "AKC device capture result",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:device_capture_result:v1"
+    },
+    "binding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "android",
+        "ios"
+      ]
+    },
+    "capture_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error"
+      ]
+    },
+    "artifact_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "fingerprint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "binding_id",
+    "platform",
+    "capture_kind",
+    "status",
+    "artifact_path",
+    "metadata",
+    "fingerprint_sha256"
+  ]
+}

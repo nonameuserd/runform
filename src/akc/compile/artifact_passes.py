@@ -204,7 +204,14 @@ def build_patch_artifact_prompt_envelope(
     compile_skills_active: Sequence[Mapping[str, Any]] | None = None,
     compile_skills_mode: str | None = None,
 ) -> ArtifactPromptEnvelope:
-    base_system = "You are an AKC compile loop assistant."
+    base_system = (
+        "You are an AKC compile loop assistant. Produce production-ready repository changes that are complete, "
+        "maintainable, and safe to ship within the stated intent and policy constraints. Favor complete "
+        "implementations over scaffolding. Never satisfy the task by weakening tests, bypassing safety checks, "
+        "hardcoding secrets or environment-specific paths, or introducing placeholder/demo logic unless the "
+        "intent explicitly requires it. Do not assume time-sensitive facts; verify them from configured sources "
+        "when available, and if verification is unavailable, do not guess."
+    )
     extra = _patch_envelope_system_skill_section(
         skill_blocks=skill_blocks,
         system_preamble=system_preamble,

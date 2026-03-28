@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:observability_query_result:v1",
+  "title": "AKC observability query result",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:observability_query_result:v1"
+    },
+    "binding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "query_kind": {
+      "type": "string",
+      "enum": [
+        "logql_query",
+        "promql_query",
+        "traceql_query"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "window_start_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "window_end_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error"
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "media_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "media_type",
+          "sha256"
+        ]
+      }
+    },
+    "fingerprint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "binding_id",
+    "query_kind",
+    "target",
+    "window_start_ms",
+    "window_end_ms",
+    "status",
+    "summary",
+    "attachments",
+    "fingerprint_sha256"
+  ]
+}

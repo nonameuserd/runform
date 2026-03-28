@@ -28,6 +28,18 @@ from akc.memory.plan_state import (
     PlanStateStore,
     SQLitePlanStateStore,
 )
+from akc.memory.salience import (
+    MemoryPolicy,
+    SalienceCandidate,
+    ScoredCandidate,
+    build_extractive_compaction,
+    estimate_token_count,
+    load_memory_policy,
+    pack_by_token_budget,
+    parse_memory_boost_overrides,
+    parse_memory_pin_overrides,
+    score_candidates,
+)
 from akc.memory.why_graph import (
     ConflictDetector,
     InMemoryWhyGraphStore,
@@ -56,6 +68,9 @@ __all__ = [
     "PlanStatus",
     "PlanStep",
     "PlanStepStatus",
+    "MemoryPolicy",
+    "SalienceCandidate",
+    "ScoredCandidate",
     "SQLiteCodeMemoryStore",
     "SQLitePlanStateStore",
     "SQLiteWhyGraphStore",
@@ -64,6 +79,13 @@ __all__ = [
     "WhyGraphStore",
     "WhyNode",
     "WhyNodeType",
+    "build_extractive_compaction",
     "build_memory",
+    "estimate_token_count",
+    "load_memory_policy",
     "normalize_repo_id",
+    "pack_by_token_budget",
+    "parse_memory_boost_overrides",
+    "parse_memory_pin_overrides",
+    "score_candidates",
 ]
