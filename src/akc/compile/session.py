@@ -1035,6 +1035,20 @@ class CompileSession:
                 success_criteria=intent_spec.success_criteria,
                 quality_contract=intent_spec.quality_contract,
             )
+            cfg_llm_backend = str(cfg_meta.get("llm_backend", "")).strip()
+            cfg_llm_provider = str(cfg_meta.get("llm_provider", "")).strip()
+            cfg_llm_model = str(cfg_meta.get("llm_model", "")).strip()
+            cfg_llm_mode = str(cfg_meta.get("llm_mode", "")).strip()
+            if cfg_llm_backend:
+                control_plane_obj["llm_backend"] = cfg_llm_backend
+            if cfg_llm_provider:
+                control_plane_obj["llm_provider"] = cfg_llm_provider
+            if cfg_llm_model:
+                control_plane_obj["llm_model"] = cfg_llm_model
+            if cfg_llm_mode:
+                control_plane_obj["llm_mode"] = cfg_llm_mode
+            if "llm_network_allowed" in cfg_meta:
+                control_plane_obj["llm_network_allowed"] = bool(cfg_meta.get("llm_network_allowed"))
             run_manifest = RunManifest(
                 run_id=result.plan.id,
                 tenant_id=result.plan.tenant_id,
@@ -1057,8 +1071,20 @@ class CompileSession:
                 replay_mode=replay_mode,
                 retrieval_snapshots=tuple(retrieval_snapshots),
                 passes=tuple(passes),
-                model=llm.__class__.__name__,
-                model_params={"mode": str((config.metadata or {}).get("mode") or "default")},
+                model=cfg_llm_model or llm.__class__.__name__,
+                model_params={
+                    "mode": str((config.metadata or {}).get("mode") or "default"),
+                    **(
+                        {
+                            "llm_backend": cfg_llm_backend,
+                            "llm_provider": cfg_llm_provider or cfg_llm_backend,
+                            "llm_network_allowed": bool(cfg_meta.get("llm_network_allowed")),
+                            **({"llm_mode": cfg_llm_mode} if cfg_llm_mode else {}),
+                        }
+                        if cfg_llm_backend
+                        else {}
+                    ),
+                },
                 tool_params={
                     "test_mode": config.test_mode,
                     "test_command": list(config.test_command or ()),

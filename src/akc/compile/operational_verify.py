@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +34,7 @@ from akc.intent.store import JsonFileIntentStore
 from akc.memory.models import JSONValue
 from akc.run.manifest import RunManifest, RuntimeEvidenceRecord
 from akc.utils.fingerprint import stable_json_fingerprint
+from akc.validation import collect_binding_ids_from_specs, load_validator_bindings
 
 OperationalVerificationAuthority = Literal["recomputed", "none"]
 OperationalEnforcementMode = Literal["advisory", "blocking"]
@@ -342,123 +341,13 @@ def _enforcement_mode_from_profile(
     return "blocking"
 
 
-def _collect_stub_ids(specs: Sequence[tuple[str, OperationalValidityParams]]) -> tuple[str, ...]:
-    out: set[str] = set()
-    for _sc_id, params in specs:
-        for sig in params.signals:
-            raw = str(sig.otel_query_stub or "").strip()
-            if raw:
-                out.add(raw)
-    return tuple(sorted(out))
-
-
-def _load_telemetry_bindings(*, scope_root: Path) -> dict[str, dict[str, Any]]:
-    path = (scope_root / ".akc" / "control" / "telemetry_bindings.json").resolve()
-    ensure_path_under_repo_outputs(path, repo_outputs_root=scope_root)
-    if not path.is_file():
-        return {}
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    providers = raw.get("providers")
-    providers_by_id = providers if isinstance(providers, dict) else {}
-    bindings_obj = raw.get("bindings")
-    if not isinstance(bindings_obj, dict):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for stub_id, cfg in bindings_obj.items():
-        sid = str(stub_id).strip()
-        if not sid or not isinstance(cfg, dict):
-            continue
-        provider_id = str(cfg.get("provider", "")).strip()
-        if provider_id and provider_id in providers_by_id and isinstance(providers_by_id.get(provider_id), dict):
-            merged = dict(cast(dict[str, Any], providers_by_id[provider_id]))
-            merged.update(dict(cfg))
-            merged["provider_id"] = provider_id
-            out[sid] = merged
-            continue
-        out[sid] = dict(cfg)
-    return out
-
-
-def _fetch_http_text(url: str, *, timeout_ms: int) -> str:
-    req = urllib.request.Request(url=url, method="GET")
-    with urllib.request.urlopen(req, timeout=max(0.1, float(timeout_ms) / 1000.0)) as resp:
-        raw = resp.read()
-    return cast(str, raw.decode("utf-8"))
-
-
-def _load_stub_provider_data(
-    *,
-    scope_root: Path,
-    stub_id: str,
-    binding: Mapping[str, Any],
-) -> tuple[
-    tuple[RuntimeEvidenceRecord, ...],
-    tuple[dict[str, JSONValue], ...],
-    tuple[dict[str, JSONValue], ...],
-    dict[str, JSONValue],
-]:
-    kind = str(binding.get("kind", "artifact_ndjson")).strip() or "artifact_ndjson"
-    record_kind = str(binding.get("record_kind", "runtime_evidence")).strip() or "runtime_evidence"
-    details: dict[str, JSONValue] = {
-        "stub_id": stub_id,
-        "provider": kind,
-        "record_kind": record_kind,
-        "status": "ok",
-    }
-    text: str | None = None
-    if kind == "artifact_ndjson":
-        rel = str(binding.get("path", "")).strip()
-        if not rel:
-            raise ValueError("artifact_ndjson binding requires path")
-        p = ensure_path_under_repo_outputs((scope_root / rel).resolve(), repo_outputs_root=scope_root)
-        text = p.read_text(encoding="utf-8")
-        details["path"] = rel
-    elif kind == "http_json":
-        url = str(binding.get("url", "")).strip()
-        if not (url.startswith("http://") or url.startswith("https://")):
-            raise ValueError("http_json binding requires http(s) url")
-        timeout_ms_raw = binding.get("timeout_ms", 5000)
-        timeout_ms = (
-            int(timeout_ms_raw)
-            if isinstance(timeout_ms_raw, (int, float)) and not isinstance(timeout_ms_raw, bool)
-            else 5000
-        )
-        text = _fetch_http_text(url, timeout_ms=timeout_ms)
-        details["url"] = url
-    else:
-        raise ValueError(f"unsupported telemetry provider kind: {kind!r}")
-
-    if text is None:
-        return (), (), (), details
-    if record_kind == "runtime_evidence":
-        loaded = json.loads(text)
-        if not isinstance(loaded, list):
-            raise ValueError("runtime_evidence provider payload must be a JSON array")
-        validate_artifact_json(obj=loaded, kind="runtime_evidence_stream")
-        ev = tuple(RuntimeEvidenceRecord.from_json_obj(x) for x in loaded if isinstance(x, dict))
-        details["record_count"] = len(ev)
-        return ev, (), (), details
-    if record_kind == "otel":
-        otel = parse_otel_ndjson_slice(text)
-        details["record_count"] = len(otel)
-        return (), otel, (), details
-    if record_kind == "otel_metrics":
-        metric_parse = parse_otel_metric_ndjson_slice(text)
-        details["record_count"] = len(metric_parse.records)
-        if metric_parse.rejected_reason:
-            details["parse_rejected_reason"] = metric_parse.rejected_reason
-        return (), (), metric_parse.records, details
-    raise ValueError(f"unsupported telemetry provider record_kind: {record_kind!r}")
-
-
 def verify_run_operational_coupling(
     *,
     outputs_root: Path,
     scope: TenantRepoScope,
     run_id: str,
     strict_manifest: bool,
+    validator_bindings_path: Path | None = None,
 ) -> OperationalVerificationResult:
     manifest_path = resolve_run_manifest_path(
         manifest_path=None,
@@ -513,15 +402,15 @@ def verify_run_operational_coupling(
 
     specs = _post_runtime_operational_specs(intent)
     provider_result_rows: list[dict[str, JSONValue]] = []
-    all_stub_ids = _collect_stub_ids(specs)
-    binding_map = _load_telemetry_bindings(scope_root=scope_root) if all_stub_ids else {}
+    all_stub_ids = collect_binding_ids_from_specs(specs)
+    binding_map = load_validator_bindings(path=validator_bindings_path) if all_stub_ids else {}
     for stub in all_stub_ids:
         if stub not in binding_map:
             provider_result_rows.append({"stub_id": stub, "provider": "none", "status": "missing", "details": None})
             findings.append(
                 OperationalVerificationFinding(
                     code="operational.stub_binding_missing",
-                    message=f"otel_query_stub={stub!r} has no operator telemetry binding",
+                    message=f"validator_stub={stub!r} has no operator binding",
                     severity="warning",
                 )
             )
@@ -584,12 +473,11 @@ def verify_run_operational_coupling(
         metric_parse = parse_otel_metric_ndjson_slice(otel_metric_path.read_text(encoding="utf-8"))
         otel_metric_records = metric_parse.records
         otel_metric_parse_rejected_reason = metric_parse.rejected_reason
-    # Merge external telemetry providers configured by operator bindings.
     for stub in all_stub_ids:
         binding = binding_map.get(stub)
         if binding is None:
             continue
-        provider_kind = str(binding.get("kind", "artifact_ndjson")).strip() or "artifact_ndjson"
+        provider_kind = str(binding.kind).strip()
         if provider_allowlist and provider_kind not in provider_allowlist:
             provider_result_rows.append(
                 {
@@ -603,47 +491,20 @@ def verify_run_operational_coupling(
                 OperationalVerificationFinding(
                     code="operational.provider_not_allowlisted",
                     message=(
-                        f"otel_query_stub={stub!r} provider={provider_kind!r} is outside governance provider_allowlist"
+                        f"validator_stub={stub!r} provider={provider_kind!r} is outside governance provider_allowlist"
                     ),
                 )
             )
             continue
-        try:
-            extra_ev, extra_otel, extra_metrics, details = _load_stub_provider_data(
-                scope_root=scope_root,
-                stub_id=stub,
-                binding=binding,
-            )
-        except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError, urllib.error.URLError) as exc:
-            provider_result_rows.append(
-                {
-                    "stub_id": stub,
-                    "provider": provider_kind,
-                    "status": "error",
-                    "details": {"error": str(exc)},
-                }
-            )
-            findings.append(
-                OperationalVerificationFinding(
-                    code="operational.provider_load_failed",
-                    message=f"failed to load telemetry binding for stub={stub!r}: {exc}",
-                    severity="warning" if enforcement_mode == "advisory" else "error",
-                )
-            )
-            continue
-        if extra_ev:
-            evidence = tuple(list(evidence) + list(extra_ev))
-        if extra_otel:
-            otel_records = tuple(list(otel_records) + list(extra_otel))
-        if extra_metrics:
-            otel_metric_records = tuple(list(otel_metric_records or ()) + list(extra_metrics))
-            otel_metric_parse_rejected_reason = None
         provider_result_rows.append(
             {
                 "stub_id": stub,
                 "provider": provider_kind,
                 "status": "ok",
-                "details": _safe_json_obj(details),
+                "details": {
+                    "binding_id": binding.binding_id,
+                    "binding_kind": binding.kind,
+                },
             }
         )
 

@@ -1,9 +1,9 @@
-# Getting started
+# Getting Started
 
-## Prerequisites
+## Requirements
 
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
 
 ## Install
 
@@ -13,1040 +13,279 @@ cd runform
 uv sync
 ```
 
-The core package stays relatively small: **`jsonschema`**, **`pydantic`**, plus **`windows-curses`** on Windows (TUI). Add connectors, backends, and delivery signing when you need them:
-
-```bash
-uv sync --extra ingest-all          # docs/OpenAPI/embedding/vector/messaging extras
-uv sync --extra vectorstore-pg      # Postgres + pgvector index backend
-uv sync --extra delivery-providers  # JWT / Google OAuth for store APIs (`akc deliver`)
-```
-
-For development (pytest, ruff, mypy, pre-commit):
+Useful extras:
 
 ```bash
 uv sync --extra dev
-uv run pre-commit install
-uv run pytest -q
+uv sync --extra ingest-all
+uv sync --extra mcp-serve
+uv sync --extra vectorstore-pg
+uv sync --extra delivery-providers
 ```
 
-### Use the `akc` command
-
-After `uv sync`, the CLI is available as `.venv/bin/akc`. Activate the project environment and run `akc` directly:
+After `uv sync`, either activate the virtualenv or use `uv run`:
 
 ```bash
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 akc --help
 ```
 
-If you prefer not to activate, `uv run akc …` runs the same entry point using the project venv. To put `akc` on your user `PATH` without activating (optional): from the repo root run `uv tool install .` (remove later with `uv tool uninstall akc`).
-
 ## Bootstrap a project
 
-Create `.akc/project.json`, optional tenant/repo/`outputs_root` defaults, and (by default) a local OPA policy stub under `.akc/policy/compile_tools.rego`:
+Create `.akc/project.json` and the default local compile policy stub:
 
 ```bash
 akc init
 ```
 
-`akc init` records **`developer_role_profile` default `emerging`** in the project file. The global CLI fallback when no project file, env var, or flag sets the profile remains **`classic`** (see [Emerging Role Golden Path](#emerging-role-golden-path-opt-in)).
-
-## Run the CLI
-
-Top-level commands (run `akc --help` for the full tree):
-
-| Area                | Commands                                                                                                                                  |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Project             | `init`                                                                                                                                    |
-| Ingestion & compile | `ingest`, `compile`, `verify`, `eval`                                                                                                     |
-| Integrations        | `mcp` (MCP server; install extra — see [cli-commands.md](cli-commands.md))                                                               |
-| Drift & living      | `drift`, `watch`, `living-recompile`, `living-webhook-serve`, `living-doctor`                                                             |
-| Runtime             | `runtime` (`start`, `stop`, `status`, `events`, `reconcile`, `checkpoint`, `replay`, `autopilot`, `coordination-plan`, and related flags) |
-| Control plane       | `control`, `control-bot` (top-level), `metrics`, `policy`, `fleet`                                                                        |
-| Delivery            | `deliver` (named-recipient sessions; see [delivery-architecture.md](delivery-architecture.md))                                            |
-| Viewer              | `view` (TUI / static web / export)                                                                                                        |
-| Slack helpers       | `slack list-channels`                                                                                                                     |
-| Action plane        | `action` (only when `AKC_ACTION_PLANE=1`; see [cli-commands.md](cli-commands.md))                                                          |
-
-Quick inventory:
+Useful variant for an existing repository:
 
 ```bash
-akc --help
+akc init --detect
 ```
 
-### Multi-channel control-bot gateway
+That also writes `.akc/project_profile.json` with detected toolchain and repository metadata.
 
-Run the dedicated operator gateway service (separate from fleet HTTP):
+## Safe local demo
+
+This path stays local and avoids working-tree writes.
 
 ```bash
-akc control-bot validate-config --config ./configs/control-bot.example.json
-akc control-bot serve --config ./configs/control-bot.example.json
+# 1. Index local docs with a deterministic offline embedder
+akc ingest \
+  --tenant-id demo \
+  --connector docs \
+  --input ./docs \
+  --embedder hash \
+  --index-backend sqlite
+
+# 2. Compile into artifacts only
+akc compile \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out \
+  --artifact-only
+
+# 3. Verify artifacts
+akc verify \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out
+
+# 4. Open the local viewer
+akc view \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out \
+  web
 ```
 
-Minimum config shape:
+`akc compile` defaults to `scoped_apply`, so `--artifact-only` is the safest starting point for docs, demos, and CI.
+
+## Hosted LLM compile
+
+Compile, living, and assistant now support hosted LLM backends, but offline remains the default.
+
+Hosted generation is explicit:
+
+```bash
+export OPENAI_API_KEY=...
+
+akc compile \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out \
+  --artifact-only \
+  --llm-backend openai \
+  --llm-model gpt-4.1 \
+  --llm-allow-network
+```
+
+If you select `openai`, `anthropic`, or `gemini` without `--llm-allow-network`, AKC fails closed before making any outbound request.
+
+## Git-aware scoped apply
+
+AKC's Git integration is part of the `scoped_apply` compile path. When your `--apply-scope-root` points at a Git working tree, AKC can create a topic branch and commit the applied patch for that run.
+
+```bash
+akc compile \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out \
+  --compile-realization-mode scoped_apply \
+  --apply-scope-root "$PWD" \
+  --git-branch-per-run \
+  --git-commit
+```
+
+Current behavior:
+
+- branch name format is `akc/compile/<patch_sha_prefix>`
+- commits stage only the patch-touched paths, not the whole repository
+- rollback snapshots of touched files are written under `.akc/rollback/` by default
+- if Git integration is requested but `git` is missing or the scope root is not a Git repo, compile records a fail-closed denial instead of applying anyway
+
+## Environment model
+
+AKC currently exposes two related environment models:
+
+- operator/runtime safety profiles use `dev`, `staging`, and `prod`
+- compile-time delivery plans use `local`, `staging`, and `production`
+
+For the full mapping, promotion defaults, and delivery-lane behavior, see [environment-model.md](environment-model.md).
+
+## Validation-backed verify
+
+If you have a validator registry under `configs/validation/validator_bindings.v1.yaml`, you can execute observability and mobile validators during verify:
+
+```bash
+akc verify \
+  --tenant-id demo \
+  --repo-id runform \
+  --outputs-root ./out \
+  --execute-validators
+```
+
+Use `.akc/project.json` to point at a non-default registry:
 
 ```json
 {
-  "schema": "control_bot_config.v1",
-  "server": { "bind": "127.0.0.1", "port": 8088, "queue_max": 2048, "worker_threads": 2 },
-  "channels": {
-    "slack": { "enabled": true, "signing_secret": "..." },
-    "discord": { "enabled": true, "public_key": "..." },
-    "telegram": { "enabled": true, "secret_token": "...", "bot_token": "..." },
-    "whatsapp": {
-      "enabled": true,
-      "verify_token": "...",
-      "app_secret": "...",
-      "access_token": "...",
-      "phone_number_id": "..."
-    }
-  },
-  "routing": {
-    "tenants": ["tenant-1"],
-    "workspaces": [
-      { "channel": "slack", "workspace_id": "T123", "tenant_id": "tenant-1" },
-      { "channel": "discord", "workspace_id": "G123", "tenant_id": "tenant-1" },
-      { "channel": "telegram", "workspace_id": "12345", "tenant_id": "tenant-1" },
-      { "channel": "whatsapp", "workspace_id": "PHONE_NUMBER_ID", "tenant_id": "tenant-1" }
-    ]
-  },
-  "identity": { "principal_roles": { "U123": { "tenant_id": "tenant-1", "roles": ["operator"] } } },
-  "policy": { "mode": "enforce", "role_allowlist": { "operator": ["status.*", "approval.*", "incident.*", "mutate.*"] } },
-  "approval": { "default_ttl_ms": 600000, "requires_approval_action_prefixes": ["incident.", "mutate."] },
-  "storage": {
-    "state_dir": "./.akc/control-bot/state",
-    "sqlite_path": "./.akc/control-bot/state/control_bot.sqlite",
-    "audit_log_path": "./.akc/control-bot/state/control_bot.audit.jsonl"
+  "validation": {
+    "bindings_path": "configs/validation/validator_bindings.v1.yaml"
   }
 }
 ```
 
-Webhook endpoints:
+## Common commands
 
-- `POST /v1/channels/slack/commands`
-- `POST /v1/channels/slack/interactivity`
-- `POST /v1/channels/discord/interactions`
-- `POST /v1/channels/telegram/webhook`
-- `GET|POST /v1/channels/whatsapp/webhook`
-
-Control-bot execution is asynchronous (`queue_max` bounded), with structured audit events and approval workflow state persisted in sqlite. See [Ops Runbook](ops-runbook.md) for deployment, secrets, policy, and incident handling.
-
-### Reliability SLO gate (staging/prod soak)
-
-For always-on runtime autopilot acceptance, use the reliability scoreboard gate documented in
-`docs/runtime-execution.md` under **"Reliability SLO gate (autopilot scoreboards)"**. It covers:
-
-- the scoreboard artifact path and KPI contract
-- `scripts/check_reliability_slo_gate.py` usage
-- `configs/slo/reliability_scoreboard_targets.json` target configuration
-- suggested CI/staging/prod threshold profiles
-
-### Extension points and transparency
-
-- **Connectors and vector stores are pluggable** via CLI flags and ingest modules. The `--connector` choice (docs, **codebase**, openapi, slack, discord, telegram, whatsapp, mcp) and `--index-backend` (memory, sqlite, pgvector) can be extended by adding new connectors or backends.
-- **Embedding defaults to offline:** the default embedder is `none`; use `--embedder hash` for deterministic, key-free indexing. **Cloud providers (OpenAI, Gemini) are opt-in only**—use them only when you explicitly set `--embedder openai` or `--embedder gemini` and provide the corresponding API key.
-- **Compile** uses an offline LLM backend by default; no API keys are required for the standard ingest → compile → verify path. Examples in this guide use offline or generic options; cloud-backed options are explicitly marked as optional.
-
-### Embedding providers
-
-- **Offline (recommended for tests/demos):** `--embedder hash` (deterministic, no API keys) or default `none`
-- **OpenAI-compatible (optional):** `--embedder openai` with `AKC_OPENAI_API_KEY` (and optional `AKC_OPENAI_BASE_URL`, `AKC_OPENAI_EMBED_MODEL`)
-- **Gemini (optional):** `--embedder gemini` with `AKC_GEMINI_API_KEY` (and optional `AKC_GEMINI_BASE_URL`, `AKC_GEMINI_EMBED_MODEL`)
-
-### Progressive Takeover (Observer / Advisor / Copilot)
-
-AKC’s progressive takeover ladder lets you adopt the system safely in an existing repository.
-
-#### Observer (read-only)
-
-For existing repositories, start read-only (index and profile only):
+### Ingest repository code
 
 ```bash
-# 1) Create .akc/project.json + emit a lightweight analysis profile
-akc init --detect
-
-# 2) Index the repo source tree for retrieval (offline, deterministic)
 akc ingest \
-  --tenant-id tenant-1 \
+  --tenant-id demo \
   --connector codebase \
   --input . \
   --embedder hash \
   --index-backend sqlite
 ```
 
-Notes:
+Supported connectors today:
 
-- `akc init --detect` writes `.akc/project_profile.json` (languages, package managers, conventions, and best-effort build/test command evidence).
-- `--connector codebase` ingests local source files under `--input` and is intended to ground later compile runs against the existing codebase.
+- `docs`
+- `codebase`
+- `openapi`
+- `slack`
+- `discord`
+- `telegram`
+- `whatsapp`
+- `mcp`
 
-#### Advisor (artifact-only compile)
+Supported index backends today:
 
-This produces **validated artifacts** (IR, manifests, patches, tests) without writing to your working tree:
+- `memory`
+- `sqlite`
+- `pgvector`
 
-```bash
-akc compile \
-  --tenant-id tenant-1 \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --artifact-only
-```
+## Assistant mode
 
-This is the recommended posture for first-time compile runs in a real repo: fail-closed, reviewable, and easy to run in CI.
-
-#### Copilot (scoped apply with policy)
-
-This allows **scoped working-tree mutation**, gated by strict preflight + policy allowlists. You must:
-
-- set a narrow `--apply-scope-root` (a dedicated clone/worktree is recommended)
-- allow `compile.patch.apply` in your Rego policy (default-deny otherwise)
+Single-turn planning:
 
 ```bash
-akc compile \
-  --tenant-id tenant-1 \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --compile-realization-mode scoped_apply \
-  --apply-scope-root /absolute/path/to/your/repo \
-  --policy-mode enforce \
-  --opa-policy-path ./.akc/policy/compile_tools.rego
+akc assistant --mode plan -p "show me the next command to inspect the latest compile outputs"
 ```
 
-### Progressive Takeover (Compiler)
-
-This expands from “compile artifacts” to **larger slices** (services/workflows) with coordination + living recompile + reliability gates:
-
-- **Coordination graphs:** runtime bundles may include a coordination spec; print deterministic schedule layers with:
+Interactive loop:
 
 ```bash
-akc runtime coordination-plan --bundle <path/to/runtime_bundle.json>
+akc assistant
 ```
 
-- **Living recompile:** drift + runtime health signals can trigger safe recompiles when you opt into a living automation profile (see `docs/runtime-execution.md`).
-- **Reliability SLO gate (autopilot):** block **new live rollouts** until trailing-window KPIs meet thresholds:
+Weighted memory is opt-in. Enable it globally with:
 
 ```bash
-akc runtime autopilot --slo-gate --help
+export AKC_WEIGHTED_MEMORY_ENABLED=1
 ```
 
-### Progressive Takeover (Autonomy / continuous reconciliation)
+You can also enable it per invocation with memory flags such as `--memory-policy-path`, `--memory-pin`, `--memory-boost`, or `--memory-budget-tokens`.
 
-At Level 4, the human role is **policy-only**: you define boundaries (OPA policy, budgets, allowlists), and AKC continuously reconciles drift and runtime health by running `akc runtime autopilot`.
-
-Minimal setup:
-
-- Set `.akc/project.json` `adoption_level` to `autonomy` (or `4` / `l4`).
-- Keep policy in **default-deny** and explicitly allow only the mutating capabilities you want.
-- Enable living automation so autopilot is permitted to feed runtime health signals into safe recompiles.
-
-Example `.akc/project.json` snippet:
-
-```json
-{
-  "adoption_level": "autonomy",
-  "living_automation_profile": "living_loop_unattended_v1"
-}
-```
-
-Run autopilot (fleet-style multi-scope discovery under `outputs_root` is supported):
+Assistant can also use a hosted planner with the same shared flags:
 
 ```bash
-uv run akc runtime autopilot \
-  --outputs-root ./out \
-  --ingest-state-path ./out/.akc/ingest_state.json \
-  --env-profile staging
+akc assistant \
+  --llm-backend openai \
+  --llm-model gpt-4.1-mini \
+  --llm-allow-network \
+  -p "show recent compile runs"
 ```
 
-Level-4 defaults:
+## MCP server
 
-- If `adoption_level` is `autonomy` and no living profile is configured via CLI/env/project, autopilot defaults to `living_loop_unattended_v1`.
-- If autonomy budgets are not provided explicitly, autopilot defaults to `--unattended-defaults` (requires `living_loop_unattended_v1`).
-- The reliability SLO gate is enabled by default (same thresholds as `--slo-gate`, tunable via `--slo-*` flags).
-
-### Ingest local docs
+Install the extra first:
 
 ```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector docs \
-  --input ./docs \
-  --no-index
+uv sync --extra mcp-serve
 ```
 
-Run a fully-offline ingest + index + query:
+Then run the read-only MCP server:
 
 ```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector docs \
-  --input ./docs \
-  --embedder hash \
-  --index-backend memory \
-  --query "getting started" \
-  -k 3
+akc mcp serve
 ```
 
-### Ingest an OpenAPI spec
+`akc mcp serve` supports `stdio`, `streamable-http`, and `sse` transports.
+
+## Runtime surfaces
+
+The `runtime` subtree operates on emitted runtime bundles:
 
 ```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector openapi \
-  --input ./examples/openapi/petstore.json \
-  --no-index
+akc runtime --help
+akc runtime coordination-plan --bundle /path/to/runtime_bundle.json
 ```
 
-### Ingest Slack threads (Q&A heuristic)
+Primary runtime subcommands:
 
-Set a token (bot or user token with access to the channel):
+- `start`
+- `coordination-plan`
+- `stop`
+- `status`
+- `events`
+- `reconcile`
+- `checkpoint`
+- `replay`
+- `autopilot`
+
+See [runtime-execution.md](runtime-execution.md) for runtime routing, adapters, reconcile, and autopilot details.
+
+## Viewer
+
+The viewer is local-first and read-only:
 
 ```bash
-export AKC_SLACK_TOKEN="xoxb-..."
+akc view --tenant-id demo --repo-id runform --outputs-root ./out tui
+akc view --tenant-id demo --repo-id runform --outputs-root ./out web
+akc view --tenant-id demo --repo-id runform --outputs-root ./out export
 ```
 
-Then run ingestion with `--input` set to the channel id (e.g. `C123...`):
+See [viewer.md](viewer.md) and [viewer-trust-boundary.md](viewer-trust-boundary.md).
 
-```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector slack \
-  --input C12345678 \
-  --no-index
-```
+## Progressive adoption
 
-### Ingest Discord threads (Q&A heuristic)
+AKC supports a practical adoption ladder:
 
-Set a bot token:
+- Observer: `akc init --detect` and `akc ingest --connector codebase`
+- Advisor: `akc compile --artifact-only`
+- Copilot: `akc compile --compile-realization-mode scoped_apply --apply-scope-root ...`
+- Compiler/Autonomy: runtime, living recompile, and autopilot workflows after policy and operational gates are in place
 
-```bash
-export AKC_DISCORD_TOKEN="..."
-```
+For first use in a real repository, start with Observer or Advisor.
 
-Then run ingestion with `--input` set to the channel id:
+## Where to go next
 
-```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector discord \
-  --input 123456789012345678 \
-  --no-index
-```
-
-Notes:
-
-- Discord ingestion is pull/backfill via REST. If your bot cannot read message content due to Discord intent/policy, documents may have limited text.
-- You can optionally pass `--discord-guild-id` to help thread listing in some environments.
-
-### Ingest Telegram updates (Bot API update-drain)
-
-Set a bot token:
-
-```bash
-export AKC_TELEGRAM_TOKEN="123456:ABC..."
-```
-
-Then run ingestion (Telegram bots do not provide true historical backfill; this drains new updates):
-
-```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector telegram \
-  --input updates \
-  --no-index
-```
-
-Notes:
-
-- Incremental progress is tracked via a tenant-scoped Telegram offset state file (separate from the general ingest state), so repeated runs do not reprocess the same updates.
-- Use `--telegram-chat-ids` to restrict ingestion to specific chats when needed.
-
-### Ingest WhatsApp Cloud API payloads (stored webhooks)
-
-WhatsApp Cloud API is **webhook-driven** for inbound events. AKC ingests **JSON or JSONL files** (or directories of them) that your stack has already persisted—raw webhook bodies or envelopes that include a `body` object Meta would POST.
-
-Set **`--input`** to one path or **comma-separated** paths (files or directories). Use **`--whatsapp-state-path`** for cross-run **message id dedupe** (recommended for incremental runs). Optional filters: **`--whatsapp-phone-number-id`**, **`--whatsapp-waba-id`**. To enforce **`X-Hub-Signature-256`** on stored envelopes, pass **`--whatsapp-verify-signatures`** and **`--whatsapp-app-secret`** (or **`AKC_WHATSAPP_APP_SECRET`**).
-
-```bash
-akc ingest \
-  --tenant-id tenant-1 \
-  --connector whatsapp \
-  --input ./captured/whatsapp \
-  --whatsapp-state-path ./.akc/ingest/tenant-1/whatsapp-seen.json \
-  --embedder hash \
-  --index-backend memory \
-  --no-index
-```
-
-Notes:
-
-- There is no live subscription to Meta from this connector; you capture webhooks and point **`--input`** at those files.
-- See `src/akc/ingest/connectors/messaging/whatsapp_cloud.py` for payload shapes, dedupe behavior, and optional signature verification.
-
-### Compile (Plan → Retrieve → Generate → Execute → Repair)
-
-Run the compile loop for a tenant/repo. All outputs go under `<outputs-root>/<tenant-id>/<repo-id>/` (manifest, `.akc/tests`, code memory).
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out
-```
-
-Optional: `--mode quick` (default) or `--mode thorough`, `--goal "Your goal"`, `--work-root` to override the executor work directory, and sandbox controls like `--sandbox dev|strong`, `--sandbox-memory-mb`, and `--sandbox-allow-network` (default: deny). In `--sandbox strong`, AKC uses Docker by default and supports `--strong-lane-preference docker|wasm|auto` so developers can explicitly choose Docker or Rust WASM.
-
-#### Compile realization (intent → filesystem)
-
-By default, compile uses **`scoped_apply`**: after a passing candidate, it may apply the strict unified-diff patch under a bounded working tree (`--apply-scope-root` or fallback to `--work-root` / outputs scope). That path is **policy-gated** (OPA must allow the `compile.patch.apply` action) and **fail-closed**: if preflight or policy denies, compile does not mutate the tree.
-
-**Opt-in artifact-only** (`--compile-realization-mode artifact_only` or the alias `--artifact-only`) validates patches and writes outputs under `<outputs-root>/<tenant-id>/<repo-id>/` without applying patches to your source tree.
-
-#### Native test validation (project toolchain)
-
-Compile always runs a test/validation gate for candidates. By default this uses the controller’s configured `test_command` (typically `pytest`), but “Copilot” expects running the repo’s **native** validation commands.
-
-Use:
-
-- `--test-mode native_smoke`: derive a “fast” gate from the detected toolchain (lint/typecheck/build/test)
-- `--test-mode native_full`: run the detected toolchain’s full test command
-
-In native modes, AKC detects the project profile from the current working directory and resolves a toolchain profile (optionally overridden by `.akc/project.json` `toolchain`).
-
-Example:
-
-```bash
-cd /absolute/path/to/your/repo
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --test-mode native_smoke
-```
-
-#### Safe rollback and git integration (optional)
-
-When `scoped_apply` is enabled, you can opt into extra safety and rollback ergonomics:
-
-- `--rollback-snapshots` / `--no-rollback-snapshots`: toggle per-run snapshots of touched files under `.akc/rollback/…`
-- `--git-branch-per-run`: create a branch (e.g. `akc/compile/<patch_sha>`) before applying
-- `--git-commit`: commit the applied patch (stages only touched paths)
-- `--git-commit-message "..."`: optional message override
-
-**Risk profile (what to use when)**
-
-| Profile                           | Settings                                                                                           | When                                                                                                                                                                 |
-| --------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Intent → filesystem (default)** | `scoped_apply` (omit flag) + policy/scope you trust                                                | Normal AKC flow; compile may land patches after the same tests/verifier gates as a normal run.                                                                       |
-| **Conservative**                  | `--compile-realization-mode artifact_only`, enforce policy in CI as needed                         | Learning AKC, shared repos, CI audits, or any environment where working-tree writes are unacceptable.                                                                |
-| **Full chain to runtime**         | Above plus promotion/runtime configuration (signed packets, `live_apply` only where policy allows) | Production-style rollout only after staging evidence; see [architecture.md](architecture.md) (compile realization) and [runtime-execution.md](runtime-execution.md). |
-
-Example (default — scoped apply):
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out
-```
-
-Example (opt-in artifact-only — no working-tree apply):
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --artifact-only
-```
-
-Example (explicit scope + enforce policy — same realization mode, pinned tree):
-
-The stock `configs/policy/compile_tools.rego` allowlists `llm.complete` and `executor.run` only. For `scoped_apply`, **extend** your Rego so `allowed_actions` includes `compile.patch.apply` (copy the starter file or overlay a package that unions the extra action). Then run:
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --compile-realization-mode scoped_apply \
-  --apply-scope-root /absolute/path/to/your/repo \
-  --policy-mode enforce \
-  --opa-policy-path ./path/to/your/compile_tools_with_apply.rego
-```
-
-Without that allowlist entry, the run fails closed with an explicit policy denial (by design).
-
-### Emerging Role Golden Path (opt-in)
-
-AKC supports a profile-oriented UX for “constraints/architecture/debugging” workflows. The **`emerging`** profile is the documented golden path (not the global default): use it when you want deterministic defaults, profile sidecars, and tighter integration with verify, replay plans, and control-plane debugging.
-
-**Baseline:** With no `--developer-role-profile` flag, no `AKC_DEVELOPER_ROLE_PROFILE`, and no `developer_role_profile` in a project file, commands resolve to **`classic`**. **Recommended:** Run **`akc init`** (writes `developer_role_profile: emerging` into `.akc/project.json` by default) or set the env var or project field explicitly.
-
-#### Environment variable and optional project file
-
-- **`AKC_DEVELOPER_ROLE_PROFILE`** — set to `emerging` or `classic`. Omit it to fall through to **`.akc/project.json`** / **`.akc/project.yaml`** (if present), then **`classic`**.
-- **Precedence:** `--developer-role-profile` on the CLI **wins**, then `AKC_DEVELOPER_ROLE_PROFILE`, then an optional repo file **`.akc/project.json`** or **`.akc/project.yaml`**, then `classic`.
-- **Optional repo config** (when present under the current working directory): `.akc/project.json` (or `.akc/project.yaml` if PyYAML is installed) may include `developer_role_profile`, `tenant_id`, `repo_id`, and `outputs_root`. **`project.json` wins over `project.yaml` if both exist.** Ingest, compile, verify, and **`akc runtime start`** honor **`AKC_TENANT_ID`**, **`AKC_REPO_ID`**, and **`AKC_OUTPUTS_ROOT`** where applicable (CLI > env > project file; runtime uses **`outputs_root`** for bundle discovery and state paths).
-
-Example `.akc/project.json`:
-
-```json
-{
-  "developer_role_profile": "emerging",
-  "adoption_level": "advisor",
-  "tenant_id": "my-tenant",
-  "repo_id": "my-repo",
-  "outputs_root": "./out"
-}
-```
-
-`adoption_level` is a **progressive takeover hint**:
-
-- AKC records it in `.akc/project.json` for operator tooling and future automation gates.
-- For `adoption_level` **`compiler`** or **`autonomy`**, it also defaults the UX toward higher automation by resolving `developer_role_profile` to **`emerging`** when you have not set a profile explicitly (CLI/env/project `developer_role_profile` still wins).
-- Today, **compile still requires explicit flags**: use `akc compile --artifact-only` (or `--compile-realization-mode artifact_only`) for “Advisor” behavior.
-
-#### One copy-paste block (env + minimal flags)
-
-Set the profile once; pass only what the commands still require on the CLI. Scope for **ingest**, **compile**, **`akc verify`**, and **`akc runtime start`** uses the same resolution for **`AKC_TENANT_ID`**, **`AKC_REPO_ID`**, and **`AKC_OUTPUTS_ROOT`**: **CLI > environment > `.akc/project.json`**.
-
-```bash
-export AKC_DEVELOPER_ROLE_PROFILE=emerging
-export AKC_TENANT_ID=my-tenant
-export AKC_REPO_ID=my-repo
-export AKC_OUTPUTS_ROOT=./out
-
-akc ingest --connector docs --input ./docs --no-index
-
-akc compile --mode quick
-
-akc verify
-
-akc runtime start
-```
-
-Explicit CLI flags in this block (not counting `export`): **`--connector`**, **`--input`**, **`--no-index`** on ingest; **`--mode quick`** on compile — **four** flags total for the full ingest → compile → verify → runtime chain under `emerging`, with profile and scope (including outputs root for verify and runtime) carried by environment variables or `.akc/project.json`.
-
-#### DX success metrics (golden path)
-
-Use these as **documentation-level** success criteria; they are not enforced by telemetry in the OSS CLI.
-
-| Criterion                 | Target                                                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Time to first success** | Complete **ingest → compile → verify → runtime** under `emerging` in one sitting (local machine or CI) without debugging profile/scope wiring.                                                                                                                                                                          |
-| **Flag budget**           | Prefer **env + `.akc/project.json`** so repeated `--developer-role-profile` is unnecessary; aim for **≤ 4 explicit CLI flags** for the full chain as in the block above (adjust if you add optional tools like `--embedder hash`).                                                                                      |
-| **Regression signal**     | **`tests/integration/test_emerging_profile_one_command_flow.py`** exercises ingest → compile → verify → runtime with **`AKC_DEVELOPER_ROLE_PROFILE=emerging`** and no per-command `--developer-role-profile`. Use **manual dogfood** or **CI step timing** on that test as a rough duration budget for the golden path. |
-
-What the `emerging` profile does:
-
-- Keeps existing commands and flags valid; the **global** fallback when nothing sets the profile (CLI, env, or project file) remains **`classic`**.
-- Resolves profile defaults deterministically and records decisions as artifacts.
-- In compile, can bootstrap from the active scoped intent when `--intent-file` is omitted and can auto-seed a deployable empty plan.
-- Emits `developer_profile_decisions` sidecars and manifest **`control_plane`** references for audit/debug; **`akc verify`** writes **`verify_developer_context.v1.json`** under `.akc/verification/` when verification runs.
-
-### Production-safe Docker usage
-
-Use the Docker strong lane when you want the default production-oriented OS boundary in the CLI.
-
-Recommended production invocation:
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --sandbox strong \
-  --strong-lane-preference docker \
-  --policy-mode enforce \
-  --opa-policy-path ./configs/policy/compile_tools_prod.rego \
-  --sandbox-memory-mb 1024 \
-  --docker-pids-limit 256 \
-  --docker-user 65532:65532 \
-  --docker-tmpfs /tmp
-```
-
-What Docker strong uses by default:
-
-- Docker strong is the default `--sandbox strong` lane.
-- Network is denied by default.
-- Root filesystem is read-only by default.
-- Privileges are reduced by default with non-root user `65532:65532`, `no-new-privileges`, and `cap-drop ALL`.
-- Temporary writes are directed to `/tmp` via tmpfs by default.
-- Memory is capped at `1024 MiB` by default and PID count at `256` by default.
-- stdout/stderr capture is capped at `2048 KiB` per stream by default.
-
-Optional Docker hardening controls:
-
-- `--docker-user`
-- `--docker-tmpfs` (repeatable)
-- `--docker-seccomp-profile`
-- `--docker-apparmor-profile`
-- `--docker-ulimit-nofile`
-- `--docker-ulimit-nproc`
-- `--docker-cpus`
-
-Important behavior:
-
-- Docker-only hardening flags fail closed unless Docker strong can actually enforce them.
-- If Docker-specific hardening matters, do not use `--strong-lane-preference auto`.
-- Absolute seccomp profile paths must exist.
-- AppArmor profile names are Linux-only and fail closed when AppArmor is unavailable on the host.
-
-### Production-safe WASM usage
-
-Use the WASM lane when you want deterministic resource controls and capability-based filesystem access instead of a general OS process boundary.
-
-Recommended production invocation:
-
-```bash
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --sandbox strong \
-  --strong-lane-preference wasm \
-  --policy-mode enforce \
-  --opa-policy-path ./configs/policy/compile_tools_prod.rego \
-  --sandbox-memory-mb 256 \
-  --sandbox-cpu-fuel 5000000 \
-  --sandbox-stdout-max-kb 256 \
-  --sandbox-stderr-max-kb 256 \
-  --wasm-preopen-dir /absolute/workspace \
-  --wasm-allow-write-dir /absolute/workspace \
-  --wasm-fs-normalize-existing-paths \
-  --wasm-fs-normalization-profile strict
-```
-
-What this buys you:
-
-- real elapsed-time WASM timeouts plus deterministic CPU-fuel/memory/stdout/stderr classification
-- fail-closed preflight when the Rust WASM surface is unavailable
-- fail-closed policy behavior in `--policy-mode enforce`
-- no ambient host filesystem access unless directories are explicitly preopened
-- policy can evaluate writable WASM mounts separately from read-only preopens
-
-Current caveats:
-
-- On Windows, strict/prod WASM compile runs fail closed because bounded wall-time enforcement is not supported for the WASM lane.
-- `allowed_read_paths` is not supported in the WASM lane. Use explicit preopens and writable subsets instead.
-- `--wasm-preopen-dir` and `--wasm-allow-write-dir` are WASM-only flags. Use them only with `--sandbox strong --strong-lane-preference wasm` or `--use-rust-exec --rust-exec-lane wasm`.
-
-For embedded/integration usage, configure filesystem capabilities through `RustExecConfig`:
-
-```python
-from akc.compile.rust_bridge import RustExecConfig
-
-rust_cfg = RustExecConfig(
-    lane="wasm",
-    memory_bytes=256 * 1024 * 1024,
-    cpu_fuel=5_000_000,
-    stdout_max_bytes=256 * 1024,
-    stderr_max_bytes=256 * 1024,
-    preopen_dirs=("/absolute/workspace",),
-    allowed_write_paths=("/absolute/workspace",),
-    wasm_normalize_existing_paths=True,
-    wasm_normalization_strict=True,
-)
-```
-
-### Policy + OPA/Rego (default-deny boundaries)
-
-Compile now enforces default-deny tool authorization with explicit action allowlists and per-call capability tokens. You can run policy checks in:
-
-- `--policy-mode audit_only` (log denied decisions, continue)
-- `--policy-mode enforce` (block denied decisions)
-
-Starter Rego policy file: `configs/policy/compile_tools.rego`
-Stricter “prod” policy profile: `configs/policy/compile_tools_prod.rego` (blocks `executor.run` unless `repo_id` is explicitly approved).
-
-```bash
-# Enforce policy decisions (block on deny)
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --policy-mode enforce \
-  --opa-policy-path ./configs/policy/compile_tools.rego \
-  --opa-decision-path data.akc.allow
-```
-
-```bash
-# Audit-only mode (record denials without blocking execution)
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --policy-mode audit_only \
-  --opa-policy-path ./configs/policy/compile_tools.rego
-```
-
-The OPA input includes tenant/repo scope, requested action (`llm.complete` or `executor.run`), capability token fields, and action context (for example, test stage). This allows policy-as-code to enforce tenant isolation and stage boundaries without ambient authority.
-
-For Docker strong runs, OPA also receives runtime hardening context for `executor.run`, including:
-
-- backend label (`docker`)
-- network mode / network exception
-- `read_only_rootfs`
-- `no_new_privileges`
-- `cap_drop_all`
-- user presence and non-root classification
-- seccomp/AppArmor profile identifiers
-- memory / PID / CPU / ulimit settings
-- tmpfs mount list
-
-#### Policy profile switching
-
-Policy “profiles” are selected by pointing `--opa-policy-path` at a different Rego file (you can keep separate profiles per environment or tenant).
-
-```bash
-# Dev-ish profile: allow executor.run for compile test stages
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --policy-mode enforce \
-  --opa-policy-path ./configs/policy/compile_tools.rego
-```
-
-```bash
-# Prod profile: block executor.run unless repo is on an explicit allowlist
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --policy-mode enforce \
-  --opa-policy-path ./configs/policy/compile_tools_prod.rego
-```
-
-#### Docker rollout stages
-
-Use the rollout in this order:
-
-1. Audit policy only.
-   Run Docker strong with `--policy-mode audit_only` first to observe policy denials without blocking execution. This is the right stage for verifying that the emitted Docker hardening context matches your expectations.
-2. Enforce policy in CI and release branches.
-   Protected CI should run an actual Docker strong compile in `--policy-mode enforce` with the prod policy profile so regressions in Docker hardening become branch-blocking failures.
-3. Enforce as the default in the production profile.
-   Treat `--sandbox strong --strong-lane-preference docker --policy-mode enforce --opa-policy-path ./configs/policy/compile_tools_prod.rego` as the production baseline. Avoid `auto` fallback in this stage because Docker-specific guarantees must not silently disappear.
-
-### Compiler spine artifacts (IR + replay manifest)
-
-Phase A adds deterministic compiler contracts under:
-
-- `src/akc/ir/`:
-  - `schema.py` (`IRDocument`, `IRNode`, `EffectAnnotation`, stable node IDs)
-  - `provenance.py` (`ProvenancePointer` for source traceability)
-  - `versioning.py` (supported IR schema/format versions)
-  - `diff.py` (`diff_ir` for `added`/`removed`/`changed` node IDs)
-- `src/akc/run/`:
-  - `manifest.py` (`RunManifest`, retrieval snapshots, pass records, stable hash)
-  - `replay.py` (`decide_replay_for_pass` for replay call policy)
-
-Replay modes currently modeled:
-
-- `live`: call model + tools normally
-- `llm_vcr`: replay model responses, still allow tool execution
-- `full_replay`: no model or tool calls
-- `partial_replay`: selective rerun with deterministic model replay policy
-
-Replay decision table:
-
-| Replay mode      | Model calls      | Tool calls                     | Manifest requirements                                                            |
-| ---------------- | ---------------- | ------------------------------ | -------------------------------------------------------------------------------- |
-| `live`           | Yes              | Yes                            | None (optional)                                                                  |
-| `llm_vcr`        | No (replayed)    | Yes                            | Cached model payloads (`llm_vcr` or pass metadata with `llm_text`)               |
-| `full_replay`    | No (replayed)    | No (replayed)                  | Cached model + execute payloads in prior run manifest                            |
-| `partial_replay` | Replayed (model) | Yes (selected passes run live) | Prior manifest recommended; pass list from `--partial-replay-passes` or manifest |
-
-For `partial_replay`, `--partial-replay-passes` takes precedence; if omitted, pass selection falls back to the replay manifest.
-
-#### Intent quality contract (advisory vs gate)
-
-Compile acceptance supports an intent-level `quality_contract` with six stable dimensions:
-
-- `taste`
-- `domain_knowledge`
-- `judgment`
-- `instincts`
-- `user_empathy`
-- `engineering_discipline`
-
-Each dimension can set `target_score`, optional `gate_min_score`, `weight`, `evidence_requirements`, and `enforcement_stage` (`advisory` or `gate`).
-
-Default profile behavior:
-
-- `domain_knowledge`, `judgment`, and `engineering_discipline` are hard-gated by default.
-- `taste`, `instincts`, and `user_empathy` remain advisory by default.
-
-- **Advisory**: findings are recorded, run may still pass.
-- **Gate**: any dimension below `gate_min_score` fails intent acceptance.
-
-Behavior and evidence surfaces:
-
-- compile writes `last_intent_acceptance.quality_scorecard` on the step outputs
-- run sidecar: `.akc/run/<run_id>.quality.json`
-- manifest control-plane fields include `quality_contract_fingerprint`, `quality_overall_score`, per-dimension scores, and gate/advisory dimension sets
-- OTEL export includes `akc.intent.quality.*` attributes for score/tag correlation
-
-Replay note:
-
-- `quality_contract` evaluation mode contributes mandatory partial-replay passes (`execute`, `verify`, `intent_acceptance`) in replay planning
-
-Replay examples:
-
-```bash
-# Full replay (no model/tool calls)
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --replay-mode full_replay \
-  --replay-manifest-path ./out/my-tenant/my-repo/.akc/run/<prior-run>.manifest.json
-```
-
-```bash
-# LLM VCR replay (model output replayed, tools still run)
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --replay-mode llm_vcr \
-  --replay-manifest-path ./out/my-tenant/my-repo/.akc/run/<prior-run>.manifest.json
-```
-
-### Runtime operations
-
-When compile emits `.akc/runtime/<run_id>.runtime_bundle.json`, the runtime CLI can start and inspect a tenant-scoped runtime run:
-
-```bash
-akc runtime start \
-  --bundle ./out/my-tenant/my-repo/.akc/runtime/<run_id>.runtime_bundle.json \
-  --mode simulate \
-  --outputs-root ./out
-```
-
-Inspect the resulting runtime run:
-
-```bash
-akc runtime status \
-  --runtime-run-id <runtime_run_id> \
-  --outputs-root ./out \
-  --tenant-id my-tenant \
-  --repo-id my-repo
-```
-
-Other operator commands:
-
-- `akc runtime stop --runtime-run-id <id> --outputs-root ./out` (optional `--tenant-id` / `--repo-id` scope hints)
-- `akc runtime events --runtime-run-id <id> --outputs-root ./out` (optional scope hints; add `--follow` to stream)
-- `akc runtime reconcile --runtime-run-id <id> --outputs-root ./out --dry-run` or `--apply` (optional `--watch` loop and scope hints)
-- `akc runtime checkpoint --runtime-run-id <id> --outputs-root ./out` (optional scope hints)
-- `akc runtime replay --runtime-run-id <id> --mode runtime_replay|reconcile_replay --outputs-root ./out` (optional scope hints)
-- `akc runtime coordination-plan --bundle <path/to/runtime_bundle.json>` — print coordination schedule layers from a bundle
-- `akc runtime autopilot` — always-on living recompile + reliability KPI loop (`akc runtime autopilot --help` for flags; see `docs/runtime-execution.md` and `configs/slo/`)
-
-Runtime artifacts stay under the same tenant/repo root:
-
-- `.akc/runtime/<run_id>.runtime_bundle.json`
-- `.akc/runtime/<run_id>/<runtime_run_id>/runtime_run.json`
-- `.akc/runtime/<run_id>/<runtime_run_id>/{checkpoint,events,queue_snapshot,runtime_evidence,policy_decisions}.json`
-
-### Progressive environment gating (runtime deployment providers)
-
-AKC is **fail-closed by default** for real infrastructure. Even if a runtime bundle requests a real deployment provider, the runtime will fall back to the in-memory provider unless the corresponding environment gate is enabled. Source of truth: `src/akc/runtime/providers/factory.py`.
-
-| “I want…”                                             | Minimum bundle metadata (`RuntimeBundle.metadata`)                                           | Minimum env                                                             | What happens if missing                                                                                                  |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Local runtime in CI/tests (no infra, no mutation)** | Omit `deployment_provider` (or set an unknown `kind`)                                        | _(none)_                                                                | In-memory provider is used.                                                                                              |
-| **Observe Docker Compose (read-only)**                | `deployment_provider.kind: "docker_compose_observe"`                                         | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider.                                                                                        |
-| **Observe Kubernetes (read-only)**                    | `deployment_provider.kind: "kubernetes_observe"`                                             | `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider.                                                                                        |
-| **Apply Docker Compose (mutating)**                   | `deployment_provider.kind: "docker_compose_apply"`                                           | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider unless bundle opts into full replacement mode.                                          |
-| **Apply Kubernetes (mutating)**                       | `deployment_provider.kind: "kubernetes_apply"`                                               | `AKC_ENABLE_MUTATING_DEPLOYMENT_PROVIDER=1`                             | Falls back to in-memory provider unless bundle opts into full replacement mode.                                          |
-| **Full layer replacement (explicit bundle contract)** | `layer_replacement_mode: "full"` **or** `deployment_provider_contract.mutation_mode: "full"` | observe kinds still require `AKC_ENABLE_EXTERNAL_DEPLOYMENT_PROVIDER=1` | Apply providers are allowed without `AKC_ENABLE_MUTATING...` when full replacement mode is explicitly set on the bundle. |
-
-Copy/paste templates (drop into runtime bundle `metadata`):
-
-```json
-{
-  "deployment_provider": {
-    "kind": "docker_compose_observe",
-    "project_dir": ".",
-    "compose_files": ["docker-compose.yml"]
-  }
-}
-```
-
-```json
-{
-  "deployment_provider": {
-    "kind": "kubernetes_observe",
-    "kube_context": "my-context",
-    "namespace": "default"
-  }
-}
-```
-
-```json
-{
-  "deployment_provider": {
-    "kind": "kubernetes_apply",
-    "kube_context": "my-context",
-    "namespace": "default"
-  },
-  "deployment_provider_contract": {
-    "mutation_mode": "gated"
-  }
-}
-```
-
-```json
-{
-  "deployment_provider": {
-    "kind": "kubernetes_apply",
-    "kube_context": "my-context",
-    "namespace": "default"
-  },
-  "layer_replacement_mode": "full",
-  "deployment_provider_contract": {
-    "mutation_mode": "full"
-  }
-}
-```
-
-```bash
-# Partial replay: rerun only execute, replay other passes
-akc compile \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --outputs-root ./out \
-  --replay-mode partial_replay \
-  --partial-replay-passes execute \
-  --replay-manifest-path ./out/my-tenant/my-repo/.akc/run/<prior-run>.manifest.json
-```
-
-`--partial-replay-passes` accepts a comma-separated pass list:
-`plan,retrieve,generate,execute,repair,verify`.
-When omitted, pass selection is derived from the replay manifest.
-
-#### Operator replay plan (`akc control replay plan`)
-
-To avoid hand-assembling pass lists after an incident, emit a **machine-readable replay plan** from an existing run manifest. It uses the same mandatory-partial-replay union as `akc control manifest diff` (aligned with intent evaluation modes on the manifest, unless you override modes on the CLI).
-
-```bash
-# From a manifest path (stdout: JSON)
-akc control replay plan \
-  --manifest ./out/my-tenant/my-repo/.akc/run/<run_id>.manifest.json
-
-# Or resolve by run id under an outputs root
-akc control replay plan \
-  --outputs-root ./out \
-  --tenant-id my-tenant \
-  --repo-id my-repo \
-  --run-id <run_id>
-
-# Optional: same comma-separated modes as manifest diff
-akc control replay plan \
-  --manifest ./out/my-tenant/my-repo/.akc/run/<run_id>.manifest.json \
-  --evaluation-modes tests,manifest_check
-
-# Write a file (stdout JSON also includes written_path when set)
-akc control replay plan \
-  --manifest ./out/my-tenant/my-repo/.akc/run/<run_id>.manifest.json \
-  --out ./replay_plan.json
-```
-
-The document includes `intent_replay_context.effective_partial_replay_passes` and `suggested_compile.argv_template` (with a placeholder input path). **Treat it as documentation for CI or runbooks**, not as something a read-only tool should execute. Keep **tenant/repo scope** consistent with the manifest when you run `akc compile`.
-
-`akc control playbook run` also writes a sibling **`<timestamp>.replay_plan.json`** for the **focus** run next to the playbook report under `.akc/control/playbooks/`, and records a summary pointer on the playbook report.
-
-#### Replay troubleshooting
-
-- **`--partial-replay-passes requires --replay-mode partial_replay`**
-  - Fix: add `--replay-mode partial_replay` when using `--partial-replay-passes`.
-- **Invalid pass name in `--partial-replay-passes`**
-  - Fix: use only `plan,retrieve,generate,execute,repair,verify`.
-- **Replay run exits early or cannot replay expected pass**
-  - Cause: replay manifest is missing required cached payloads for that mode/pass.
-  - Fix: provide a valid prior manifest via `--replay-manifest-path` (or rerun once in `live` mode to seed replay artifacts).
-- **Replay manifest scope mismatch (tenant/repo)**
-  - Cause: manifest tenant/repo does not match current `--tenant-id` / `--repo-id`.
-  - Fix: use a manifest emitted for the same tenant/repo scope to preserve isolation guarantees.
-- **No manifest found when path is omitted**
-  - Cause: there is no prior `.akc/run/*.manifest.json` under the scoped outputs root.
-  - Fix: pass `--replay-manifest-path` explicitly or run a baseline compile first.
-
-These contracts are useful for:
-
-- regression tests (stable IR and stable manifest hashing),
-- auditing compile behavior,
-- deterministic debugging/replay in CI.
-
-### Observability + provenance artifacts
-
-Compile also emits control-plane artifacts for tracing, provenance, and cost accounting:
-
-- Run manifest: `.akc/run/<run_id>.manifest.json`
-- Trace spans: `.akc/run/<run_id>.spans.json`
-- Cost attribution: `.akc/run/<run_id>.costs.json`
-- Human-readable run log: `.akc/run/<run_id>.log.txt`
-- IR snapshot: `.akc/ir/<run_id>.json`
-- IR diff vs previous run (if available): `.akc/ir/<run_id>.diff.json`
-- Policy decisions (if emitted): `.akc/policy/<run_id>_<step_id>.decisions.json`
-- Sandbox/test execution outputs: `.akc/tests/*.json` and `.akc/tests/*.txt`
-
-All paths are tenant+repo scoped under:
-`<outputs-root>/<tenant-id>/<repo-id>/`
-
-Quick inspect example:
-
-```bash
-ls -R ./out/my-tenant/my-repo/.akc/run
-```
-
-The trace span schema is OpenTelemetry-compatible (`trace_id`, `span_id`,
-`parent_span_id`, start/end unix nanos, attributes, status), and cost records
-include both per-run usage (`tokens`, `tool_calls`, `wall_time_ms`) and
-attribution keys (`tenant_id`, `repo_id`, `run_id`) for control-plane billing
-or quota enforcement.
-
-### Verify
-
-Check emitted artifacts (tests, verifier results) for a tenant/repo. Scope matches ingest/compile: **CLI > env > `.akc/project.json`** for tenant, repo, and outputs root. Preflight output includes resolved scope sources and brief **governance / deployment / exec-allowlist** hints for self-serve debugging.
-
-```bash
-# Typical: same exports as ingest/compile, then:
-akc verify
-
-# Or pass scope explicitly:
-akc verify --tenant-id my-tenant --repo-id my-repo --outputs-root ./out
-```
-
-## End-to-end run (ingest → compile → verify)
-
-1. **Ingest** docs (offline, no index):  
-   `akc ingest --tenant-id my-tenant --connector docs --input ./docs --embedder hash --no-index`  
-   (Or set `AKC_TENANT_ID` and omit `--tenant-id`; see [Emerging Role Golden Path](#emerging-role-golden-path-opt-in) for env + minimal flags.)
-
-2. **Compile**:  
-   `akc compile --tenant-id my-tenant --repo-id my-repo --outputs-root ./out`
-
-3. **Verify**:  
-   `akc verify` (with the same `AKC_*` scope as ingest/compile), or pass `--tenant-id` / `--repo-id` / `--outputs-root` explicitly.
-
-Outputs and tests live under `./out/my-tenant/my-repo/` (e.g. `manifest.json`, `.akc/tests/`, `.akc/memory.sqlite`). The CLI uses an offline LLM backend by default so no API keys are required for this path. For **`emerging`** profile defaults and a verify-inclusive golden path, use the copy-paste block in [Emerging Role Golden Path](#emerging-role-golden-path-opt-in).
-
-## Project structure
-
-- `src/akc/` — Core package: `ingest/`, `memory/`, `compile/`, `outputs/`, `runtime/`, `delivery/`, `control/`, `living/`, `coordination/`, `ir/`, `run/`, `artifacts/`, `execute/`, `viewer/`, `evals/`, …
-- `rust/crates/` — Optional Rust tooling (ingest, executor); used behind feature flags from Python where enabled
-- `configs/` — Sample eval suites, SLO targets, policy stubs
-- `deploy/` — Reference systemd, Compose, and Kubernetes snippets for autopilot / living flows
-- `scripts/` — CI helpers (policy checks, retrieval harness, reliability SLO gate, …)
-- `docs/` — Architecture, contracts, and research (`architecture.md`, `artifact-contracts.md`, `coordination-semantics.md`, …)
-- `tests/unit/`, `tests/integration/` — Pytest suites
-- `examples/` — Fixtures and sample inputs (e.g. OpenAPI petstore)
-
-## Next steps
-
-- Read [architecture.md](architecture.md) for the pipeline and components.
-- Read [delivery-architecture.md](delivery-architecture.md) for named-recipient `akc deliver` and how it relates to compile output.
-- Read [research.md](research.md) for the research behind the design.
-- See [CONTRIBUTING.md](../CONTRIBUTING.md) to run tests and open a PR.
+- [Configuration](configuration.md)
+- [CLI command reference](cli-commands.md)
+- [Architecture](architecture.md)
+- [Validation](validation.md)
+- [Artifact contracts](artifact-contracts.md)
+- [Compile-time skills](compile-skills.md)
+- [Security](security.md)

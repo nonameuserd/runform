@@ -124,7 +124,7 @@ These can support a future “correctness guarantees” phase (e.g. Dafny/Verus 
 
 ## Inputs in practice
 
-- **Messaging (Slack, Discord, Teams, Matrix):** Auth (OAuth or platform-specific); structure as **Q&A from threads** (Snyk-style) rather than raw dumps; channel/date/user filters. Connectors should implement a common messaging abstraction.
+- **Messaging (current and future):** Today the repo ships Slack, Discord, Telegram, and WhatsApp-oriented messaging ingest paths. The common design goal is still the same: structure messages as **Q&A from threads** rather than raw dumps, with auth and channel/date/user filters where the platform supports them.
 - **Docs/APIs:** Chunking, embedding, retrieval; optional schema extraction (OpenAPI) for API-derived workflows.
 - **Living docs:** Bidirectional sync and validation (e.g. SpecWeave-style) can be a later “living system” feature.
 

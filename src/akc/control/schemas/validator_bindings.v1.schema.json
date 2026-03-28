@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:validator_bindings:v1",
+  "title": "AKC validator bindings registry",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_kind": {
+      "type": "string",
+      "const": "validator_bindings"
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "logql_query",
+              "promql_query",
+              "traceql_query",
+              "maestro_flow",
+              "android_helper",
+              "ios_simulator_helper"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      }
+    }
+  },
+  "required": [
+    "bindings"
+  ]
+}

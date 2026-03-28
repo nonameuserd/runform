@@ -19,11 +19,26 @@ from akc.runtime.providers.factory import (
     external_deployment_providers_enabled,
     mutating_deployment_providers_enabled,
 )
+from akc.validation import (
+    SUPPORTED_VALIDATOR_ADAPTER_ID,
+    execute_validator_bindings,
+    merge_validator_evidence,
+    resolve_validator_bindings_path,
+)
 
 from .common import configure_logging
 from .living_doctor import run_living_unattended_checks
 from .profile_defaults import resolve_developer_role_profile, resolve_optional_project_string
 from .project_config import load_akc_project_config
+from .runtime import (
+    _evidence_path,
+    _load_runtime_evidence,
+    _maybe_write_operational_validity_report,
+    _persist_compile_run_manifest_with_runtime_links,
+    _post_runtime_operational_criteria_from_bundle,
+    _resolve_runtime_run_record,
+    _write_json,
+)
 
 
 def _run_formal_command(
@@ -326,6 +341,63 @@ def cmd_verify(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
 
+    if run_id_effective and bool(getattr(args, "execute_validators", False)):
+        manifest_path = resolve_run_manifest_path(
+            manifest_path=None,
+            outputs_root=outputs_root,
+            tenant_id=scope.tenant_id,
+            repo_id=scope.repo_id,
+            run_id=run_id_effective,
+        )
+        manifest = RunManifest.from_json_file(manifest_path)
+        control_plane = manifest.control_plane or {}
+        runtime_run_id = str(control_plane.get("runtime_run_id", "")).strip()
+        if not runtime_run_id:
+            print(
+                f"Validator execution for run_id={run_id_effective}: FAILED\n  runtime_run_id missing from manifest",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            record = _resolve_runtime_run_record(
+                outputs_root=outputs_root,
+                runtime_run_id=runtime_run_id,
+                tenant_id=scope.tenant_id,
+                repo_id=scope.repo_id,
+            )
+        except Exception as exc:
+            print(f"Validator execution for run_id={run_id_effective}: FAILED\n  {exc}", file=sys.stderr)
+            return 2
+        bundle_path = Path(str(record["bundle_path"])).expanduser().resolve()
+        specs = _post_runtime_operational_criteria_from_bundle(bundle_path)
+        bindings_path = resolve_validator_bindings_path(
+            cwd=cwd,
+            project=proj,
+            cli_value=getattr(args, "validator_bindings", None),
+        )
+        try:
+            result = execute_validator_bindings(
+                scope_root=base,
+                run_id=run_id_effective,
+                runtime_run_id=runtime_run_id,
+                specs=specs,
+                bindings_path=bindings_path,
+                adapter_id=SUPPORTED_VALIDATOR_ADAPTER_ID,
+            )
+            merged_evidence = merge_validator_evidence(existing=_load_runtime_evidence(record), updates=result.evidence)
+            payload = [item.to_json_obj() for item in merged_evidence]
+            _write_json(_evidence_path(record), payload)
+            ov_summary = _maybe_write_operational_validity_report(record, evidence=merged_evidence)
+            _persist_compile_run_manifest_with_runtime_links(record, runtime_evidence=merged_evidence)
+            print(
+                "Validator execution:"
+                f" bindings={len(result.binding_results)} artifacts={len(result.artifact_paths)}"
+                f" passed_all_operational={ov_summary.passed_all if ov_summary.ran_evaluation else 'n/a'}"
+            )
+        except Exception as exc:
+            print(f"Validator execution for run_id={run_id_effective}: FAILED\n  {exc}", file=sys.stderr)
+            return 2
+
     if run_id_effective:
         try:
             op_result = verify_run_operational_coupling(
@@ -333,6 +405,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 scope=scope,
                 run_id=run_id_effective,
                 strict_manifest=strict,
+                validator_bindings_path=resolve_validator_bindings_path(
+                    cwd=cwd,
+                    project=proj,
+                    cli_value=getattr(args, "validator_bindings", None),
+                ),
             )
         except Exception as exc:
             print(

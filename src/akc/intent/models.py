@@ -94,7 +94,9 @@ _ALLOWED_OPERATIONAL_PARAMS_KEYS: Final[frozenset[str]] = frozenset(
         "composite_predicates",
     }
 )
-_ALLOWED_SIGNAL_SELECTOR_KEYS: Final[frozenset[str]] = frozenset({"evidence_type", "payload_path", "otel_query_stub"})
+_ALLOWED_SIGNAL_SELECTOR_KEYS: Final[frozenset[str]] = frozenset(
+    {"evidence_type", "payload_path", "otel_query_stub", "validator_stub"}
+)
 _ALLOWED_OTEL_METRIC_SIGNAL_KEYS: Final[frozenset[str]] = frozenset({"metric_name", "attributes"})
 _ALLOWED_COMPOSITE_NUMERATOR_KEYS: Final[frozenset[str]] = frozenset({"metric_name", "attributes"})
 _ALLOWED_SPAN_STATUS_FRACTION_KEYS: Final[frozenset[str]] = frozenset(
@@ -171,33 +173,62 @@ def _validate_otel_query_stub_value(stub: str | None) -> None:
         )
 
 
+def _validate_validator_stub_value(stub: str | None) -> None:
+    if stub is None:
+        return
+    if not _OTEL_QUERY_STUB_PATTERN.fullmatch(stub):
+        raise OperationalValidityParamsError(
+            "operational_signal.validator_stub must be an opaque id (1–128 chars, "
+            "[-A-Za-z0-9_.] only); validator bindings belong in operator config outside intent JSON"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class OperationalSignalSelector:
     """Selects runtime evidence or telemetry for an operational validity criterion.
 
     ``payload_path`` is a dotted path (or JSON-pointer-like) into the evidence
     item ``payload`` object — metadata only, not evaluated at intent-parse time.
-    ``otel_query_stub`` holds an opaque stub identifier for a future OTLP/query
-    binding; it must never carry credentials or raw query text. Future external
-    metric queries are bound via operator-supplied configuration outside intent JSON.
+    ``validator_stub`` is the canonical opaque binding id for operator-configured
+    validator execution. ``otel_query_stub`` remains accepted for backward
+    compatibility and is normalized to the same binding id semantics.
     """
 
     evidence_type: str
     payload_path: str | None = None
+    validator_stub: str | None = None
     otel_query_stub: str | None = None
 
     def __post_init__(self) -> None:
         require_non_empty(self.evidence_type, name="operational_signal.evidence_type")
         if self.payload_path is not None:
             require_non_empty(self.payload_path, name="operational_signal.payload_path")
+        if self.validator_stub is not None:
+            require_non_empty(self.validator_stub, name="operational_signal.validator_stub")
         if self.otel_query_stub is not None:
             require_non_empty(self.otel_query_stub, name="operational_signal.otel_query_stub")
+        _validate_validator_stub_value(self.validator_stub)
+        _validate_otel_query_stub_value(self.otel_query_stub)
+        if (
+            self.validator_stub is not None
+            and self.otel_query_stub is not None
+            and self.validator_stub.strip() != self.otel_query_stub.strip()
+        ):
+            raise ValueError("operational_signal.validator_stub and otel_query_stub must match when both are set")
+
+    @property
+    def binding_stub(self) -> str | None:
+        raw = self.validator_stub or self.otel_query_stub
+        if raw is None:
+            return None
+        s = raw.strip()
+        return s if s else None
 
     def to_json_obj(self) -> dict[str, JSONValue]:
         obj: dict[str, JSONValue] = {
             "evidence_type": self.evidence_type,
             "payload_path": self.payload_path,
-            "otel_query_stub": self.otel_query_stub,
+            "validator_stub": self.binding_stub,
         }
         return {k: v for k, v in obj.items() if v is not None}
 
@@ -207,19 +238,27 @@ class OperationalSignalSelector:
             raise OperationalValidityParamsError("operational signal selector must be a JSON object")
         _reject_unknown_keys(obj, _ALLOWED_SIGNAL_SELECTOR_KEYS, context="operational_signal")
         pp = cast(str | None, obj.get("payload_path"))
-        stub_raw = obj.get("otel_query_stub")
-        stub: str | None = None
-        if stub_raw is not None:
-            stripped = str(stub_raw).strip()
+        validator_stub_raw = obj.get("validator_stub")
+        validator_stub: str | None = None
+        if validator_stub_raw is not None:
+            stripped = str(validator_stub_raw).strip()
+            if stripped:
+                _validate_validator_stub_value(stripped)
+                validator_stub = stripped
+        otel_stub_raw = obj.get("otel_query_stub")
+        otel_stub: str | None = None
+        if otel_stub_raw is not None:
+            stripped = str(otel_stub_raw).strip()
             if stripped:
                 _validate_otel_query_stub_value(stripped)
-                stub = stripped
+                otel_stub = stripped
         _validate_payload_path_no_secrets(pp)
         try:
             return OperationalSignalSelector(
                 evidence_type=str(obj.get("evidence_type", "")),
                 payload_path=pp,
-                otel_query_stub=stub,
+                validator_stub=validator_stub,
+                otel_query_stub=otel_stub,
             )
         except ValueError as e:
             raise OperationalValidityParamsError(str(e)) from e

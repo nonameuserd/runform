@@ -302,3 +302,205 @@ def test_verify_operational_coupling_rejects_report_intent_ref_divergence(
     err = capsys.readouterr().err
     assert "tenant/repo trust boundary violated for tenant-a/repo-a" in err
     assert "runtime bundle intent_ref diverges from operational_validity_report intent_ref" in err
+
+
+def test_verify_can_execute_validators_before_operational_coupling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    outputs_root = tmp_path / "out"
+    tenant_id = "tenant-a"
+    repo_id = "repo-a"
+    run_id = "compile-1"
+    scope_root = outputs_root / tenant_id / repo_id
+    runtime_run_id = "runtime-1"
+
+    intent = IntentSpecV1(
+        intent_id="intent-validator",
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        spec_version=1,
+        status="active",
+        goal_statement="Verify validator execution",
+        derived_from_goal_text=False,
+        objectives=(Objective(id="obj-1", priority=1, statement="observe login health", target="runtime"),),
+        constraints=(),
+        policies=(),
+        success_criteria=(
+            SuccessCriterion(
+                id="sc-op-1",
+                evaluation_mode="operational_spec",
+                description="query-backed operational result exists",
+                params={
+                    "spec_version": 1,
+                    "window": "single_run",
+                    "predicate_kind": "presence",
+                    "signals": [
+                        {
+                            "evidence_type": "akc_observability_query_result",
+                            "validator_stub": "obs.login",
+                            "payload_path": "status",
+                        }
+                    ],
+                    "expected_evidence_types": ["akc_observability_query_result"],
+                    "evaluation_phase": "post_runtime",
+                },
+            ),
+        ),
+        operating_bounds=OperatingBound(max_seconds=None, max_steps=None, allow_network=False),
+        assumptions=(),
+        risk_notes=(),
+        tags=(),
+        metadata=None,
+        created_at_ms=1,
+        updated_at_ms=2,
+    )
+    JsonFileIntentStore(base_dir=outputs_root).save_intent(tenant_id=tenant_id, repo_id=repo_id, intent=intent)
+
+    bundle_path = scope_root / ".akc" / "runtime" / f"{run_id}.runtime_bundle.json"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_path.write_text(
+        json.dumps(_bundle_payload(tenant_id=tenant_id, repo_id=repo_id, run_id=run_id, intent=intent)),
+        encoding="utf-8",
+    )
+
+    runtime_scope = scope_root / ".akc" / "runtime" / run_id / runtime_run_id
+    runtime_scope.mkdir(parents=True, exist_ok=True)
+    evidence_path = runtime_scope / "runtime_evidence.json"
+    evidence_path.write_text(
+        json.dumps(
+            [
+                RuntimeEvidenceRecord(
+                    evidence_type="terminal_health",
+                    timestamp=1,
+                    runtime_run_id=runtime_run_id,
+                    payload={
+                        "resource_id": "__runtime_aggregate__",
+                        "health_status": "healthy",
+                        "aggregate": True,
+                        "runtime_status": "terminal",
+                        "kernel_terminal_status": "terminal",
+                        "tenant_id": tenant_id,
+                        "repo_id": repo_id,
+                        "compile_run_id": run_id,
+                    },
+                ).to_json_obj()
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    policy_decisions_path = runtime_scope / "policy_decisions.json"
+    policy_decisions_path.write_text("[]", encoding="utf-8")
+    record = {
+        "tenant_id": tenant_id,
+        "repo_id": repo_id,
+        "run_id": run_id,
+        "runtime_run_id": runtime_run_id,
+        "outputs_root": str(outputs_root.resolve()),
+        "adapter_id": "local_depth",
+        "bundle_path": str(bundle_path.resolve()),
+        "scope_dir": str(runtime_scope.resolve()),
+        "checkpoint_path": str((runtime_scope / "checkpoint.json").resolve()),
+        "events_path": str((runtime_scope / "events.json").resolve()),
+        "queue_snapshot_path": str((runtime_scope / "queue_snapshot.json").resolve()),
+        "runtime_evidence_path": str(evidence_path.resolve()),
+        "coordination_audit_path": str((runtime_scope / "coordination_audit.json").resolve()),
+        "policy_decisions_path": str(policy_decisions_path.resolve()),
+    }
+    (runtime_scope / "runtime_run.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+    manifest_path = scope_root / ".akc" / "run" / f"{run_id}.manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = RunManifest(
+        run_id=run_id,
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        ir_sha256="a" * 64,
+        replay_mode="live",
+        runtime_bundle=ArtifactPointer(path=f".akc/runtime/{run_id}.runtime_bundle.json", sha256="b" * 64),
+        control_plane={
+            "runtime_run_id": runtime_run_id,
+            "runtime_evidence_ref": {
+                "path": ".akc/runtime/compile-1/runtime-1/runtime_evidence.json",
+                "sha256": "c" * 64,
+            },
+            "policy_decisions_ref": {
+                "path": ".akc/runtime/compile-1/runtime-1/policy_decisions.json",
+                "sha256": "d" * 64,
+            },
+        },
+    )
+    manifest_path.write_text(json.dumps(manifest.to_json_obj(), indent=2), encoding="utf-8")
+
+    (tmp_path / ".akc").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".akc" / "project.json").write_text(
+        json.dumps({"validation": {"bindings_path": "configs/validation/validator_bindings.v1.json"}}),
+        encoding="utf-8",
+    )
+    bindings_path = tmp_path / "configs" / "validation" / "validator_bindings.v1.json"
+    bindings_path.parent.mkdir(parents=True, exist_ok=True)
+    bindings_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "schema_kind": "validator_bindings",
+                "bindings": {
+                    "obs.login": {
+                        "kind": "logql_query",
+                        "url": "https://example.test/query",
+                        "query": '{app="mobile"}',
+                        "target": "loki-main",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Headers:
+        @staticmethod
+        def get_content_type() -> str:
+            return "application/json"
+
+    class _Response:
+        headers = _Headers()
+
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"ok": true}'
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: _Response())
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "verify",
+                "--tenant-id",
+                tenant_id,
+                "--repo-id",
+                repo_id,
+                "--outputs-root",
+                str(outputs_root),
+                "--run-id",
+                run_id,
+                "--mode",
+                "strict",
+                "--execute-validators",
+            ]
+        )
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "Validator execution:" in out
+    assert "Operational verification for run_id=compile-1:" in out
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert any(row.get("evidence_type") == "akc_observability_query_result" for row in evidence)

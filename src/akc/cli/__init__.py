@@ -14,6 +14,7 @@ from .action import (
     cmd_action_status,
     cmd_action_submit,
 )
+from .assistant import cmd_assistant
 from .compile import cmd_compile
 from .control import (
     cmd_control_forensics_export,
@@ -55,6 +56,7 @@ from .runtime import (
 from .verify import cmd_verify
 
 __all__ = [
+    "cmd_assistant",
     "cmd_compile",
     "cmd_drift",
     "cmd_watch",
@@ -104,6 +106,39 @@ def cmd_view(args: argparse.Namespace) -> int:
     return int(_cmd_view(args))
 
 
+def _add_llm_backend_args(parser: argparse.ArgumentParser, *, include_legacy_mode: bool = False) -> None:
+    parser.add_argument(
+        "--llm-backend",
+        choices=["offline", "openai", "anthropic", "gemini", "custom"],
+        default=None,
+        help="LLM backend selection (default: offline unless env/project config overrides).",
+    )
+    parser.add_argument("--llm-model", default=None, help="LLM model id for the selected backend.")
+    parser.add_argument("--llm-base-url", default=None, help="Optional provider base URL override.")
+    parser.add_argument("--llm-api-key", default=None, help="Optional API key override for hosted backends.")
+    parser.add_argument("--llm-timeout-s", type=float, default=None, help="LLM HTTP timeout in seconds.")
+    parser.add_argument("--llm-max-retries", type=int, default=None, help="LLM HTTP retry count for transient errors.")
+    parser.add_argument(
+        "--llm-allow-network",
+        dest="llm_allow_network",
+        action="store_true",
+        default=None,
+        help="Explicitly allow hosted LLM network egress for this invocation.",
+    )
+    parser.add_argument(
+        "--llm-backend-class",
+        default=None,
+        help="Custom backend class path ('<module>:<Class>' or '<module>.<Class>') when --llm-backend custom.",
+    )
+    if include_legacy_mode:
+        parser.add_argument(
+            "--llm-mode",
+            choices=["offline", "custom"],
+            default=None,
+            help="Legacy alias for llm backend selection (offline or custom).",
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="akc", description="Agentic Knowledge Compiler")
     parser.add_argument("--version", action="version", version=f"akc {__version__}")
@@ -111,6 +146,75 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     register_init_parser(sub)
+
+    assistant = sub.add_parser(
+        "assistant",
+        help="Conversational assistant mode (guided command orchestration over existing AKC surfaces)",
+    )
+    assistant.add_argument(
+        "-p",
+        "--prompt",
+        default=None,
+        help="Single-turn prompt (non-interactive mode)",
+    )
+    assistant.add_argument(
+        "--resume",
+        default=None,
+        help="Resume an existing assistant session id",
+    )
+    assistant.add_argument(
+        "--mode",
+        choices=["plan", "execute"],
+        default="plan",
+        help="Session mode when creating a new session (default: plan)",
+    )
+    assistant.add_argument("--tenant-id", default=None, help="Optional tenant scope hint for command suggestions")
+    assistant.add_argument("--repo-id", default=None, help="Optional repo scope hint for command suggestions")
+    assistant.add_argument("--outputs-root", default=None, help="Optional outputs root hint for command suggestions")
+    assistant.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default=None,
+        help="Assistant response format (default: project config assistant_default_format, else text)",
+    )
+    assistant.add_argument(
+        "--session-retention-days",
+        type=int,
+        default=None,
+        help=(
+            "Session retention under .akc/assistant/sessions "
+            "(default: project config assistant_session_retention_days, else 14)"
+        ),
+    )
+    assistant.add_argument(
+        "--memory-policy-path",
+        default=None,
+        help=(
+            "Optional path to weighted-memory policy JSON "
+            "(default: .akc/memory_policy.json when weighted memory is enabled)."
+        ),
+    )
+    assistant.add_argument(
+        "--memory-pin",
+        action="append",
+        default=[],
+        help="Pin a memory id (repeatable; format example: assistant_command:abc123).",
+    )
+    assistant.add_argument(
+        "--memory-boost",
+        action="append",
+        default=[],
+        help="Per-id additive memory boost (repeatable): <memory_id>:<float>.",
+    )
+    assistant.add_argument(
+        "--memory-budget-tokens",
+        type=int,
+        default=None,
+        help="Weighted-memory token budget for assistant context packing.",
+    )
+    _add_llm_backend_args(assistant)
+    assistant.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    assistant.set_defaults(func=cmd_assistant)
 
     if str(os.environ.get("AKC_ACTION_PLANE", "")).strip() == "1":
         action = sub.add_parser("action", help="Action plane (intent parse/plan/execute)")
@@ -644,23 +748,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow network egress in the sandbox (default: deny).",
     )
-    living.add_argument(
-        "--llm-mode",
-        choices=["offline", "custom"],
-        default="offline",
-        help=(
-            "LLM backend selection for living recompile. "
-            "offline uses deterministic built-in backend; custom loads --llm-backend-class."
-        ),
-    )
-    living.add_argument(
-        "--llm-backend-class",
-        help=(
-            "Custom LLM backend class path for living recompile "
-            "('<module>:<Class>' or '<module>.<Class>'). "
-            "Class must implement LLMBackend and have a no-arg constructor."
-        ),
-    )
+    _add_llm_backend_args(living, include_legacy_mode=True)
     living.add_argument(
         "--update-baseline-on-accept",
         action="store_true",
@@ -780,16 +868,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow network egress in the sandbox (default: deny).",
     )
-    living_wh.add_argument(
-        "--llm-mode",
-        choices=["offline", "custom"],
-        default="offline",
-        help="LLM backend for living recompile (offline or custom --llm-backend-class).",
-    )
-    living_wh.add_argument(
-        "--llm-backend-class",
-        help="Custom LLM backend class when --llm-mode custom.",
-    )
+    _add_llm_backend_args(living_wh, include_legacy_mode=True)
     living_wh.add_argument(
         "--update-baseline-on-accept",
         action="store_true",
@@ -935,6 +1014,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-operational-coupling",
         action="store_true",
         help="Disable default operational coupling verification for this command",
+    )
+    verify.add_argument(
+        "--execute-validators",
+        action="store_true",
+        help="Execute operator-side validator bindings before operational coupling verification",
+    )
+    verify.add_argument(
+        "--validator-bindings",
+        default=None,
+        help=(
+            "Override validator bindings registry path "
+            "(else project config or configs/validation/validator_bindings.v1.yaml)"
+        ),
     )
     verify.add_argument(
         "--living-unattended",
@@ -1424,6 +1516,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not apply `.akc/knowledge/decisions.json` overrides for this run.",
     )
     compile_cmd.add_argument(
+        "--memory-policy-path",
+        default=None,
+        help=(
+            "Optional path to weighted-memory policy JSON "
+            "(default: .akc/memory_policy.json when weighted memory is enabled)."
+        ),
+    )
+    compile_cmd.add_argument(
+        "--memory-pin",
+        action="append",
+        default=[],
+        help="Pin a retrieval memory id (repeatable; e.g. document:doc-1 or code_memory:item-2).",
+    )
+    compile_cmd.add_argument(
+        "--memory-boost",
+        action="append",
+        default=[],
+        help="Per-id additive memory boost (repeatable): <memory_id>:<float>.",
+    )
+    compile_cmd.add_argument(
+        "--memory-budget-tokens",
+        type=int,
+        default=None,
+        help="Weighted-memory token budget for compile retrieval context packing.",
+    )
+    compile_cmd.add_argument(
         "--runtime-bundle-embed-system-ir",
         action="store_true",
         help=(
@@ -1519,6 +1637,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run configured --compile-mcp-tool only on generate iterations, not repair.",
     )
+    _add_llm_backend_args(compile_cmd)
     compile_cmd.add_argument(
         "--format",
         choices=["text", "json"],

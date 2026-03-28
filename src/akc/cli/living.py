@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from akc.compile.interfaces import LLMBackend
 from akc.living.automation_profile import resolve_living_automation_profile
 from akc.living.dispatch import living_recompile_execute
 from akc.living.webhook_receiver import LivingWebhookServerConfig, run_living_webhook_server
+from akc.llm import build_llm_backend, resolve_llm_runtime_config
 
 from .common import configure_logging
 from .profile_defaults import resolve_developer_role_profile, resolve_optional_project_string
@@ -42,28 +41,6 @@ def _parse_canary_test_mode(raw: object) -> Literal["smoke", "full"]:
     if v == "full":
         return "full"
     raise SystemExit(f"invalid --canary-test-mode: {raw!r} (expected smoke|full)")
-
-
-def _load_llm_backend_class(*, class_path: str) -> LLMBackend:
-    raw = str(class_path).strip()
-    if not raw:
-        raise ValueError("llm backend class path must be non-empty")
-    if ":" in raw:
-        module_name, class_name = raw.split(":", 1)
-    else:
-        module_name, _, class_name = raw.rpartition(".")
-    module_name = module_name.strip()
-    class_name = class_name.strip()
-    if not module_name or not class_name:
-        raise ValueError("invalid llm backend class path; expected '<module>:<Class>' or '<module>.<Class>'")
-    mod = importlib.import_module(module_name)
-    cls = getattr(mod, class_name, None)
-    if cls is None:
-        raise ValueError(f"llm backend class not found: {raw}")
-    inst = cls()
-    if not isinstance(inst, LLMBackend):
-        raise ValueError(f"llm backend does not implement LLMBackend: {raw}")
-    return inst
 
 
 def cmd_living_recompile(args: argparse.Namespace) -> int:
@@ -134,16 +111,16 @@ def cmd_living_recompile(args: argparse.Namespace) -> int:
         project_value=proj.living_automation_profile if proj is not None else None,
     )
 
-    llm_backend: LLMBackend | None = None
-    llm_mode = str(getattr(args, "llm_mode", "offline"))
-    if llm_mode == "custom":
-        class_path = str(getattr(args, "llm_backend_class", "")).strip()
-        if not class_path:
-            raise SystemExit("--llm-backend-class is required when --llm-mode custom")
-        try:
-            llm_backend = _load_llm_backend_class(class_path=class_path)
-        except Exception as e:
-            raise SystemExit(f"failed to load custom llm backend: {e}") from e
+    try:
+        llm_cfg = resolve_llm_runtime_config(
+            args=args,
+            env=os.environ,
+            project=(proj.llm if proj is not None else None),
+            surface="living",
+        )
+        llm_backend = build_llm_backend(config=llm_cfg)
+    except ValueError as e:
+        raise SystemExit(f"failed to resolve llm backend: {e}") from e
 
     goal_s = str(getattr(args, "goal", "") or "").strip() or "Compile repository"
     code = living_recompile_execute(
@@ -267,16 +244,16 @@ def cmd_living_webhook_serve(args: argparse.Namespace) -> int:
         project_value=proj.living_automation_profile if proj is not None else None,
     )
 
-    llm_backend: LLMBackend | None = None
-    llm_mode = str(getattr(args, "llm_mode", "offline"))
-    if llm_mode == "custom":
-        class_path = str(getattr(args, "llm_backend_class", "")).strip()
-        if not class_path:
-            raise SystemExit("--llm-backend-class is required when --llm-mode custom")
-        try:
-            llm_backend = _load_llm_backend_class(class_path=class_path)
-        except Exception as e:
-            raise SystemExit(f"failed to load custom llm backend: {e}") from e
+    try:
+        llm_cfg = resolve_llm_runtime_config(
+            args=args,
+            env=os.environ,
+            project=(proj.llm if proj is not None else None),
+            surface="living",
+        )
+        llm_backend = build_llm_backend(config=llm_cfg)
+    except ValueError as e:
+        raise SystemExit(f"failed to resolve llm backend: {e}") from e
 
     allowlist = _parse_tenant_allowlist_frozen(getattr(args, "tenant_allowlist", None), os.environ)
     outputs_allow = _parse_living_webhook_outputs_root_allowlist(

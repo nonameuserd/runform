@@ -30,6 +30,12 @@ def test_builtin_default_skill_packaged_and_loadable() -> None:
     m = cat.by_name["akc-default"]
     assert m.path_kind == "builtin"
     assert "unified diff" in m.body_text.lower()
+    assert "production-ready" in m.body_text.lower()
+    assert "do not assume time-sensitive facts" in m.body_text.lower()
+    assert "if verification is unavailable, do not guess" in m.body_text.lower()
+    assert "hardcode secrets" in m.body_text.lower()
+    assert "weakening tests" in m.body_text.lower()
+    assert "interface and data compatibility" in m.body_text.lower()
     assert "tests/unit" in m.body_text or "tests/integration" in m.body_text
     assert "tenant" in m.body_text.lower() and "repository" in m.body_text.lower()
     assert len(m.content_sha256) == 64
@@ -385,6 +391,11 @@ def test_prompt_envelope_skill_blocks_join_system() -> None:
     )
     system = env.llm_request.messages[0].content
     assert system.startswith("You are an AKC compile loop assistant.")
+    assert "production-ready repository changes" in system
+    assert "Do not assume time-sensitive facts" in system
+    assert "if verification is unavailable, do not guess" in system
+    assert "weakening tests" in system
+    assert "hardcoding secrets or environment-specific paths" in system
     assert "### A" in system and "### B" in system
 
 

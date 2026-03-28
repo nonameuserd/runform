@@ -132,9 +132,9 @@ def _observability_slice_from_success_criteria(*, intent: IntentSpec) -> dict[st
                 parsed = None
             if parsed is not None:
                 for sig in parsed.signals:
-                    if sig.otel_query_stub:
-                        stubs.append(sig.otel_query_stub)
-                        tags.append(f"intent.oteld_stub:{sig.otel_query_stub}")
+                    if sig.binding_stub:
+                        stubs.append(sig.binding_stub)
+                        tags.append(f"intent.oteld_stub:{sig.binding_stub}")
         elif criterion.evaluation_mode == "metric_threshold" and isinstance(criterion.params, Mapping):
             raw_stub = criterion.params.get("otel_query_stub")
             if isinstance(raw_stub, str):
