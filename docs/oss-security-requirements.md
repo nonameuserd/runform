@@ -168,9 +168,9 @@ This phase aligns the repo with OpenSSF OSPS concepts for security reporting and
 
 ### 10.1) Security reporting docs
 
-- [SECURITY.md](../SECURITY.md) defines the private vulnerability disclosure process.
+- [SECURITY.md](https://github.com/nonameuserd/runform/blob/main/SECURITY.md) defines the private vulnerability disclosure process.
 - `security-insights.yml` provides a machine-readable, OSPS-aligned summary of security reporting and release hygiene (aligned to the OpenSSF Security Insights schema).
-- [CONTRIBUTING.md](../CONTRIBUTING.md) points contributors to the security reporting process for security-sensitive bugs.
+- [CONTRIBUTING.md](https://github.com/nonameuserd/runform/blob/main/CONTRIBUTING.md) points contributors to the security reporting process for security-sensitive bugs.
 
 ### 10.2) CI guardrails for untrusted PRs (least privilege)
 

@@ -84,5 +84,5 @@ Primary implementation sources:
 Some OSS direction items remain **directional** or **partially automated**:
 
 - **Schema completeness:** `SchemaKind` and JSON Schemas cover many artifacts; expanding machine validation and freezing incompatible changes is ongoing ([artifact contracts](artifact-contracts.md), `src/akc/artifacts/validate.py`).
-- **OSPS-aligned hygiene:** [SECURITY.md](../SECURITY.md), `security-insights.yml`, and [CONTRIBUTING.md](../CONTRIBUTING.md) exist; automation and branch-protection expectations are described in [oss-security-requirements.md](oss-security-requirements.md).
+- **OSPS-aligned hygiene:** [SECURITY.md](https://github.com/nonameuserd/runform/blob/main/SECURITY.md), `security-insights.yml`, and [CONTRIBUTING.md](https://github.com/nonameuserd/runform/blob/main/CONTRIBUTING.md) exist; automation and branch-protection expectations are described in [oss-security-requirements.md](oss-security-requirements.md).
 - **CI gate tiers:** default PR jobs are fast; extended gates (e.g. eval/benchmark/retrieval proof suites, `pip-audit`) run on labeled/opt-in workflows or on release—see `.github/workflows/ci.yml` job `if:` conditions.

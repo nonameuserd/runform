@@ -48,6 +48,11 @@ detect-tree-sitter = [
     "tree-sitter-languages",
 ]
 
+# Published documentation (MkDocs Material → GitHub Pages; see mkdocs.yml and .github/workflows/docs.yml)
+docs = [
+    "mkdocs-material>=9.5.17,<10",
+]
+
 # Ingestion extras (Phase 1)
 #
 # Keep core `akc` dependency-free; ingestion connectors/backends can be installed
