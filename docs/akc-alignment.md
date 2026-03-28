@@ -60,7 +60,7 @@ Use these to validate “strong” claims:
 
 | Area | Where to look |
 |------|----------------|
-| Golden path | `tests/integration/test_emerging_profile_one_command_flow.py`, [Emerging Role Golden Path](getting-started.md#emerging-role-golden-path-opt-in) |
+| Golden path | `tests/integration/test_emerging_profile_one_command_flow.py`, [Progressive adoption](getting-started.md#progressive-adoption) |
 | Scoped apply | `tests/integration/test_compile_scoped_apply_realization.py` |
 | Living + recompile | `tests/integration/test_runtime_living_recompile_bridge.py`, `tests/unit/test_recompile_triggers_operational.py` |
 | Autopilot | `tests/integration/test_runtime_autopilot_phase_e.py`, [Runtime — autopilot](runtime-execution.md) |

@@ -177,6 +177,12 @@ The CLI also exposes:
 
 ## Documentation
 
+**Published site (GitHub Pages):** [https://nonameuserd.github.io/runform/](https://nonameuserd.github.io/runform/)
+
+The site is built with MkDocs Material ([`mkdocs.yml`](mkdocs.yml)) and deployed from `main` when documentation-related paths change (see [`.github/workflows/docs.yml`](.github/workflows/docs.yml)). Pull requests run a strict build check via [`.github/workflows/docs-verify.yml`](.github/workflows/docs-verify.yml). **Maintainer setup (once):** in the GitHub repo, open **Settings → Pages → Build and deployment** and set **Source** to **GitHub Actions** (not “Deploy from branch”).
+
+**Repository Markdown:**
+
 - [Docs index](docs/index.md)
 - [Getting started](docs/getting-started.md)
 - [CLI command reference](docs/cli-commands.md)

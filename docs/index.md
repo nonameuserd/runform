@@ -26,7 +26,9 @@ The docs in this directory focus on the AKC surfaces that exist in the repositor
 
 ## Project docs
 
-- [README](../README.md)
-- [Contributing](../CONTRIBUTING.md)
-- [Governance](../GOVERNANCE.md)
-- [Security policy](../SECURITY.md)
+Root-of-repository policies and overview (GitHub):
+
+- [README](https://github.com/nonameuserd/runform/blob/main/README.md)
+- [Contributing](https://github.com/nonameuserd/runform/blob/main/CONTRIBUTING.md)
+- [Governance](https://github.com/nonameuserd/runform/blob/main/GOVERNANCE.md)
+- [Security policy](https://github.com/nonameuserd/runform/blob/main/SECURITY.md)
