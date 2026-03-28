@@ -78,9 +78,12 @@ def resolve_absolute_path_under_allowlist_bases(
     if not allowed_bases:
         return None
     try:
-        candidate = Path(s)
-        if not candidate.is_absolute():
+        candidate_raw = Path(s)
+        if not candidate_raw.is_absolute():
             return None
+        # Normalize to realpath to avoid false negatives on macOS paths like
+        # `/private/var/...` vs `/var/...`.
+        candidate = Path(os.path.realpath(str(candidate_raw)))
     except ValueError:
         return None
     for base in allowed_bases:

@@ -18,7 +18,7 @@ from akc.control.policy_bundle import (
     validate_policy_bundle_document,
 )
 from akc.memory.models import JSONValue, normalize_repo_id, require_non_empty
-from akc.path_security import safe_resolve_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 from akc.run.manifest import RunManifest
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,9 @@ def validate_run_label_key_value(*, label_key: str, label_value: str) -> tuple[s
 def operations_sqlite_path(*, outputs_root: str | Path, tenant_id: str) -> Path:
     """Tenant-scoped path: ``<outputs_root>/<tenant>/.akc/control/operations.sqlite``."""
     require_non_empty(tenant_id, name="tenant_id")
-    return safe_resolve_path(outputs_root) / tenant_id.strip() / ".akc" / "control" / "operations.sqlite"
+    root = safe_resolve_path(outputs_root)
+    tenant_seg = tenant_id.strip()
+    return safe_resolve_scoped_path(root, tenant_seg, ".akc", "control", "operations.sqlite")
 
 
 def try_upsert_operations_index_from_manifest(
@@ -1112,17 +1114,17 @@ class OperationsIndex:
 
         require_non_empty(tenant_id, name="tenant_id")
         root = safe_resolve_path(outputs_root)
-        tenant_dir = root / tenant_id.strip()
+        tenant_dir = safe_resolve_scoped_path(root, tenant_id.strip())
         if not tenant_dir.is_dir():
             return 0
         n = 0
         for repo_dir in sorted(tenant_dir.iterdir()):
             if not repo_dir.is_dir():
                 continue
-            run_dir = repo_dir / ".akc" / "run"
+            run_dir = safe_resolve_scoped_path(repo_dir, ".akc", "run")
             if not run_dir.is_dir():
                 continue
-            for mp in sorted(run_dir.glob("*.manifest.json")):
+            for mp in sorted([p for p in run_dir.iterdir() if p.is_file() and p.name.endswith(".manifest.json")]):
                 try:
                     cls.upsert_from_manifest_path(mp, outputs_root=root)
                     n += 1

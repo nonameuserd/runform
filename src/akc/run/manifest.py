@@ -8,6 +8,7 @@ from typing import Any, Literal, cast
 
 from akc.memory.models import JSONValue, json_value_as_int, require_non_empty
 from akc.pass_registry import ARTIFACT_PASS_ORDER, CONTROLLER_LOOP_PASS_ORDER
+from akc.path_security import safe_resolve_path
 from akc.utils.fingerprint import stable_json_fingerprint
 
 ReplayMode = Literal[
@@ -798,7 +799,7 @@ class RunManifest:
 
     @staticmethod
     def from_json_file(path: str | Path) -> RunManifest:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        raw = json.loads(safe_resolve_path(path).read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("run_manifest file must contain a JSON object")
         return RunManifest.from_json_obj(raw)

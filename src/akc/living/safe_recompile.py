@@ -100,6 +100,72 @@ def _redact_sensitive_payload(obj: Any) -> Any:
     return obj
 
 
+def _sanitize_regression_thresholds_for_disk(raw: Any) -> dict[str, float]:
+    """Allowlist + coerce numeric regression thresholds for safe persistence."""
+    if not isinstance(raw, Mapping):
+        return {}
+    allowed: tuple[str, ...] = (
+        "min_success_rate",
+        "max_avg_repair_iterations",
+        "max_success_rate_drop",
+        "max_avg_wall_time_regression_pct",
+    )
+    out: dict[str, float] = {}
+    for k in allowed:
+        if k not in raw:
+            continue
+        v = raw.get(k)
+        if isinstance(v, bool) or v is None:
+            continue
+        if isinstance(v, (int, float)):
+            out[k] = float(v)
+        else:
+            try:
+                out[k] = float(str(v).strip())
+            except Exception:
+                continue
+    return out
+
+
+def _mk_canary_eval_suite_for_disk(
+    *,
+    tenant_id: str,
+    repo_id: str,
+    manifest_path: str,
+    regression_thresholds: Any,
+) -> dict[str, Any]:
+    """Build an allowlisted eval suite object safe to write to disk."""
+    return {
+        "suite_version": "living-canary-v1",
+        "tasks": [
+            {
+                "id": "living-canary",
+                "tenant_id": tenant_id,
+                "repo_id": repo_id,
+                "manifest_path": manifest_path,
+                "checks": {
+                    "require_success": True,
+                    "required_passes": ["plan", "retrieve", "generate", "execute"],
+                    "max_repair_iterations": 2,
+                    "max_total_tokens": 100000,
+                    "max_wall_time_ms": 60000,
+                    "require_trace_spans": True,
+                    "require_runtime_replay_determinism": True,
+                    "runtime_mode": "simulate",
+                    "runtime_reliability_kpis": {
+                        "max_rollbacks_total": 0,
+                        "max_convergence_latency_ms_avg": 60000,
+                        "max_mttr_like_repair_latency_ms_avg": 60000,
+                        "require_terminal_health_in": ["healthy", "unknown", "degraded"],
+                    },
+                },
+                "judge": {"enabled": False},
+            }
+        ],
+        "regression_thresholds": _sanitize_regression_thresholds_for_disk(regression_thresholds),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeImpact:
     event: RuntimeEvent
@@ -398,6 +464,12 @@ def compute_changed_source_ids(
     changed: set[str] = set()
     baseline = dict(baseline_sources_by_key or {})
 
+    def _fp(value: Any) -> str:
+        if isinstance(value, Mapping):
+            return stable_json_fingerprint(dict(value))
+        # Fall back to a stable fingerprint of a wrapped scalar/string representation.
+        return stable_json_fingerprint({"value": str(value)})
+
     # Union over keys so removals count as changes.
     keys = set(baseline.keys()) | set(current_state_by_key.keys())
     for k in keys:
@@ -407,12 +479,20 @@ def compute_changed_source_ids(
         connector, source_id = parsed
         prev = baseline.get(k)
         curr = current_state_by_key.get(k, None)
+        # Backward compatible:
+        # - old baselines stored raw per-key objects (dict/JSON)
+        # - new baselines store per-key stable fingerprints (hex strings)
+        if isinstance(prev, str) and len(prev) >= 16:
+            curr_fp = _fp(curr)
+            if prev.strip().lower() != curr_fp.strip().lower():
+                changed.add(fq_source_id(connector, source_id))
+            continue
         if isinstance(prev, dict) and isinstance(curr, dict):
             if dict(prev) != dict(curr):
                 changed.add(fq_source_id(connector, source_id))
-        else:
-            if prev != curr:
-                changed.add(fq_source_id(connector, source_id))
+            continue
+        if prev != curr:
+            changed.add(fq_source_id(connector, source_id))
     return changed
 
 
@@ -479,7 +559,9 @@ def _latest_ir_document_path(
     if not ir_dir.exists():
         return None
     candidates = [
-        p for p in ir_dir.glob("*.json") if p.is_file() and not p.name.endswith(".diff.json") and p.name != "diff.json"
+        p
+        for p in ir_dir.iterdir()
+        if p.is_file() and p.suffix == ".json" and not p.name.endswith(".diff.json") and p.name != "diff.json"
     ]
     if not candidates:
         return None
@@ -734,8 +816,12 @@ def safe_recompile_on_drift(
     if baseline_exists:
         try:
             baseline_loaded = _read_json_object(baseline_path_p, what="baseline")
-            maybe = baseline_loaded.get("sources_by_key")
-            baseline_sources_by_key = maybe if isinstance(maybe, dict) else None
+            maybe_fps = baseline_loaded.get("sources_by_key_fps")
+            if isinstance(maybe_fps, dict):
+                baseline_sources_by_key = maybe_fps
+            else:
+                maybe = baseline_loaded.get("sources_by_key")
+                baseline_sources_by_key = maybe if isinstance(maybe, dict) else None
         except Exception:
             baseline_sources_by_key = None
             baseline_loaded = {}
@@ -1042,6 +1128,9 @@ def safe_recompile_on_drift(
         llm_model=llm_model_name,
     )
 
+    # Canary outputs root must be a top-level outputs root so the compile session can
+    # apply its standard tenant/repo scoping underneath it (tests and manifests expect
+    # `<outputs_root>/.akc/living/canary/<tenant>/<repo>/...`).
     canary_outputs_root = safe_resolve_scoped_path(outputs_root_p, ".akc", "living", "canary")
     canary_outputs_root.mkdir(parents=True, exist_ok=True)
 
@@ -1074,49 +1163,25 @@ def safe_recompile_on_drift(
         return 2
 
     canary_manifest_abs = expanduser_resolve_trusted_invoker(canary_manifest_path)
-    canary_suite: dict[str, Any] = {
-        "suite_version": "living-canary-v1",
-        "tasks": [
-            {
-                "id": "living-canary",
-                "tenant_id": tenant_id,
-                "repo_id": repo_id,
-                "manifest_path": str(canary_manifest_abs),
-                "checks": {
-                    "require_success": True,
-                    "required_passes": ["plan", "retrieve", "generate", "execute"],
-                    "max_repair_iterations": 2,
-                    "max_total_tokens": 100000,
-                    "max_wall_time_ms": 60000,
-                    "require_trace_spans": True,
-                    "require_runtime_replay_determinism": True,
-                    "runtime_mode": "simulate",
-                    "runtime_reliability_kpis": {
-                        "max_rollbacks_total": 0,
-                        "max_convergence_latency_ms_avg": 60000,
-                        "max_mttr_like_repair_latency_ms_avg": 60000,
-                        "require_terminal_health_in": ["healthy", "unknown", "degraded"],
-                    },
-                },
-                "judge": {"enabled": False},
-            }
-        ],
-        "regression_thresholds": regression_thresholds,
-    }
-    canary_suite_path = safe_resolve_scoped_path(
+    canary_suite_for_disk = _mk_canary_eval_suite_for_disk(
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        manifest_path=str(canary_manifest_abs),
+        regression_thresholds=regression_thresholds,
+    )
+    # Persist the suite under a fixed file name within the already-scoped canary directory.
+    canary_suite_path = safe_resolve_scoped_path(canary_outputs_root, "canary_eval_suite.json")
+    canary_suite_path.parent.mkdir(parents=True, exist_ok=True)
+    # Backward compatible: ensure per-tenant living dir exists under canary scope.
+    safe_resolve_scoped_path(
         canary_outputs_root,
         tenant_id,
         repo_id,
         ".akc",
         "living",
-        "canary_eval_suite.json",
-    )
-    canary_suite_path.parent.mkdir(parents=True, exist_ok=True)
-    canary_suite_safe = _redact_sensitive_payload(canary_suite)
-    if not isinstance(canary_suite_safe, dict):
-        raise ValueError("canary eval suite must serialize to a JSON object")
+    ).mkdir(parents=True, exist_ok=True)
     canary_suite_path.write_text(
-        json.dumps(canary_suite_safe, indent=2, sort_keys=True),
+        json.dumps(canary_suite_for_disk, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 
