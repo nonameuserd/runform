@@ -23,7 +23,7 @@ from akc.delivery.packaging_adapters import (
     enforce_packaging_preflight,
     packaging_adapter_for,
 )
-from akc.delivery.types import DeliveryPlatform, PlatformBuildSpec
+from akc.delivery.types import DeliveryPlatform, PackagingMode, PlatformBuildSpec, StoreSubmitMode
 from akc.delivery.versioning import derive_platform_provider_versions
 
 
@@ -89,6 +89,62 @@ def _resolve_tenant_repo(project_dir: Path) -> tuple[str, str]:
     return t, r
 
 
+def _packaging_summary(
+    *,
+    requested_platforms: list[str],
+    per_platform: dict[str, Any],
+    packaging_mode: PackagingMode,
+    store_submit_mode: StoreSubmitMode,
+    requested_packaging_mode: PackagingMode,
+    mode_source: Literal["default", "explicit"],
+    resolution_reason: str,
+    fallback_issues: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    ready: list[str] = []
+    planned_only: list[str] = []
+    for platform in requested_platforms:
+        row = per_platform.get(platform)
+        if not isinstance(row, dict):
+            continue
+        outputs = row.get("outputs")
+        if not isinstance(outputs, dict):
+            continue
+        if bool(outputs.get("distribution_ready")):
+            ready.append(platform)
+        if str(outputs.get("artifact_authority") or "") == "planned":
+            planned_only.append(platform)
+    outcome = "inspectable_plan" if packaging_mode == "plan" else "executed_distribution"
+    return {
+        "mode": packaging_mode,
+        "store_submit_mode": store_submit_mode,
+        "ready_platforms": ready,
+        "planned_only_platforms": planned_only,
+        "distribution_ready": len(ready) == len([p for p in requested_platforms if p in per_platform]) and bool(ready),
+        "mode_resolution": {
+            "requested_mode": requested_packaging_mode,
+            "resolved_mode": packaging_mode,
+            "mode_source": mode_source,
+            "reason": resolution_reason,
+            "outcome": outcome,
+            "auto_fallback": requested_packaging_mode != packaging_mode,
+            "fallback_issues": list(fallback_issues or []),
+        },
+    }
+
+
+def _packaging_metadata(
+    *,
+    platform_meta: dict[str, Any],
+    packaging_mode: PackagingMode,
+    store_submit_mode: StoreSubmitMode,
+) -> dict[str, Any]:
+    return {
+        **dict(platform_meta),
+        "packaging_mode": packaging_mode,
+        "store_submit_mode": store_submit_mode,
+    }
+
+
 def run_delivery_build_and_package(
     *,
     project_dir: Path,
@@ -97,8 +153,11 @@ def run_delivery_build_and_package(
     release_mode: Literal["beta", "store", "both"],
     delivery_version: str,
     compile_run_id: str | None,
+    packaging_mode: PackagingMode = "execute",
+    store_submit_mode: StoreSubmitMode = "manual",
     tenant_id: str | None = None,
     repo_id: str | None = None,
+    allow_plan_fallback: bool = False,
 ) -> dict[str, Any]:
     """Run build (shared React/Expo-style base checkpoint) and per-platform packaging lanes.
 
@@ -116,6 +175,42 @@ def run_delivery_build_and_package(
     lanes = distribution_adapters.release_lanes_for_mode(release_mode)
     provider_versions = derive_platform_provider_versions(delivery_version)
     t_start = int(time.time() * 1000)
+    requested_packaging_mode = packaging_mode
+    mode_source: Literal["default", "explicit"] = "default" if allow_plan_fallback else "explicit"
+
+    requested_pref_issues = collect_packaging_preflight_issues(
+        project_dir=project_dir.resolve(),
+        tenant_id=tid,
+        repo_id=rid,
+        delivery_id=delivery_id,
+        delivery_version=delivery_version,
+        platforms=platforms,
+        release_mode=release_mode,
+        platform_metadata=_packaging_metadata(
+            platform_meta=dict(platform_meta),
+            packaging_mode=requested_packaging_mode,
+            store_submit_mode=store_submit_mode,
+        ),
+    )
+    sess_check = delivery_store.load_session(project_dir, delivery_id)
+    was_blocked = str(sess_check.get("session_phase")) == "blocked"
+    preflight_strict = enforce_packaging_preflight(release_mode=release_mode)
+    mode_resolution_reason = (
+        "explicit_plan"
+        if requested_packaging_mode == "plan" and mode_source == "explicit"
+        else "explicit_execute"
+        if requested_packaging_mode == "execute" and mode_source == "explicit"
+        else "default_execute"
+    )
+    fallback_issues: list[dict[str, Any]] = []
+    if requested_packaging_mode == "execute" and allow_plan_fallback:
+        if was_blocked:
+            packaging_mode = "plan"
+            mode_resolution_reason = "delivery_preflight_blocked"
+        elif requested_pref_issues and preflight_strict:
+            packaging_mode = "plan"
+            mode_resolution_reason = "packaging_preflight_blocked"
+            fallback_issues = list(requested_pref_issues)
 
     pref_issues = collect_packaging_preflight_issues(
         project_dir=project_dir.resolve(),
@@ -125,11 +220,14 @@ def run_delivery_build_and_package(
         delivery_version=delivery_version,
         platforms=platforms,
         release_mode=release_mode,
+        platform_metadata=_packaging_metadata(
+            platform_meta=dict(platform_meta),
+            packaging_mode=packaging_mode,
+            store_submit_mode=store_submit_mode,
+        ),
     )
-    sess_check = delivery_store.load_session(project_dir, delivery_id)
-    was_blocked = str(sess_check.get("session_phase")) == "blocked"
 
-    if pref_issues and enforce_packaging_preflight(release_mode=release_mode):
+    if pref_issues and preflight_strict:
         fail_phase = None if was_blocked else "failed"
         delivery_store.update_session_pipeline_stage(
             project_dir=project_dir,
@@ -226,7 +324,11 @@ def run_delivery_build_and_package(
             delivery_version=delivery_version,
             release_lanes=lanes,
             compile_run_id=compile_run_id,
-            metadata=dict(platform_meta),
+            metadata=_packaging_metadata(
+                platform_meta=dict(platform_meta),
+                packaging_mode=packaging_mode,
+                store_submit_mode=store_submit_mode,
+            ),
         )
         p_issues = adapter.preflight(
             project_dir=project_dir.resolve(),
@@ -260,7 +362,24 @@ def run_delivery_build_and_package(
 
     t_pkg_done = int(time.time() * 1000)
     pkg_status = "completed" if ok_all else "failed"
-    next_phase = None if was_blocked else ("distributing" if ok_all else "failed")
+    packaging_summary = _packaging_summary(
+        requested_platforms=platforms,
+        per_platform=per_platform,
+        packaging_mode=packaging_mode,
+        store_submit_mode=store_submit_mode,
+        requested_packaging_mode=requested_packaging_mode,
+        mode_source=mode_source,
+        resolution_reason=mode_resolution_reason,
+        fallback_issues=fallback_issues,
+    )
+    if was_blocked:
+        next_phase = None
+    elif ok_all and packaging_mode == "plan":
+        next_phase = "packaging"
+    elif ok_all:
+        next_phase = "distributing"
+    else:
+        next_phase = "failed"
     dist_summary: dict[str, Any] | None = None
 
     delivery_store.update_session_pipeline_stage(
@@ -280,6 +399,7 @@ def run_delivery_build_and_package(
                 "android_version_code": provider_versions.android_version_code,
                 "web_pwa_version": provider_versions.web_pwa_version,
             },
+            "summary": packaging_summary,
             "per_platform": per_platform,
         },
         new_session_phase=next_phase,
@@ -287,6 +407,7 @@ def run_delivery_build_and_package(
 
     payload_base: dict[str, Any] = {
         "delivery_version": delivery_version,
+        "summary": packaging_summary,
         "per_platform": per_platform,
     }
     if ok_all:
@@ -302,20 +423,40 @@ def run_delivery_build_and_package(
             event_type=DELIVERY_BUILD_PACKAGED,
             payload=payload_base,
         )
-        dist_summary = run_delivery_distribution(
-            project_dir=project_dir.resolve(),
-            delivery_id=delivery_id,
-            tenant_id=tid,
-            repo_id=rid,
-            platforms=platforms,
-            release_mode=release_mode,
-            delivery_version=delivery_version,
-            compile_run_id=compile_run_id,
-            lanes=lanes_for_post_package_wave(release_mode),
-        )
-        if not bool(dist_summary.get("ok")):
-            ok_all = False
-            err = err or "distribution failed"
+        if packaging_mode == "plan":
+            dist_summary = {
+                "ok": True,
+                "skipped": True,
+                "reason": "plan_only",
+                "ready_platforms": packaging_summary["ready_platforms"],
+                "planned_only_platforms": packaging_summary["planned_only_platforms"],
+            }
+            delivery_store.update_session_pipeline_stage(
+                project_dir=project_dir,
+                delivery_id=delivery_id,
+                stage_name="distribution",
+                status="skipped",
+                started_at_unix_ms=t_pkg_done,
+                completed_at_unix_ms=t_pkg_done,
+                error=None,
+                outputs=dist_summary,
+                new_session_phase="packaging",
+            )
+        else:
+            dist_summary = run_delivery_distribution(
+                project_dir=project_dir.resolve(),
+                delivery_id=delivery_id,
+                tenant_id=tid,
+                repo_id=rid,
+                platforms=platforms,
+                release_mode=release_mode,
+                delivery_version=delivery_version,
+                compile_run_id=compile_run_id,
+                lanes=lanes_for_post_package_wave(release_mode),
+            )
+            if not bool(dist_summary.get("ok")):
+                ok_all = False
+                err = err or "distribution failed"
     else:
         delivery_store.append_event(
             project_dir=project_dir,
@@ -328,7 +469,10 @@ def run_delivery_build_and_package(
         "ok": ok_all,
         "error": err,
         "preflight_issues": pref_issues,
+        "requested_preflight_issues": requested_pref_issues,
         "per_platform": per_platform,
+        "summary": packaging_summary,
+        "mode_resolution": packaging_summary.get("mode_resolution"),
         "distribution": dist_summary,
         "provider_versions": {
             "delivery_version": provider_versions.delivery_version,

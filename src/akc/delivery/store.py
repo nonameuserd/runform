@@ -780,6 +780,10 @@ def update_delivery_request_compile_handoff(
         "delivery_plan_ref": handoff.get("delivery_plan_ref"),
         "promotion_readiness": handoff.get("promotion_readiness"),
         "runtime_bundle_rel_path": handoff.get("runtime_bundle_rel_path"),
+        "execution_workspace_rel_path": handoff.get("execution_workspace_rel_path"),
+        "execution_workspace_loaded": bool(handoff.get("execution_workspace_loaded")),
+        "execution_workspace_ref": handoff.get("execution_workspace_ref"),
+        "execution_workspace_hints": handoff.get("execution_workspace_hints"),
     }
     err = handoff.get("error")
     if err:
@@ -815,6 +819,10 @@ def update_session_compile_handoff(
         "delivery_plan_ref": handoff.get("delivery_plan_ref"),
         "promotion_readiness": handoff.get("promotion_readiness"),
         "runtime_bundle_rel_path": handoff.get("runtime_bundle_rel_path"),
+        "execution_workspace_rel_path": handoff.get("execution_workspace_rel_path"),
+        "execution_workspace_loaded": bool(handoff.get("execution_workspace_loaded")),
+        "execution_workspace_ref": handoff.get("execution_workspace_ref"),
+        "execution_workspace_hints": handoff.get("execution_workspace_hints"),
     }
     err = handoff.get("error")
     if err:
@@ -1073,6 +1081,80 @@ def update_session_channel_lane(
     return session
 
 
+def update_session_packaging_platform_outputs(
+    *,
+    project_dir: Path,
+    delivery_id: str,
+    platform: str,
+    outputs_patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge fields onto ``session.pipeline.package.outputs.per_platform[platform].outputs``."""
+
+    assert_safe_delivery_id(delivery_id)
+    session_path = delivery_paths(project_dir, delivery_id)["session"]
+    session = _read_json(session_path)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    pipe = dict(cast(dict[str, Any], session.get("pipeline") or {}))
+    package = dict(cast(dict[str, Any], pipe.get("package") or {}))
+    package_outputs = dict(cast(dict[str, Any], package.get("outputs") or {}))
+    per_platform = dict(cast(dict[str, Any], package_outputs.get("per_platform") or {}))
+    row = dict(cast(dict[str, Any], per_platform.get(platform) or {}))
+    outputs = dict(cast(dict[str, Any], row.get("outputs") or {}))
+    outputs.update(outputs_patch)
+    row["outputs"] = outputs
+    per_platform[platform] = row
+    package_outputs["per_platform"] = per_platform
+    package["outputs"] = package_outputs
+    pipe["package"] = package
+    session["pipeline"] = pipe
+    session["updated_at_unix_ms"] = _now_ms()
+    _write_json(session_path, session)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    _sync_delivery_control_index(project_dir, delivery_id)
+    return session
+
+
+def update_session_packaging_distribution_result(
+    *,
+    project_dir: Path,
+    delivery_id: str,
+    platform: str,
+    lane: Literal["beta", "store"],
+    result_patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge fields onto
+
+    ``session.pipeline.package.outputs.per_platform[platform].outputs.distribution_results[lane]``.
+    """
+
+    assert_safe_delivery_id(delivery_id)
+    session_path = delivery_paths(project_dir, delivery_id)["session"]
+    session = _read_json(session_path)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    pipe = dict(cast(dict[str, Any], session.get("pipeline") or {}))
+    package = dict(cast(dict[str, Any], pipe.get("package") or {}))
+    package_outputs = dict(cast(dict[str, Any], package.get("outputs") or {}))
+    per_platform = dict(cast(dict[str, Any], package_outputs.get("per_platform") or {}))
+    row = dict(cast(dict[str, Any], per_platform.get(platform) or {}))
+    outputs = dict(cast(dict[str, Any], row.get("outputs") or {}))
+    distribution_results = dict(cast(dict[str, Any], outputs.get("distribution_results") or {}))
+    lane_row = dict(cast(dict[str, Any], distribution_results.get(lane) or {}))
+    lane_row.update(result_patch)
+    distribution_results[lane] = lane_row
+    outputs["distribution_results"] = distribution_results
+    row["outputs"] = outputs
+    per_platform[platform] = row
+    package_outputs["per_platform"] = per_platform
+    package["outputs"] = package_outputs
+    pipe["package"] = package
+    session["pipeline"] = pipe
+    session["updated_at_unix_ms"] = _now_ms()
+    _write_json(session_path, session)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    _sync_delivery_control_index(project_dir, delivery_id)
+    return session
+
+
 def touch_provider_platform_row(
     *,
     project_dir: Path,
@@ -1111,6 +1193,41 @@ def touch_provider_platform_row(
     _write_json(path, doc)
     validate_artifact_json(obj=doc, kind="delivery_provider_state", version=1)
     return doc
+
+
+def update_store_release_platform(
+    *,
+    project_dir: Path,
+    delivery_id: str,
+    platform: str,
+    status: str,
+    external_ref: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Update ``session.store_release`` overall + per-platform refs after store submission milestones."""
+
+    if platform not in {"ios", "android"}:
+        raise ValueError(f"invalid store platform: {platform!r}")
+    assert_safe_delivery_id(delivery_id)
+    session_path = delivery_paths(project_dir, delivery_id)["session"]
+    session = _read_json(session_path)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    store_rel = dict(cast(dict[str, Any], session.get("store_release") or {}))
+    row = dict(cast(dict[str, Any], store_rel.get(platform) or {}))
+    row["status"] = status
+    if external_ref is not None:
+        row["external_ref"] = external_ref
+    if notes is not None:
+        row["notes"] = notes
+    store_rel[platform] = row
+    store_rel["status"] = status
+    store_rel["active_promotion_lane"] = "store"
+    session["store_release"] = store_rel
+    session["updated_at_unix_ms"] = _now_ms()
+    _write_json(session_path, session)
+    validate_artifact_json(obj=session, kind="delivery_session", version=1)
+    _sync_delivery_control_index(project_dir, delivery_id)
+    return session
 
 
 def update_distribution_plan_phase(

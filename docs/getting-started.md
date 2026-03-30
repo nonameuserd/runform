@@ -7,6 +7,33 @@
 
 ## Install
 
+Operator-friendly installs (one command, predictable upgrades):
+
+```bash
+# Preferred (isolated tool install)
+uv tool install runform-akc
+
+# Upgrade later
+uv tool upgrade runform-akc
+```
+
+```bash
+# Alternative (also isolated)
+pipx install runform-akc
+
+# Upgrade later
+pipx upgrade runform-akc
+```
+
+Optional: install a prebuilt standalone binary from GitHub Releases (no Python env):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nonameuserd/runform/main/scripts/install-akc.sh | sh
+~/.local/bin/akc --help
+```
+
+From source (contributors / editable dev):
+
 ```bash
 git clone https://github.com/nonameuserd/runform.git
 cd runform
@@ -179,6 +206,8 @@ Supported connectors today:
 - `telegram`
 - `whatsapp`
 - `mcp`
+
+For **copy-paste `akc ingest` examples** (including flags for Slack, Discord, Telegram, WhatsApp, and MCP), see the repository’s [`examples/README.md`](https://github.com/nonameuserd/runform/blob/main/examples/README.md).
 
 Supported index backends today:
 

@@ -171,8 +171,14 @@ def test_compile_session_run_integration_light_uses_isolated_workdir(tmp_path: P
         "system_design",
         "orchestration_spec",
         "agent_coordination",
+        "practical_backend_generation",
     ]
-    assert artifact_pass_md.get("groups", {}).get("deployment_configs") == ["delivery_plan", "deployment_config"]
+    assert artifact_pass_md.get("groups", {}).get("execution") == ["execution_workspace"]
+    assert artifact_pass_md.get("groups", {}).get("deployment_configs") == [
+        "delivery_plan",
+        "infrastructure_synthesis",
+        "deployment_config",
+    ]
     assert isinstance(artifact_pass_md.get("output_hashes"), dict)
 
     # IntentStore integration: active intent pointers should be scoped tenant+repo.
@@ -352,6 +358,9 @@ def test_compile_session_full_replay_reuses_artifact_pass_outputs(
     monkeypatch.setattr("akc.compile.session.run_orchestration_spec_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_agent_coordination_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_delivery_plan_pass", _unexpected)
+    monkeypatch.setattr("akc.compile.session.run_infrastructure_synthesis_pass", _unexpected)
+    monkeypatch.setattr("akc.compile.session.run_practical_backend_generation_pass", _unexpected)
+    monkeypatch.setattr("akc.compile.session.run_execution_workspace_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_runtime_bundle_pass", _unexpected)
     monkeypatch.setattr("akc.compile.session.run_deployment_config_pass", _unexpected)
 
@@ -376,6 +385,9 @@ def test_compile_session_full_replay_reuses_artifact_pass_outputs(
         "orchestration_spec",
         "agent_coordination",
         "delivery_plan",
+        "infrastructure_synthesis",
+        "practical_backend_generation",
+        "execution_workspace",
         "runtime_bundle",
         "deployment_config",
     ):

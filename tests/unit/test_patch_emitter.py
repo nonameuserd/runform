@@ -39,6 +39,7 @@ class _StaticGenPass:
         retrieved_context: Mapping[str, Any],
         test_policy: Mapping[str, Any],
         stage: str,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str:
         _ = (
             ir_doc,
@@ -51,6 +52,7 @@ class _StaticGenPass:
             retrieved_context,
             test_policy,
             stage,
+            practical_context,
         )
         return self.text
 
@@ -75,6 +77,7 @@ class _StaticRepairPass:
         last_generation_text: str,
         failure: Any,
         verifier_feedback: Mapping[str, Any] | None,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str:
         _ = (
             ir_doc,
@@ -90,6 +93,7 @@ class _StaticRepairPass:
             last_generation_text,
             failure,
             verifier_feedback,
+            practical_context,
         )
         return self.text
 

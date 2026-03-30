@@ -12,6 +12,10 @@ from typing import Literal, TypeAlias, cast
 
 from akc.adopt.toolchain import ToolchainPreflightError
 from akc.adopt.trust_ladder import parse_adoption_level, recommended_compile_realization_mode
+from akc.cli.existing_codebase import (
+    force_legacy_compile_test_mode_from_env,
+    project_signals_native_toolchain_tests,
+)
 from akc.compile import (
     Budget,
     CompileSession,
@@ -726,6 +730,10 @@ def cmd_compile(args: argparse.Namespace) -> int:
     )
 
     work_root = base if args.work_root is None else Path(args.work_root).expanduser()
+    # Executor runs commands under ``<work_root>/<tenant>/<repo>/``; align toolchain
+    # detection and native-test defaults with that tree when it exists (see scoped_apply).
+    scoped_project_root = (work_root / scope.tenant_id / scope.repo_id).resolve()
+    compile_project_root = scoped_project_root if scoped_project_root.is_dir() else cwd
     sandbox_memory_mb = int(getattr(args, "sandbox_memory_mb", 1024))
     sandbox_memory_bytes = max(1, sandbox_memory_mb) * 1024 * 1024
     sandbox_cpu_fuel_raw = getattr(args, "sandbox_cpu_fuel", None)
@@ -956,13 +964,21 @@ def cmd_compile(args: argparse.Namespace) -> int:
         if asr is not None and str(asr).strip():
             apply_scope_root = str(Path(asr).expanduser().resolve())
         else:
-            apply_scope_root = str(work_root.expanduser().resolve())
+            # Match :func:`akc.compile.executors._scope_dir`: executor cwd is
+            # ``work_root/tenant/repo``, not ``work_root`` alone.
+            apply_scope_root = str(scoped_project_root.expanduser().resolve())
     compile_rm = cast(Literal["artifact_only", "scoped_apply"], realization_mode)
     cli_test_mode_raw = getattr(args, "test_mode", None)
     if cli_test_mode_raw is not None and str(cli_test_mode_raw).strip():
         effective_test_mode = cast(TestMode, str(cli_test_mode_raw).strip())
+    elif force_legacy_compile_test_mode_from_env():
+        effective_test_mode = "full" if str(args.mode) == "thorough" else "smoke"
     else:
-        if adoption is not None and adoption in {"copilot", "compiler", "autonomy"}:
+        prefer_native = project_signals_native_toolchain_tests(
+            compile_project_root,
+            native_test_mode=proj.native_test_mode if proj is not None else None,
+        ) or (adoption is not None and adoption in {"copilot", "compiler", "autonomy"})
+        if prefer_native:
             effective_test_mode = "native_full" if str(args.mode) == "thorough" else "native_smoke"
         else:
             effective_test_mode = "full" if str(args.mode) == "thorough" else "smoke"
@@ -1293,7 +1309,7 @@ def cmd_compile(args: argparse.Namespace) -> int:
             developer_role_profile=developer_role_profile,
             developer_profile_decisions=profile_decisions,
             skills_project_root=work_root,
-            project_root=cwd,
+            project_root=compile_project_root,
         )
     except ToolchainPreflightError as exc:
         print(str(exc))

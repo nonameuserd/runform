@@ -6,15 +6,24 @@ from pathlib import Path
 import pytest
 
 from akc.artifacts.schemas import (
+    BACKEND_API_CONTRACT_INDEX_V1,
+    BACKEND_GENERATION_PROFILE_V1,
+    BACKEND_GENERATOR_PLUGIN_MANIFEST_V1,
+    BACKEND_IR_V1,
     CONVERGENCE_CERTIFICATE_V1,
     DEVICE_CAPTURE_RESULT_V1,
+    EXECUTION_WORKSPACE_MANIFEST_V1,
+    IMPLEMENTATION_ACCEPTANCE_CONTRACT_V1,
+    IMPLEMENTATION_PLAN_V1,
     MOBILE_JOURNEY_RESULT_V1,
     OBSERVABILITY_QUERY_RESULT_V1,
     OPERATIONAL_ASSURANCE_RESULT_V1,
     OPERATIONAL_EVIDENCE_WINDOW_V1,
     OPERATIONAL_VALIDITY_REPORT_V1,
+    PRACTICAL_GENERATION_RESULT_V1,
     PROMOTION_PACKET_V1,
     RUNTIME_BUNDLE_SCHEMA_VERSION,
+    RUNTIME_PLUGIN_DECISION_V1,
 )
 from akc.artifacts.validate import validate_obj
 from akc.cli import main
@@ -30,6 +39,10 @@ def _write_minimal_repo(root: Path) -> None:
     (pkg / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tests / "test_module.py").write_text(
         "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["."]\n',
         encoding="utf-8",
     )
 
@@ -207,6 +220,116 @@ def test_device_capture_result_json_file_matches_python_schema() -> None:
     )
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert on_disk == DEVICE_CAPTURE_RESULT_V1
+
+
+def test_execution_workspace_manifest_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "execution_workspace_manifest.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == EXECUTION_WORKSPACE_MANIFEST_V1
+
+
+def test_backend_generator_plugin_manifest_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "backend_generator_plugin_manifest.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == BACKEND_GENERATOR_PLUGIN_MANIFEST_V1
+
+
+def test_backend_generation_profile_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "backend_generation_profile.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == BACKEND_GENERATION_PROFILE_V1
+
+
+def test_backend_ir_json_file_matches_python_schema() -> None:
+    path = Path(__file__).resolve().parents[2] / "src" / "akc" / "artifacts" / "schemas" / "backend_ir.v1.schema.json"
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == BACKEND_IR_V1
+
+
+def test_backend_api_contract_index_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "backend_api_contract_index.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == BACKEND_API_CONTRACT_INDEX_V1
+
+
+def test_implementation_plan_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "implementation_plan.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == IMPLEMENTATION_PLAN_V1
+
+
+def test_implementation_acceptance_contract_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "implementation_acceptance_contract.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == IMPLEMENTATION_ACCEPTANCE_CONTRACT_V1
+
+
+def test_practical_generation_result_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "practical_generation_result.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == PRACTICAL_GENERATION_RESULT_V1
+
+
+def test_runtime_plugin_decision_json_file_matches_python_schema() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "akc"
+        / "artifacts"
+        / "schemas"
+        / "runtime_plugin_decision.v1.schema.json"
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == RUNTIME_PLUGIN_DECISION_V1
 
 
 def test_convergence_certificate_json_file_matches_python_schema() -> None:

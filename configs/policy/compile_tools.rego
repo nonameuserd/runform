@@ -8,7 +8,7 @@ import rego.v1
 default allow := false
 default reason := "policy.opa.deny"
 
-allowed_actions := {"llm.complete", "executor.run"}
+allowed_actions := {"llm.complete", "executor.run", "compile.patch.apply"}
 allowed_executor_stages := {"tests_smoke", "tests_full"}
 
 capability_matches if {
@@ -148,6 +148,13 @@ allow if {
   capability_matches
   input.action == "executor.run"
   allowed_executor_stages[input.context.stage]
+  not has_deny
+}
+
+allow if {
+  capability_matches
+  allowed_actions[input.action]
+  input.action == "compile.patch.apply"
   not has_deny
 }
 

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:practical_generation_result:v1",
+  "title": "AKC practical backend generation result",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:practical_generation_result:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_runtime_maturity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plugin_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "materializer_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supports_authoritative_workspace": {
+      "type": "boolean"
+    },
+    "requested_by_policy": {
+      "type": "boolean"
+    },
+    "availability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "blocked_stage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "adoption_confidence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "blocked_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "practical_success_requires": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "execution_workspace_role": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fallback_mode": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "status",
+    "selected_runtime_plugin",
+    "selected_runtime_maturity",
+    "plugin_source",
+    "materializer_kind",
+    "supports_authoritative_workspace",
+    "requested_by_policy",
+    "availability",
+    "blocked_stage",
+    "adoption_confidence_score",
+    "blocked_reasons",
+    "practical_success_requires",
+    "execution_workspace_role",
+    "fallback_mode"
+  ]
+}

@@ -31,6 +31,10 @@ def _write_minimal_repo(root: Path) -> None:
         "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
         encoding="utf-8",
     )
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["."]\n',
+        encoding="utf-8",
+    )
 
 
 def _write_failing_repo(root: Path) -> None:
@@ -71,7 +75,11 @@ def _seed_plan_with_one_step(
 
 
 def _executor_cwd(outputs_root: Path, tenant_id: str, repo_id: str) -> Path:
-    """Path where the executor runs tests: work_root/tenant_id/repo_id (CLI sets work_root=base)."""
+    """Path where the executor runs tests.
+
+    The CLI defaults ``work_root`` to ``outputs_root/tenant/repo``, and the executor
+    cwd is ``work_root/tenant/repo`` (see :func:`akc.compile.executors._scope_dir`).
+    """
     base = outputs_root / tenant_id / repo_id
     return base / tenant_id / repo_id
 
@@ -223,6 +231,7 @@ def test_cli_compile_empty_plan_non_dev_fails_closed(tmp_path: Path, monkeypatch
     repo_id = "repo1"
     outputs_root = tmp_path
     _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AKC_ENV", "staging")
 
     with pytest.raises(SystemExit) as excinfo:
@@ -318,8 +327,9 @@ def test_cli_compile_failing_tests_exit_code_2(tmp_path: Path, capsys: pytest.Ca
     assert "last_execution_exit_code:" in out
 
 
-def test_cli_compile_missing_required_args_exits_non_zero() -> None:
+def test_cli_compile_missing_required_args_exits_non_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing --tenant-id or --outputs-root results in non-zero exit (usage error)."""
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as excinfo:
         main(["compile", "--repo-id", "r1", "--outputs-root", "/tmp/out"])
     assert excinfo.value.code != 0
@@ -553,7 +563,9 @@ def test_cli_compile_non_dev_defaults_to_staged_apply(tmp_path: Path, monkeypatc
     base = outputs_root / tenant_id / repo_id
     _write_minimal_repo(_executor_cwd(outputs_root, tenant_id, repo_id))
     _seed_plan_with_one_step(tenant_id=tenant_id, repo_id=repo_id, outputs_root=outputs_root)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AKC_ENV", "staging")
+    monkeypatch.setenv("AKC_DEVELOPER_ROLE_PROFILE", "classic")
 
     with pytest.raises(SystemExit) as excinfo:
         main(
@@ -1435,6 +1447,7 @@ def test_cli_compile_strict_wasm_fails_fast_when_rust_surface_unavailable(
 def test_cli_compile_strong_docker_hardening_flags_propagate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import akc.cli.compile as compile_mod
 
+    monkeypatch.chdir(tmp_path)
     fake_session = _FakeSession()
 
     class _FakeCompileSession:
@@ -1740,6 +1753,7 @@ def test_cli_compile_strict_wasm_fails_fast_on_windows_timeout_gap(
 ) -> None:
     import akc.cli.compile as compile_mod
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(compile_mod, "_rust_exec_available", lambda **_: True)
     monkeypatch.setattr(compile_mod.sys, "platform", "win32")
 

@@ -45,8 +45,8 @@ def test_conventional_python_when_extracted_has_no_test_command(tmp_path: Path) 
     assert resolved.language == "python"
     assert resolved.package_manager == "pip"
     assert resolved.test_command == ["pytest", "-x"]
-    assert resolved.lint_command == ["ruff", "check", "."]
-    assert resolved.format_command == ["ruff", "format", "--check", "."]
+    assert resolved.lint_command is None
+    assert resolved.format_command is None
     # Required binaries are best-effort; at minimum we should see the core runtime.
     assert "python3" in resolved.required_binaries
     assert "pytest" in resolved.required_binaries
@@ -62,8 +62,8 @@ def test_extracted_test_command_overrides_conventional(tmp_path: Path) -> None:
 
     resolved = resolve_toolchain_profile(extracted_profile=profile, explicit_toolchain=None)
     assert resolved.test_command == ["pytest", "-q"]
-    # Unprovided fields should still be conventional defaults.
-    assert resolved.lint_command == ["ruff", "check", "."]
+    assert resolved.lint_command is None
+    assert resolved.format_command is None
 
 
 def test_explicit_overrides_language_and_test_command(tmp_path: Path) -> None:
@@ -127,3 +127,58 @@ def test_project_config_loads_toolchain_mapping(tmp_path: Path) -> None:
     cfg = load_akc_project_config(tmp_path)
     assert cfg is not None
     assert cfg.toolchain == {"language": "python", "test_command": ["pytest", "-x"]}
+
+
+def test_resolver_prefers_ci_workspace_test_command(tmp_path: Path) -> None:
+    profile = ProjectProfile(
+        root=tmp_path,
+        languages=[LanguageEntry(language="typescript", percent=80.0, bytes=8, files=4)],
+        package_managers=["npm_or_node", "pnpm"],
+        build_commands=[
+            BuildCommand(
+                command=("node", "-e", "process.exit(0)"),
+                kind="test",
+                source=str(tmp_path / "packages" / "web" / "package.json") + "#scripts.test",
+            ),
+            BuildCommand(
+                command=("pnpm", "turbo", "run", "test"),
+                kind="test",
+                source=str(tmp_path / ".github" / "workflows" / "ci.yml") + "#Tests",
+            ),
+        ],
+        ci_systems=[CISystem(name="github_actions")],
+        conventions=ConventionSnapshot(),
+        entry_points=[],
+        architecture_hints={"monorepo": True},
+    )
+
+    resolved = resolve_toolchain_profile(extracted_profile=profile, explicit_toolchain=None)
+    assert resolved.test_command == ["pnpm", "turbo", "run", "test"]
+    assert resolved.package_manager == "pnpm"
+
+
+def test_resolver_uses_ci_command_language_for_mixed_repo(tmp_path: Path) -> None:
+    profile = ProjectProfile(
+        root=tmp_path,
+        languages=[
+            LanguageEntry(language="typescript", percent=70.0, bytes=7, files=4),
+            LanguageEntry(language="rust", percent=30.0, bytes=3, files=2),
+        ],
+        package_managers=["npm_or_node", "pnpm", "cargo"],
+        build_commands=[
+            BuildCommand(
+                command=("cargo", "test", "--workspace"),
+                kind="test",
+                source=str(tmp_path / ".github" / "workflows" / "ci.yml") + "#Backend tests",
+            )
+        ],
+        ci_systems=[CISystem(name="github_actions")],
+        conventions=ConventionSnapshot(),
+        entry_points=[],
+        architecture_hints={"monorepo": True, "mixed_language": True},
+    )
+
+    resolved = resolve_toolchain_profile(extracted_profile=profile, explicit_toolchain=None)
+    assert resolved.language == "rust"
+    assert resolved.package_manager == "cargo"
+    assert resolved.test_command == ["cargo", "test", "--workspace"]

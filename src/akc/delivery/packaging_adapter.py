@@ -58,4 +58,4 @@ class PackagingAdapter(ABC):
         compile_run_id: str | None,
         provider_versions: PlatformProviderVersions,
     ) -> PackagingResult:
-        """Produce or stage deployable artifacts for this platform (v1 stubs record intent only)."""
+        """Produce or stage deployable artifacts for this platform."""

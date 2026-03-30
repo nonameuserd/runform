@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:backend_generation_profile:v1",
+  "title": "AKC backend generation profile",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:backend_generation_profile:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "goal_statement": {
+      "type": ["string", "null"]
+    },
+    "project_root": {
+      "type": ["string", "null"]
+    },
+    "detected_languages": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "native_build_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "source": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["kind", "command"]
+      }
+    },
+    "detected_frameworks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "persistence_markers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "observability_markers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "transport_markers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "test_topology": {
+      "type": "object"
+    },
+    "repo_anchor_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "selected_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_runtime_maturity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "persistence_strategy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adoption_confidence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "adoption_readiness": {
+      "type": "string",
+      "enum": ["ready", "blocked"]
+    },
+    "blocked_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "why_this_target": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "generator_policy": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "detected_languages",
+    "native_build_commands",
+    "repo_anchor_candidates",
+    "selected_runtime_plugin",
+    "selected_runtime_maturity",
+    "persistence_strategy",
+    "adoption_confidence_score",
+    "adoption_readiness",
+    "blocked_reasons",
+    "why_this_target",
+    "generator_policy"
+  ]
+}

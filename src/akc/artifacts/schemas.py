@@ -13,7 +13,21 @@ SchemaKind = Literal[
     "operational_assurance_result",
     "operational_evidence_window",
     "runtime_bundle",
+    "execution_workspace_manifest",
+    "backend_generator_plugin_manifest",
+    "backend_generation_profile",
+    "backend_ir",
+    "backend_api_contract_index",
+    "implementation_plan",
+    "implementation_acceptance_contract",
+    "practical_generation_result",
+    "runtime_plugin_decision",
     "delivery_plan",
+    "infra_plan",
+    "iac_manifest",
+    "provision_plan",
+    "provision_apply",
+    "provision_session",
     "delivery_request",
     "delivery_session",
     "delivery_recipients",
@@ -514,8 +528,30 @@ RUNTIME_BUNDLE_V4: Final[dict[str, Any]] = {
     },
 }
 
+_EXECUTION_WORKSPACE_AUTHORITY_SCHEMA: Final[dict[str, Any]] = {
+    "type": ["object", "null"],
+    "additionalProperties": True,
+    "properties": {
+        "artifact_role": {"type": "string", "minLength": 1},
+        "generation_mode": {"type": "string", "minLength": 1},
+        "practical_generation_proof": {"type": "boolean"},
+    },
+}
+
+# v5: additive — backend-generation refs/status and explicit execution workspace authority.
+RUNTIME_BUNDLE_V5: Final[dict[str, Any]] = {
+    **RUNTIME_BUNDLE_V4,
+    "$id": schema_id_for(kind="runtime_bundle", version=5),
+    "title": "AKC runtime bundle (v5)",
+    "properties": {
+        **dict(RUNTIME_BUNDLE_V4["properties"]),
+        "execution_workspace_authority": _EXECUTION_WORKSPACE_AUTHORITY_SCHEMA,
+        "practical_backend_generation": {"type": ["object", "null"]},
+    },
+}
+
 # Default schema_version for newly emitted runtime bundles (compile/runtime handoff).
-RUNTIME_BUNDLE_SCHEMA_VERSION: Final[int] = 4
+RUNTIME_BUNDLE_SCHEMA_VERSION: Final[int] = 5
 
 # Structured questions for non-technical / guided UIs: only `status: "missing"` rows are emitted
 # today; bindings point at IR properties so re-compile stays authoritative (no parallel plan model).
@@ -592,6 +628,415 @@ _DELIVERY_PLAN_REQUIRED_HUMAN_INPUT_V1: Final[dict[str, Any]] = {
     "required": ["id", "status", "ui_prompt", "answer_binding"],
 }
 
+_STRING_LIST_SCHEMA: Final[dict[str, Any]] = {
+    "type": "array",
+    "items": {"type": "string", "minLength": 1},
+}
+
+_COMMAND_ENTRY_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "command": _STRING_LIST_SCHEMA,
+        "source": {"type": ["string", "null"]},
+    },
+    "required": ["kind", "command"],
+}
+
+BACKEND_GENERATOR_PLUGIN_MANIFEST_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="backend_generator_plugin_manifest", version=1),
+    "title": "AKC backend generator plugin manifest",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="backend_generator_plugin_manifest"),
+        "plugin_id": {"type": "string", "minLength": 1},
+        "interface_version": {"type": "integer", "const": 1},
+        "runtime_family": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "materializer_kind": {"type": "string", "const": "command"},
+        "supports_authoritative_workspace": {"type": "boolean"},
+        "supported_frameworks": _STRING_LIST_SCHEMA,
+        "supported_languages": _STRING_LIST_SCHEMA,
+        "required_native_command_kinds": _STRING_LIST_SCHEMA,
+        "unsupported_behavior": {"type": "string", "minLength": 1},
+        "command": _STRING_LIST_SCHEMA,
+        "maturity": {"type": "string", "minLength": 1},
+        "supported_persistence_modes": _STRING_LIST_SCHEMA,
+        "supported_auth_modes": _STRING_LIST_SCHEMA,
+        "supported_job_patterns": _STRING_LIST_SCHEMA,
+        "supported_observability_libraries": _STRING_LIST_SCHEMA,
+        "notes": {"type": ["string", "null"]},
+    },
+    "required": [
+        "plugin_id",
+        "interface_version",
+        "runtime_family",
+        "source",
+        "materializer_kind",
+        "supports_authoritative_workspace",
+        "supported_frameworks",
+        "supported_languages",
+        "required_native_command_kinds",
+        "unsupported_behavior",
+        "command",
+    ],
+}
+
+EXECUTION_WORKSPACE_MANIFEST_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="execution_workspace_manifest", version=1),
+    "title": "AKC execution workspace manifest",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="execution_workspace_manifest"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "artifact_role": {"type": "string", "minLength": 1},
+        "generation_mode": {"type": "string", "minLength": 1},
+        "practical_generation_proof": {"type": "boolean"},
+        "workspace_root": {"type": "string", "minLength": 1},
+        "package_manager": {"type": "string", "minLength": 1},
+        "toolchain": {"type": "object"},
+        "runtime_profile": {"type": "string", "minLength": 1},
+        "requested_runtime_plugin": {"type": "string", "minLength": 1},
+        "requested_runtime_source": {"type": "string", "minLength": 1},
+        "materialization_status": {"type": "string", "minLength": 1},
+        "materializer_kind": {"type": "string", "minLength": 1},
+        "expo": {"type": "object"},
+        "build_profiles": {"type": "object"},
+        "build_entrypoints": {"type": "object"},
+        "expected_outputs": {"type": "object"},
+        "practical_backend_generation": {"type": ["object", "null"]},
+        "api_contract_refs": {"type": "array", "items": {"type": "object"}},
+        "client_codegen_summary": {"type": "object"},
+        "frontend_integration_summary": {"type": "object"},
+        "targets": {"type": "array", "items": {"type": "object"}},
+        "generated_files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "size_bytes": {"type": "integer", "minimum": 0},
+                },
+                "required": ["path", "sha256", "size_bytes"],
+            },
+        },
+        "workspace_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "artifact_role",
+        "generation_mode",
+        "practical_generation_proof",
+        "workspace_root",
+        "package_manager",
+        "toolchain",
+        "runtime_profile",
+        "requested_runtime_plugin",
+        "requested_runtime_source",
+        "materialization_status",
+        "materializer_kind",
+        "build_entrypoints",
+        "expected_outputs",
+        "targets",
+        "generated_files",
+        "workspace_fingerprint",
+    ],
+}
+
+BACKEND_GENERATION_PROFILE_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="backend_generation_profile", version=1),
+    "title": "AKC backend generation profile",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="backend_generation_profile"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "goal_statement": {"type": ["string", "null"]},
+        "project_root": {"type": ["string", "null"]},
+        "detected_languages": {"type": "array", "items": {"type": "object"}},
+        "native_build_commands": {"type": "array", "items": _COMMAND_ENTRY_SCHEMA},
+        "detected_frameworks": {"type": "array", "items": {"type": "object"}},
+        "persistence_markers": {"type": "array", "items": {"type": "object"}},
+        "observability_markers": {"type": "array", "items": {"type": "object"}},
+        "transport_markers": {"type": "array", "items": {"type": "object"}},
+        "test_topology": {"type": "object"},
+        "repo_anchor_candidates": {"type": "array", "items": {"type": "object"}},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "selected_runtime_maturity": {"type": "string", "minLength": 1},
+        "persistence_strategy": {"type": "string", "minLength": 1},
+        "adoption_confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "adoption_readiness": {"type": "string", "enum": ["ready", "blocked"]},
+        "blocked_reasons": _STRING_LIST_SCHEMA,
+        "why_this_target": _STRING_LIST_SCHEMA,
+        "generator_policy": {"type": "object"},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "detected_languages",
+        "native_build_commands",
+        "repo_anchor_candidates",
+        "selected_runtime_plugin",
+        "selected_runtime_maturity",
+        "persistence_strategy",
+        "adoption_confidence_score",
+        "adoption_readiness",
+        "blocked_reasons",
+        "why_this_target",
+        "generator_policy",
+    ],
+}
+
+BACKEND_IR_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="backend_ir", version=1),
+    "title": "AKC practical backend IR",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="backend_ir"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "goal_statement": {"type": ["string", "null"]},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "resources": {"type": "array", "items": {"type": "object"}},
+        "cross_cut_requirements": _STRING_LIST_SCHEMA,
+        "repo_anchor_plan": {"type": "array", "items": {"type": "object"}},
+        "acceptance_scenarios": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "selected_runtime_plugin",
+        "resources",
+        "cross_cut_requirements",
+        "repo_anchor_plan",
+        "acceptance_scenarios",
+    ],
+}
+
+BACKEND_API_CONTRACT_INDEX_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="backend_api_contract_index", version=1),
+    "title": "AKC backend API contract index",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="backend_api_contract_index"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "contract_format": {"type": "string", "minLength": 1},
+        "contract_refs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {
+                    "target_id": {"type": "string", "minLength": 1},
+                    "openapi_rel_path": {"type": "string", "minLength": 1},
+                    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "target_class": {"type": ["string", "null"]},
+                    "runtime_profile": {"type": ["string", "null"]},
+                    "server_env_var": {"type": ["string", "null"]},
+                    "base_url_env_var": {"type": ["string", "null"]},
+                    "contract_depth": {"type": ["string", "null"]},
+                    "operation_count": {"type": ["integer", "null"], "minimum": 0},
+                    "feature_groups": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                    "auth_modes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                },
+                "required": ["target_id", "openapi_rel_path", "fingerprint"],
+            },
+        },
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "selected_runtime_plugin",
+        "contract_format",
+        "contract_refs",
+    ],
+}
+
+IMPLEMENTATION_PLAN_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="implementation_plan", version=1),
+    "title": "AKC practical backend implementation plan",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="implementation_plan"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "phases": {"type": "array", "items": {"type": "object"}},
+        "seed_steps": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": ["run_id", "tenant_id", "repo_id", "selected_runtime_plugin", "phases", "seed_steps"],
+}
+
+IMPLEMENTATION_ACCEPTANCE_CONTRACT_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="implementation_acceptance_contract", version=1),
+    "title": "AKC practical backend acceptance contract",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="implementation_acceptance_contract"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "required_native_commands": {"type": "array", "items": _COMMAND_ENTRY_SCHEMA},
+        "proof_strategy": {"type": "string", "minLength": 1},
+        "proof_command": {"anyOf": [{"type": "null"}, _STRING_LIST_SCHEMA]},
+        "repo_anchor_paths": _STRING_LIST_SCHEMA,
+        "required_cross_cuts": _STRING_LIST_SCHEMA,
+        "persistence_expectation": {"type": "string", "minLength": 1},
+        "unsupported_feature_behavior": {"type": "string", "minLength": 1},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "selected_runtime_plugin",
+        "required_native_commands",
+        "proof_strategy",
+        "repo_anchor_paths",
+        "required_cross_cuts",
+        "persistence_expectation",
+        "unsupported_feature_behavior",
+    ],
+}
+
+PRACTICAL_GENERATION_RESULT_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="practical_generation_result", version=1),
+    "title": "AKC practical backend generation result",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="practical_generation_result"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1},
+        "selected_runtime_plugin": {"type": "string", "minLength": 1},
+        "selected_runtime_maturity": {"type": "string", "minLength": 1},
+        "plugin_source": {"type": "string", "minLength": 1},
+        "materializer_kind": {"type": "string", "minLength": 1},
+        "supports_authoritative_workspace": {"type": "boolean"},
+        "requested_by_policy": {"type": "boolean"},
+        "availability": {"type": "string", "minLength": 1},
+        "blocked_stage": {"type": ["string", "null"]},
+        "adoption_confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "blocked_reasons": _STRING_LIST_SCHEMA,
+        "practical_success_requires": _STRING_LIST_SCHEMA,
+        "execution_workspace_role": {"type": "string", "minLength": 1},
+        "fallback_mode": {"type": "string", "minLength": 1},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "status",
+        "selected_runtime_plugin",
+        "selected_runtime_maturity",
+        "plugin_source",
+        "materializer_kind",
+        "supports_authoritative_workspace",
+        "requested_by_policy",
+        "availability",
+        "blocked_stage",
+        "adoption_confidence_score",
+        "blocked_reasons",
+        "practical_success_requires",
+        "execution_workspace_role",
+        "fallback_mode",
+    ],
+}
+
+RUNTIME_PLUGIN_DECISION_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="runtime_plugin_decision", version=1),
+    "title": "AKC practical backend runtime plugin decision",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="runtime_plugin_decision"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "plugin_id": {"type": "string", "minLength": 1},
+        "runtime_family": {"type": "string", "minLength": 1},
+        "maturity": {"type": "string", "minLength": 1},
+        "supported_frameworks": _STRING_LIST_SCHEMA,
+        "supported_persistence_modes": _STRING_LIST_SCHEMA,
+        "supported_auth_modes": _STRING_LIST_SCHEMA,
+        "supported_job_patterns": _STRING_LIST_SCHEMA,
+        "supported_observability_libraries": _STRING_LIST_SCHEMA,
+        "required_native_command_kinds": _STRING_LIST_SCHEMA,
+        "supported_languages": _STRING_LIST_SCHEMA,
+        "unsupported_behavior": {"type": "string", "minLength": 1},
+        "plugin_source": {"type": "string", "minLength": 1},
+        "materializer_kind": {"type": "string", "minLength": 1},
+        "supports_authoritative_workspace": {"type": "boolean"},
+        "requested_by_policy": {"type": "boolean"},
+        "availability": {"type": "string", "minLength": 1},
+        "blocked_stage": {"type": ["string", "null"]},
+        "selected_because": _STRING_LIST_SCHEMA,
+        "adoption_confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "adoption_readiness": {"type": "string", "enum": ["ready", "blocked"]},
+        "blocked_reasons": _STRING_LIST_SCHEMA,
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "plugin_id",
+        "runtime_family",
+        "maturity",
+        "supported_frameworks",
+        "supported_persistence_modes",
+        "supported_auth_modes",
+        "supported_job_patterns",
+        "supported_observability_libraries",
+        "required_native_command_kinds",
+        "supported_languages",
+        "unsupported_behavior",
+        "plugin_source",
+        "materializer_kind",
+        "supports_authoritative_workspace",
+        "requested_by_policy",
+        "availability",
+        "blocked_stage",
+        "selected_because",
+        "adoption_confidence_score",
+        "adoption_readiness",
+        "blocked_reasons",
+    ],
+}
+
 DELIVERY_PLAN_V1: Final[dict[str, Any]] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": schema_id_for(kind="delivery_plan", version=1),
@@ -643,6 +1088,177 @@ DELIVERY_PLAN_V1: Final[dict[str, Any]] = {
         "delivery_paths",
         "required_human_inputs",
         "promotion_readiness",
+    ],
+}
+
+INFRA_PLAN_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="infra_plan", version=1),
+    "title": "AKC infrastructure synthesis plan",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="infra_plan"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "cloud_provider": {"type": "string", "minLength": 1},
+        "supported_iac_backends": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "preferred_iac_backend": {"type": "string", "minLength": 1},
+        "provisioning_environments": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "workload_targets": {"type": "array", "items": {"type": "object"}},
+        "resources": {"type": "array", "items": {"type": "object"}},
+        "unsupported_target_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "provisioning_readiness": {"type": "object", "additionalProperties": True},
+        "inputs_fingerprint": {"type": "string", "minLength": 1},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "cloud_provider",
+        "supported_iac_backends",
+        "preferred_iac_backend",
+        "provisioning_environments",
+        "workload_targets",
+        "resources",
+        "provisioning_readiness",
+    ],
+}
+
+IAC_MANIFEST_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="iac_manifest", version=1),
+    "title": "AKC IaC workspace manifest",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="iac_manifest"),
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "cloud_provider": {"type": "string", "minLength": 1},
+        "supported_backends": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "preferred_backend": {"type": "string", "minLength": 1},
+        "infra_plan_ref": {"type": "object", "additionalProperties": True},
+        "provisioning_readiness": {"type": "object", "additionalProperties": True},
+        "environments": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "workspaces": {"type": "object", "additionalProperties": True},
+        "output_contract": {"type": "object", "additionalProperties": True},
+    },
+    "required": [
+        "run_id",
+        "tenant_id",
+        "repo_id",
+        "cloud_provider",
+        "supported_backends",
+        "preferred_backend",
+        "infra_plan_ref",
+        "provisioning_readiness",
+        "environments",
+        "workspaces",
+    ],
+}
+
+PROVISION_PLAN_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="provision_plan", version=1),
+    "title": "AKC provision plan evidence",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="provision_plan"),
+        "provision_id": {"type": "string", "minLength": 1},
+        "compile_run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "environment": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["ready", "blocked", "failed"]},
+        "desired_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "infra_plan_ref": {"type": "object", "additionalProperties": True},
+        "iac_manifest_ref": {"type": "object", "additionalProperties": True},
+        "commands": {"type": "array", "items": {"type": "object"}},
+        "preflight": {"type": "object", "additionalProperties": True},
+        "created_at_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "provision_id",
+        "compile_run_id",
+        "tenant_id",
+        "repo_id",
+        "backend",
+        "environment",
+        "status",
+        "desired_fingerprint",
+        "commands",
+        "created_at_ms",
+    ],
+}
+
+PROVISION_APPLY_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="provision_apply", version=1),
+    "title": "AKC provision apply evidence",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="provision_apply"),
+        "provision_id": {"type": "string", "minLength": 1},
+        "compile_run_id": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "environment": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["applied", "blocked", "failed"]},
+        "desired_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "commands": {"type": "array", "items": {"type": "object"}},
+        "created_at_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "provision_id",
+        "compile_run_id",
+        "backend",
+        "environment",
+        "status",
+        "desired_fingerprint",
+        "commands",
+        "created_at_ms",
+    ],
+}
+
+PROVISION_SESSION_V1: Final[dict[str, Any]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": schema_id_for(kind="provision_session", version=1),
+    "title": "AKC provision session",
+    "type": "object",
+    "additionalProperties": True,
+    "properties": {
+        **_base_envelope(kind="provision_session"),
+        "provision_id": {"type": "string", "minLength": 1},
+        "compile_run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "repo_id": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "environment": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["planned", "applied", "blocked", "failed"]},
+        "desired_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "infra_plan_ref": {"type": "object", "additionalProperties": True},
+        "iac_manifest_ref": {"type": "object", "additionalProperties": True},
+        "latest_plan_ref": {"type": ["object", "null"], "additionalProperties": True},
+        "latest_apply_ref": {"type": ["object", "null"], "additionalProperties": True},
+        "created_at_ms": {"type": "integer", "minimum": 0},
+        "updated_at_ms": {"type": "integer", "minimum": 0},
+    },
+    "required": [
+        "provision_id",
+        "compile_run_id",
+        "tenant_id",
+        "repo_id",
+        "backend",
+        "environment",
+        "status",
+        "desired_fingerprint",
+        "created_at_ms",
+        "updated_at_ms",
     ],
 }
 
@@ -1988,11 +2604,69 @@ def get_schema(*, kind: SchemaKind, version: int = ARTIFACT_SCHEMA_VERSION) -> d
             return RUNTIME_BUNDLE_V3
         if int(version) == 4:
             return RUNTIME_BUNDLE_V4
+        if int(version) == 5:
+            return RUNTIME_BUNDLE_V5
         raise ValueError(f"unsupported runtime_bundle schema version: {version}")
+    if kind == "execution_workspace_manifest":
+        if int(version) == 1:
+            return EXECUTION_WORKSPACE_MANIFEST_V1
+        raise ValueError(f"unsupported execution_workspace_manifest schema version: {version}")
+    if kind == "backend_generator_plugin_manifest":
+        if int(version) == 1:
+            return BACKEND_GENERATOR_PLUGIN_MANIFEST_V1
+        raise ValueError(f"unsupported backend_generator_plugin_manifest schema version: {version}")
+    if kind == "backend_generation_profile":
+        if int(version) == 1:
+            return BACKEND_GENERATION_PROFILE_V1
+        raise ValueError(f"unsupported backend_generation_profile schema version: {version}")
+    if kind == "backend_ir":
+        if int(version) == 1:
+            return BACKEND_IR_V1
+        raise ValueError(f"unsupported backend_ir schema version: {version}")
+    if kind == "backend_api_contract_index":
+        if int(version) == 1:
+            return BACKEND_API_CONTRACT_INDEX_V1
+        raise ValueError(f"unsupported backend_api_contract_index schema version: {version}")
+    if kind == "implementation_plan":
+        if int(version) == 1:
+            return IMPLEMENTATION_PLAN_V1
+        raise ValueError(f"unsupported implementation_plan schema version: {version}")
+    if kind == "implementation_acceptance_contract":
+        if int(version) == 1:
+            return IMPLEMENTATION_ACCEPTANCE_CONTRACT_V1
+        raise ValueError(f"unsupported implementation_acceptance_contract schema version: {version}")
+    if kind == "practical_generation_result":
+        if int(version) == 1:
+            return PRACTICAL_GENERATION_RESULT_V1
+        raise ValueError(f"unsupported practical_generation_result schema version: {version}")
+    if kind == "runtime_plugin_decision":
+        if int(version) == 1:
+            return RUNTIME_PLUGIN_DECISION_V1
+        raise ValueError(f"unsupported runtime_plugin_decision schema version: {version}")
     if kind == "delivery_plan":
         if int(version) == 1:
             return DELIVERY_PLAN_V1
         raise ValueError(f"unsupported delivery_plan schema version: {version}")
+    if kind == "infra_plan":
+        if int(version) == 1:
+            return INFRA_PLAN_V1
+        raise ValueError(f"unsupported infra_plan schema version: {version}")
+    if kind == "iac_manifest":
+        if int(version) == 1:
+            return IAC_MANIFEST_V1
+        raise ValueError(f"unsupported iac_manifest schema version: {version}")
+    if kind == "provision_plan":
+        if int(version) == 1:
+            return PROVISION_PLAN_V1
+        raise ValueError(f"unsupported provision_plan schema version: {version}")
+    if kind == "provision_apply":
+        if int(version) == 1:
+            return PROVISION_APPLY_V1
+        raise ValueError(f"unsupported provision_apply schema version: {version}")
+    if kind == "provision_session":
+        if int(version) == 1:
+            return PROVISION_SESSION_V1
+        raise ValueError(f"unsupported provision_session schema version: {version}")
     if kind == "delivery_request":
         if int(version) == 1:
             return DELIVERY_REQUEST_V1

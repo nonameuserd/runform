@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import pytest
 
+from akc.adopt.toolchain import ToolchainProfile
 from akc.compile import ControllerConfig, CostRates, TierConfig, run_compile_loop
 from akc.compile.controller_config import Budget
 from akc.compile.interfaces import (
@@ -98,6 +100,20 @@ class _ScriptedExecutor(Executor):
             stderr="",
             duration_ms=1,
         )
+
+
+@dataclass
+class _RecordingExecutor(_ScriptedExecutor):
+    commands: list[list[str]] = field(default_factory=list)
+
+    def run(  # type: ignore[override]
+        self,
+        *,
+        scope: TenantRepoScope,
+        request: ExecutionRequest,
+    ) -> ExecutionResult:
+        self.commands.append(list(request.command))
+        return super().run(scope=scope, request=request)
 
 
 @dataclass
@@ -490,6 +506,72 @@ def test_controller_smoke_full_runs_every_n_iterations_and_on_budget_boundary() 
 
     assert res.status == "succeeded"
     assert ex.calls == 3  # smoke, then smoke+full
+
+
+def test_native_repo_checks_rerun_on_repair_and_converge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mem = build_memory(backend="memory")
+    plan = mem.plan_state.create_plan(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        initial_steps=["step1"],
+    )
+    mem.plan_state.set_active_plan(tenant_id="t1", repo_id="repo1", plan_id=plan.id)
+
+    llm = _FakeLLM()
+    ex = _RecordingExecutor(exit_codes=[1, 0, 0])
+
+    base = _mk_config(max_llm_calls=10, max_repairs=1)
+    cfg = ControllerConfig(
+        tiers=base.tiers,
+        stage_tiers=base.stage_tiers,
+        budget=base.budget,
+        test_mode="native_smoke",
+        policy_mode=base.policy_mode,
+        tool_allowlist=base.tool_allowlist,
+        metadata={},
+    )
+
+    monkeypatch.setattr("akc.compile.controller.detect_project_profile", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "akc.compile.controller.resolve_toolchain_profile",
+        lambda **_kwargs: ToolchainProfile(
+            language="python",
+            package_manager="uv",
+            test_command=["pytest", "-q"],
+            typecheck_command=["pyright"],
+            build_command=None,
+            lint_command=["ruff", "check", "."],
+            format_command=None,
+            install_command=None,
+            required_binaries=["ruff", "pyright", "pytest"],
+        ),
+    )
+
+    res = run_compile_loop(
+        tenant_id="t1",
+        repo_id="repo1",
+        goal="Goal",
+        plan_store=mem.plan_state,
+        code_memory=mem.code_memory,
+        why_graph=mem.why_graph,
+        index=None,
+        llm=llm,
+        executor=ex,
+        config=cfg,
+        project_root=tmp_path,
+    )
+
+    assert res.status == "succeeded"
+    assert res.accounting["repair_iterations"] == 1
+    assert ex.commands == [
+        ["sh", "-lc", "set -e; ruff check . && pyright"],
+        ["sh", "-lc", "set -e; ruff check . && pyright"],
+        ["pytest", "-q"],
+    ]
 
 
 def test_verifier_gate_vetoes_promotion_and_triggers_repair_under_strict_monotonicity() -> None:

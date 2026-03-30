@@ -37,6 +37,8 @@ _CONTROL_PLANE_REF_KEYS: tuple[tuple[str, str], ...] = (
     ("operational_validity_report_ref", "operational_validity_report_ref"),
     ("operational_assurance_ref", "operational_assurance_ref"),
     ("governance_profile_ref", "governance_profile_ref"),
+    ("infra_plan_ref", "infra_plan_ref"),
+    ("iac_manifest_ref", "iac_manifest_ref"),
 )
 _MAX_OPERATIONAL_PREDICATE_SUMMARY_ROWS = 16
 

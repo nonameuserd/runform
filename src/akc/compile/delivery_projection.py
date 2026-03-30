@@ -211,11 +211,34 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
     domain_for: list[str] = []
     cloud_for: list[str] = []
     health_path_for: list[str] = []
+    aws_account_for: list[str] = []
+    aws_region_for: list[str] = []
+    route53_zone_for: list[str] = []
+    terraform_state_backend_for: list[str] = []
+    cdk_bootstrap_for: list[str] = []
+    cluster_destination_for: list[str] = []
     secrets_unacked_for: list[str] = []
     secret_names_by_target: dict[str, list[str]] = {}
     env_unacked_for: list[str] = []
     env_keys_by_target: dict[str, list[str]] = {}
+    secret_store_owner_for: list[str] = []
     app_store_for: list[str] = []
+    aws_provisioning_context = any(
+        str(target.get("node_kind")) == "infrastructure"
+        or any(
+            isinstance(target.get(key), str) and str(target.get(key)).strip()
+            for key in (
+                "aws_account_id",
+                "aws_region",
+                "route53_zone",
+                "terraform_state_backend",
+                "cluster_destination",
+                "secret_store_owner",
+            )
+        )
+        or target.get("cdk_bootstrap_completed") is not None
+        for target in targets
+    )
 
     for target in targets:
         tid = str(target.get("target_id", "")).strip()
@@ -229,6 +252,29 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
         ca = target.get("cloud_account")
         if not isinstance(ca, str) or not ca.strip():
             cloud_for.append(tid)
+        elif aws_provisioning_context and (
+            not isinstance(target.get("aws_account_id"), str) or not str(target.get("aws_account_id")).strip()
+        ):
+            aws_account_for.append(tid)
+        if aws_provisioning_context and (
+            not isinstance(target.get("aws_region"), str) or not str(target.get("aws_region")).strip()
+        ):
+            aws_region_for.append(tid)
+        if aws_provisioning_context and (
+            not isinstance(target.get("cluster_destination"), str) or not str(target.get("cluster_destination")).strip()
+        ):
+            cluster_destination_for.append(tid)
+        if aws_provisioning_context and (
+            not isinstance(target.get("terraform_state_backend"), str)
+            or not str(target.get("terraform_state_backend")).strip()
+        ):
+            terraform_state_backend_for.append(tid)
+        if aws_provisioning_context and not _as_bool(target.get("cdk_bootstrap_completed"), default=False):
+            cdk_bootstrap_for.append(tid)
+        if aws_provisioning_context and isinstance(exposure, Mapping) and bool(exposure.get("public")):
+            zone = target.get("route53_zone")
+            if not isinstance(zone, str) or not zone.strip():
+                route53_zone_for.append(tid)
         hc = target.get("health_contract")
         if isinstance(hc, Mapping) and hc.get("health_endpoint_known") is False:
             health_path_for.append(tid)
@@ -241,6 +287,11 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                     secret_names_by_target[tid] = names
                     if not _as_bool(target.get("secrets_provisioned_in_store"), default=False):
                         secrets_unacked_for.append(tid)
+                    if aws_provisioning_context and (
+                        not isinstance(target.get("secret_store_owner"), str)
+                        or not str(target.get("secret_store_owner")).strip()
+                    ):
+                        secret_store_owner_for.append(tid)
             raw_env = csc.get("required_env")
             if isinstance(raw_env, Sequence) and not isinstance(raw_env, (str, bytes)):
                 ekeys = sorted({str(x).strip() for x in raw_env if str(x).strip()})
@@ -319,6 +370,178 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                 },
             )
         )
+    if aws_account_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "aws_account_id",
+                    "status": "missing",
+                    "ask_order": 21,
+                    "blocking_for": ["staging", "production"],
+                    "reason": (
+                        "AWS provisioning needs an explicit account ID even when a higher-level "
+                        "cloud account label exists."
+                    ),
+                    "ui_prompt": {
+                        "audience": "non_technical",
+                        "title": "AWS account ID",
+                        "question": (
+                            "What 12-digit AWS account ID should AKC provision into for staging and production?"
+                        ),
+                        "help_text": "AKC uses this for AWS IAM, EKS, and resource output contracts.",
+                        "value_kind": "aws_account_id",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "aws_account_id",
+                        "scope": "listed_targets",
+                        "target_ids": sorted(set(aws_account_for)),
+                    },
+                },
+            )
+        )
+    if aws_region_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "aws_region",
+                    "status": "missing",
+                    "ask_order": 22,
+                    "blocking_for": ["staging", "production"],
+                    "reason": "Provisioning needs a concrete AWS region for IaC plan/apply.",
+                    "ui_prompt": {
+                        "audience": "non_technical",
+                        "title": "AWS region",
+                        "question": "Which AWS region should AKC target for staging and production infrastructure?",
+                        "help_text": "Use a region identifier such as us-east-1.",
+                        "value_kind": "aws_region",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "aws_region",
+                        "scope": "listed_targets",
+                        "target_ids": sorted(set(aws_region_for)),
+                    },
+                },
+            )
+        )
+    if route53_zone_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "route53_zone",
+                    "status": "missing",
+                    "ask_order": 23,
+                    "blocking_for": ["production"],
+                    "reason": "Public AWS targets need a Route53 hosted zone for DNS and ACM validation.",
+                    "ui_prompt": {
+                        "audience": "non_technical",
+                        "title": "Route53 hosted zone",
+                        "question": "Which Route53 hosted zone should own the public DNS records for this system?",
+                        "help_text": "Use a zone name such as example.com.",
+                        "value_kind": "dns_zone",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "route53_zone",
+                        "scope": "listed_targets",
+                        "target_ids": sorted(set(route53_zone_for)),
+                    },
+                },
+            )
+        )
+    if terraform_state_backend_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "terraform_state_backend",
+                    "status": "missing",
+                    "ask_order": 24,
+                    "blocking_for": ["staging", "production"],
+                    "reason": "Terraform plan/apply needs a remote state backend configuration.",
+                    "ui_prompt": {
+                        "audience": "operator",
+                        "title": "Terraform state backend",
+                        "question": "What remote Terraform state backend should AKC use for this repository?",
+                        "help_text": (
+                            "For AWS this is typically an S3 bucket and lock table identifier "
+                            "recorded on the compile model."
+                        ),
+                        "value_kind": "terraform_backend",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "terraform_state_backend",
+                        "scope": "repo",
+                        "target_ids": sorted(set(terraform_state_backend_for)),
+                    },
+                },
+            )
+        )
+    if cdk_bootstrap_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "cdk_bootstrap_completed",
+                    "status": "missing",
+                    "ask_order": 25,
+                    "blocking_for": ["staging", "production"],
+                    "reason": "AWS CDK execution needs the target AWS environment bootstrapped before deploy.",
+                    "ui_prompt": {
+                        "audience": "operator",
+                        "title": "CDK bootstrap",
+                        "question": "Has the target AWS environment already been bootstrapped for AWS CDK?",
+                        "help_text": (
+                            "Confirm this only after the bootstrap stack exists for the chosen account and region."
+                        ),
+                        "value_kind": "acknowledge_cdk_bootstrap",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "cdk_bootstrap_completed",
+                        "scope": "repo",
+                        "target_ids": sorted(set(cdk_bootstrap_for)),
+                    },
+                },
+            )
+        )
+    if cluster_destination_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "cluster_destination",
+                    "status": "missing",
+                    "ask_order": 26,
+                    "blocking_for": ["staging", "production"],
+                    "reason": "Provisioning and GitOps handoff need an explicit cluster or workload destination.",
+                    "ui_prompt": {
+                        "audience": "operator",
+                        "title": "Cluster destination",
+                        "question": "What cluster or GitOps destination should AKC prepare for workload rollout?",
+                        "help_text": "Use a stable logical name such as aks-staging, eks-prod, or flux/production.",
+                        "value_kind": "cluster_destination",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "cluster_destination",
+                        "scope": "listed_targets",
+                        "target_ids": sorted(set(cluster_destination_for)),
+                    },
+                },
+            )
+        )
     if health_path_for:
         reqs.append(
             cast(
@@ -388,6 +611,41 @@ def _collect_required_human_inputs(*, targets: Sequence[Mapping[str, Any]]) -> l
                         "property": "secrets_provisioned_in_store",
                         "scope": "listed_targets",
                         "target_ids": sorted(set(secrets_unacked_for)),
+                    },
+                },
+            )
+        )
+    if secret_store_owner_for:
+        reqs.append(
+            cast(
+                dict[str, JSONValue],
+                {
+                    "id": "secret_store_owner",
+                    "status": "missing",
+                    "ask_order": 37,
+                    "blocking_for": ["staging", "production"],
+                    "reason": (
+                        "AKC needs a declared owner for the platform secret store before "
+                        "provisioning secret placeholders."
+                    ),
+                    "ui_prompt": {
+                        "audience": "operator",
+                        "title": "Secret store owner",
+                        "question": (
+                            "Which team, service account, or platform owner manages the secret "
+                            "store for these components?"
+                        ),
+                        "help_text": (
+                            "This is a non-secret ownership label used for provisioning handoff and approvals."
+                        ),
+                        "value_kind": "owner_label",
+                        "sensitive": False,
+                    },
+                    "answer_binding": {
+                        "kind": "ir_node_property",
+                        "property": "secret_store_owner",
+                        "scope": "listed_targets",
+                        "target_ids": sorted(set(secret_store_owner_for)),
                     },
                 },
             )
@@ -498,6 +756,13 @@ def build_delivery_plan(
             ),
             "domain": node.properties.get("domain"),
             "cloud_account": node.properties.get("cloud_account"),
+            "aws_account_id": node.properties.get("aws_account_id"),
+            "aws_region": node.properties.get("aws_region"),
+            "route53_zone": node.properties.get("route53_zone"),
+            "terraform_state_backend": node.properties.get("terraform_state_backend"),
+            "cdk_bootstrap_completed": node.properties.get("cdk_bootstrap_completed"),
+            "cluster_destination": node.properties.get("cluster_destination"),
+            "secret_store_owner": node.properties.get("secret_store_owner"),
             "app_store_account": node.properties.get("app_store_account"),
             "secrets_provisioned_in_store": _as_bool(
                 node.properties.get("secrets_provisioned_in_store"), default=False
@@ -515,6 +780,17 @@ def build_delivery_plan(
         promotion_blockers.append("production_manual_approval_gate")
     promotion_readiness_status: Literal["ready", "blocked"] = "blocked" if promotion_blockers else "ready"
     promotion_ready = promotion_readiness_status == "ready"
+    provisioning_blockers: list[str] = []
+    for item in required_human_inputs:
+        blocking_for = item.get("blocking_for")
+        if (
+            isinstance(blocking_for, Sequence)
+            and not isinstance(blocking_for, (str, bytes))
+            and any(str(env).strip() in {"staging", "production"} for env in blocking_for)
+        ):
+            provisioning_blockers.append(str(item["id"]))
+    provisioning_required = bool(targets)
+    provisioning_ready = not provisioning_blockers
     delivery_paths = {
         "local": ["direct_apply"],
         "staging": ["direct_apply", "workflow_handoff"],
@@ -537,6 +813,16 @@ def build_delivery_plan(
         "environment_model": cast(JSONValue, list(env_model_rows)),
         "delivery_paths": cast(JSONValue, delivery_paths),
         "operational_profiles": cast(JSONValue, {"default": {"rollout_strategy": "rolling", "health_required": True}}),
+        "provisioning_required": provisioning_required,
+        "supported_iac_backends": cast(JSONValue, ["terraform", "aws_cdk"]),
+        "preferred_iac_backend": "terraform",
+        "infra_target_ref": cast(
+            JSONValue,
+            {
+                "kind": "infra_plan",
+                "path": f".akc/infra/{run_id}.infra_plan.json",
+            },
+        ),
         "required_human_inputs": cast(JSONValue, required_human_inputs),
         "promotion_readiness": cast(
             JSONValue,
@@ -547,6 +833,18 @@ def build_delivery_plan(
                 "production_manual_approval_required": production_manual_approval_required,
                 "is_promotion_ready": promotion_ready,
                 "default_promotion_environment": "production",
+            },
+        ),
+        "provisioning_readiness": cast(
+            JSONValue,
+            {
+                "status": "ready" if provisioning_ready else "blocked",
+                "blocking_inputs": sorted(set(provisioning_blockers)),
+                "provisioning_blockers": sorted(set(provisioning_blockers)),
+                "supported_environments": ["staging", "production"],
+                "default_environment": "staging",
+                "default_backend": "terraform",
+                "is_provisioning_ready": provisioning_ready,
             },
         ),
     }

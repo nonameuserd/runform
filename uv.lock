@@ -21,115 +21,12 @@ constraints = [
 
 [[package]]
 name = "akc"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "jsonschema" },
-    { name = "pydantic" },
-    { name = "windows-curses", marker = "sys_platform == 'win32'" },
+version = "0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/41/2ca3a7f7e638113bed0d775a231e3fba29c30e68b1a6fa26ce67b71c0dcd/akc-0.3.tar.gz", hash = "sha256:f9d9e6089e0d8a217927fb5651782b4d34773f5c710c84cf4958173996f48ecb", size = 3822, upload-time = "2024-08-28T22:19:37.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/0f/1c4c5e5991bed30b2374945526d9f2187836ef9f5f5cb30d2d1b5f5b6058/Akc-0.3-py3-none-any.whl", hash = "sha256:7cfafed2a8729ed245cf5b886b1e4554e233654b9e6f9cca713aab0c6998be46", size = 4616, upload-time = "2024-08-28T22:19:36.189Z" },
 ]
-
-[package.optional-dependencies]
-delivery-providers = [
-    { name = "google-auth" },
-    { name = "pyjwt", extra = ["crypto"] },
-]
-detect-tree-sitter = [
-    { name = "tree-sitter" },
-    { name = "tree-sitter-languages" },
-]
-dev = [
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "mypy" },
-    { name = "pip-audit" },
-    { name = "pre-commit" },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "python-semantic-release" },
-    { name = "pyyaml" },
-    { name = "ruff" },
-    { name = "types-jsonschema" },
-    { name = "types-pyyaml" },
-]
-docs = [
-    { name = "mkdocs-material" },
-]
-ingest-all = [
-    { name = "beautifulsoup4" },
-    { name = "chromadb" },
-    { name = "httpx" },
-    { name = "markdown-it-py" },
-    { name = "mcp" },
-    { name = "pyyaml" },
-    { name = "slack-sdk" },
-]
-ingest-docs = [
-    { name = "beautifulsoup4" },
-    { name = "markdown-it-py" },
-]
-ingest-embed = [
-    { name = "httpx" },
-]
-ingest-mcp = [
-    { name = "httpx" },
-    { name = "mcp" },
-]
-ingest-messaging = [
-    { name = "slack-sdk" },
-]
-ingest-openapi = [
-    { name = "pyyaml" },
-]
-ingest-vectorstore = [
-    { name = "chromadb" },
-]
-mcp-serve = [
-    { name = "mcp" },
-]
-vectorstore-pg = [
-    { name = "pgvector" },
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "akc", extras = ["ingest-docs", "ingest-openapi", "ingest-embed", "ingest-vectorstore", "ingest-messaging", "ingest-mcp", "mcp-serve"], marker = "extra == 'ingest-all'" },
-    { name = "beautifulsoup4", marker = "extra == 'ingest-docs'", specifier = ">=4.12" },
-    { name = "chromadb", marker = "extra == 'ingest-vectorstore'", specifier = ">=0.5" },
-    { name = "google-auth", marker = "extra == 'delivery-providers'", specifier = ">=2.29.0" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "httpx", marker = "extra == 'ingest-embed'", specifier = ">=0.27" },
-    { name = "httpx", marker = "extra == 'ingest-mcp'", specifier = ">=0.27" },
-    { name = "jsonschema", specifier = ">=4.22" },
-    { name = "markdown-it-py", marker = "extra == 'ingest-docs'", specifier = ">=3.0" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.2.0" },
-    { name = "mcp", marker = "extra == 'ingest-mcp'", specifier = ">=1.2.0" },
-    { name = "mcp", marker = "extra == 'mcp-serve'", specifier = ">=1.2.0" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.17,<10" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
-    { name = "pgvector", marker = "extra == 'vectorstore-pg'", specifier = ">=0.4" },
-    { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'vectorstore-pg'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.10" },
-    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'delivery-providers'", specifier = ">=2.8.0" },
-    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'dev'", specifier = ">=2.8.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "python-semantic-release", marker = "extra == 'dev'", specifier = ">=9.8" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'ingest-openapi'", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "slack-sdk", marker = "extra == 'ingest-messaging'", specifier = ">=3.27" },
-    { name = "tree-sitter", marker = "extra == 'detect-tree-sitter'" },
-    { name = "tree-sitter-languages", marker = "extra == 'detect-tree-sitter'" },
-    { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.22.0.0" },
-    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0.0" },
-    { name = "windows-curses", marker = "sys_platform == 'win32'", specifier = ">=2.4.0" },
-]
-provides-extras = ["dev", "detect-tree-sitter", "docs", "ingest-docs", "ingest-openapi", "ingest-embed", "ingest-vectorstore", "ingest-messaging", "ingest-mcp", "mcp-serve", "ingest-all", "vectorstore-pg", "delivery-providers"]
 
 [[package]]
 name = "annotated-doc"
@@ -2509,11 +2406,11 @@ wheels = [
 
 [[package]]
 name = "pygments"
-version = "2.19.2"
+version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
 
 [[package]]
@@ -2965,6 +2862,112 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/89/7a/09ece68445ceac348df06e08bf75db72d0e8427765b96c9c0ffabc1be1d9/ruff-0.15.6-py3-none-win_amd64.whl", hash = "sha256:aee25bc84c2f1007ecb5037dff75cef00414fdf17c23f07dc13e577883dca406", size = 11787271, upload-time = "2026-03-12T23:05:20.168Z" },
     { url = "https://files.pythonhosted.org/packages/7f/d0/578c47dd68152ddddddf31cd7fc67dc30b7cdf639a86275fda821b0d9d98/ruff-0.15.6-py3-none-win_arm64.whl", hash = "sha256:c34de3dd0b0ba203be50ae70f5910b17188556630e2178fd7d79fc030eb0d837", size = 11060497, upload-time = "2026-03-12T23:05:25.968Z" },
 ]
+
+[[package]]
+name = "runform-akc"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "pydantic" },
+    { name = "windows-curses", marker = "sys_platform == 'win32'" },
+]
+
+[package.optional-dependencies]
+delivery-providers = [
+    { name = "google-auth" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
+detect-tree-sitter = [
+    { name = "tree-sitter" },
+    { name = "tree-sitter-languages" },
+]
+dev = [
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "mypy" },
+    { name = "pip-audit" },
+    { name = "pre-commit" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "python-semantic-release" },
+    { name = "pyyaml" },
+    { name = "ruff" },
+    { name = "types-jsonschema" },
+    { name = "types-pyyaml" },
+]
+docs = [
+    { name = "mkdocs-material" },
+]
+ingest-all = [
+    { name = "akc" },
+]
+ingest-docs = [
+    { name = "beautifulsoup4" },
+    { name = "markdown-it-py" },
+]
+ingest-embed = [
+    { name = "httpx" },
+]
+ingest-mcp = [
+    { name = "httpx" },
+    { name = "mcp" },
+]
+ingest-messaging = [
+    { name = "slack-sdk" },
+]
+ingest-openapi = [
+    { name = "pyyaml" },
+]
+ingest-vectorstore = [
+    { name = "chromadb" },
+]
+mcp-serve = [
+    { name = "mcp" },
+]
+vectorstore-pg = [
+    { name = "pgvector" },
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "akc", extras = ["ingest-docs", "ingest-openapi", "ingest-embed", "ingest-vectorstore", "ingest-messaging", "ingest-mcp", "mcp-serve"], marker = "extra == 'ingest-all'" },
+    { name = "beautifulsoup4", marker = "extra == 'ingest-docs'", specifier = ">=4.12" },
+    { name = "chromadb", marker = "extra == 'ingest-vectorstore'", specifier = ">=0.5" },
+    { name = "google-auth", marker = "extra == 'delivery-providers'", specifier = ">=2.29.0" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'ingest-embed'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'ingest-mcp'", specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.22" },
+    { name = "markdown-it-py", marker = "extra == 'ingest-docs'", specifier = ">=3.0" },
+    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.2.0" },
+    { name = "mcp", marker = "extra == 'ingest-mcp'", specifier = ">=1.2.0" },
+    { name = "mcp", marker = "extra == 'mcp-serve'", specifier = ">=1.2.0" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.17,<10" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
+    { name = "pgvector", marker = "extra == 'vectorstore-pg'", specifier = ">=0.4" },
+    { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'vectorstore-pg'", specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.10" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'delivery-providers'", specifier = ">=2.8.0" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'dev'", specifier = ">=2.8.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "python-semantic-release", marker = "extra == 'dev'", specifier = ">=9.8" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'ingest-openapi'", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "slack-sdk", marker = "extra == 'ingest-messaging'", specifier = ">=3.27" },
+    { name = "tree-sitter", marker = "extra == 'detect-tree-sitter'" },
+    { name = "tree-sitter-languages", marker = "extra == 'detect-tree-sitter'" },
+    { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.22.0.0" },
+    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0.0" },
+    { name = "windows-curses", marker = "sys_platform == 'win32'", specifier = ">=2.4.0" },
+]
+provides-extras = ["dev", "detect-tree-sitter", "docs", "ingest-docs", "ingest-openapi", "ingest-embed", "ingest-vectorstore", "ingest-messaging", "ingest-mcp", "mcp-serve", "ingest-all", "vectorstore-pg", "delivery-providers"]
 
 [[package]]
 name = "shellingham"

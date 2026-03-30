@@ -1,0 +1,14 @@
+{
+  "default_server": "stdio_fixture",
+  "servers": {
+    "stdio_fixture": {
+      "args": [
+        "-m",
+        "examples.mcp.fixtures.stdio_static_server"
+      ],
+      "command": "python",
+      "env": {},
+      "transport": "stdio"
+    }
+  }
+}

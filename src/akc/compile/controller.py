@@ -558,37 +558,79 @@ def run_compile_loop(
         require_deployable_steps = bool(md.get("require_deployable_steps", False))
         deployable_intent = intent_declares_deployable_objective(intent=intent_spec)
         if auto_seed_deployable and profile_mode == "emerging" and deployable_intent:
-            seeded_step_id = "step_emerging_bootstrap"
-            existing = next((s for s in plan.steps if s.id == seeded_step_id), None)
-            if existing is not None:
-                # Resume the seeded step rather than duplicating it (id is stable).
-                plan = replace(plan, next_step_id=seeded_step_id, updated_at_ms=now_ms())
-                plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-                step_id = seeded_step_id
+            seed_defs_raw = md.get("practical_backend_seed_steps")
+            seed_defs = (
+                [dict(item) for item in seed_defs_raw if isinstance(item, dict)]
+                if isinstance(seed_defs_raw, list)
+                else []
+            )
+            seeded_inputs: dict[str, Any] = {"intent_id": intent_id}
+            if plan_step_intent_ref is not None:
+                seeded_inputs["intent_ref"] = dict(plan_step_intent_ref)
             else:
-                seeded_inputs: dict[str, Any] = {"intent_id": intent_id}
-                if plan_step_intent_ref is not None:
-                    seeded_inputs["intent_ref"] = dict(plan_step_intent_ref)
+                seeded_inputs["active_objectives"] = list(active_objectives_for_steps)
+                seeded_inputs["linked_constraints"] = list(linked_constraints_for_steps)
+                seeded_inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
+            if seed_defs:
+                existing_ids = {s.id for s in plan.steps}
+                new_steps: list[PlanStep] = []
+                next_order_idx = len(plan.steps)
+                for item in seed_defs:
+                    seeded_step_id = str(item.get("id", "")).strip() or f"step_emerging_bootstrap_{next_order_idx + 1}"
+                    if seeded_step_id in existing_ids:
+                        continue
+                    step_inputs = dict(seeded_inputs)
+                    phase = str(item.get("phase", "")).strip()
+                    if phase:
+                        step_inputs["backend_generation_phase"] = phase
+                    seeded_step = PlanStep(
+                        id=seeded_step_id,
+                        title=str(item.get("title", "")).strip() or "Implement intent",
+                        status="pending",
+                        order_idx=next_order_idx,
+                        inputs=step_inputs,
+                        outputs={},
+                    )
+                    new_steps.append(seeded_step)
+                    existing_ids.add(seeded_step_id)
+                    next_order_idx += 1
+                if new_steps:
+                    plan = replace(
+                        plan,
+                        steps=tuple(list(plan.steps) + new_steps),
+                        updated_at_ms=now_ms(),
+                    )
+                    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                pending_steps = sorted(plan.steps, key=lambda x: x.order_idx)
+                step_id = next((s.id for s in pending_steps if s.status == "pending"), None)
+                if step_id is not None:
+                    plan = replace(plan, next_step_id=step_id, updated_at_ms=now_ms())
+                    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+            if step_id is None:
+                seeded_step_id = "step_emerging_bootstrap"
+                existing = next((s for s in plan.steps if s.id == seeded_step_id), None)
+                if existing is not None:
+                    # Resume the seeded step rather than duplicating it (id is stable).
+                    plan = replace(plan, next_step_id=seeded_step_id, updated_at_ms=now_ms())
+                    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                    step_id = seeded_step_id
                 else:
-                    seeded_inputs["active_objectives"] = list(active_objectives_for_steps)
-                    seeded_inputs["linked_constraints"] = list(linked_constraints_for_steps)
-                    seeded_inputs["active_success_criteria"] = list(active_success_criteria_for_steps)
-                seeded_step = PlanStep(
-                    id=seeded_step_id,
-                    title="Implement intent",
-                    status="pending",
-                    order_idx=len(plan.steps),
-                    inputs=seeded_inputs,
-                    outputs={},
-                )
-                plan = replace(
-                    plan,
-                    steps=tuple(list(plan.steps) + [seeded_step]),
-                    next_step_id=seeded_step_id,
-                    updated_at_ms=now_ms(),
-                )
-                plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
-                step_id = seeded_step_id
+                    seeded_step = PlanStep(
+                        id=seeded_step_id,
+                        title="Implement intent",
+                        status="pending",
+                        order_idx=len(plan.steps),
+                        inputs=seeded_inputs,
+                        outputs={},
+                    )
+                    plan = replace(
+                        plan,
+                        steps=tuple(list(plan.steps) + [seeded_step]),
+                        next_step_id=seeded_step_id,
+                        updated_at_ms=now_ms(),
+                    )
+                    plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
+                    step_id = seeded_step_id
         else:
             if require_deployable_steps and deployable_intent:
                 fail_accounting: dict[str, Any] = {
@@ -1036,6 +1078,11 @@ def run_compile_loop(
             if isinstance(full_command_raw, (list, tuple)) and full_command_raw
             else _derive_full_test_command(smoke_command)
         )
+    contract_proof_command_raw = (config.metadata or {}).get("practical_generation_contract_smoke_command")
+    if isinstance(contract_proof_command_raw, (list, tuple)) and contract_proof_command_raw:
+        contract_proof_command = [str(x) for x in contract_proof_command_raw if str(x).strip()]
+        if contract_proof_command:
+            smoke_command = _composite_shell_command([list(smoke_command), contract_proof_command])
     full_timeout_s_raw = (config.metadata or {}).get("full_test_timeout_s")
     full_timeout_s_f = float(full_timeout_s_raw) if full_timeout_s_raw is not None else smoke_timeout_s_f
 

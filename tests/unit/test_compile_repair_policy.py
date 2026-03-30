@@ -25,6 +25,7 @@ FAILED tests/test_x.py::test_addition - assert (1 + 1) == 3
 """.strip()
     failure = parse_execution_failure(result=ExecutionResult(exit_code=1, stdout=out, stderr=""))
     assert failure.exit_code == 1
+    assert failure.failure_parser_id == "pytest"
     assert "tests/test_x.py::test_addition" in failure.failing_tests
     assert any("assert (1 + 1) == 3" in r for r in failure.reasons)
     assert failure.raw_tail is not None and "short test summary info" in failure.raw_tail
@@ -63,3 +64,38 @@ FAILED tests/test_x.py::test_addition - boom
     assert "Plan JSON" not in prompt
     assert "IR (compact structural graph)" in prompt
     assert "Plan execution trace" in prompt
+
+
+def test_parse_execution_failure_jest_with_command_hint() -> None:
+    out = """
+FAIL src/widget.test.ts
+  ● adds correctly
+
+    expect(received).toBe(expected)
+
+      Expected: 2
+      Received: 3
+""".strip()
+    failure = parse_execution_failure(
+        result=ExecutionResult(exit_code=1, stdout=out, stderr=""),
+        executed_command=["npx", "jest", "--runInBand"],
+    )
+    assert failure.failure_parser_id == "jest_vitest"
+    assert "src/widget.test.ts" in failure.failing_tests
+
+
+def test_parse_execution_failure_cargo_output_shape() -> None:
+    out = """
+failures:
+
+---- math::add stdout ----
+
+thread 'math::add' panicked at 'assertion failed', src/lib.rs:2:5
+error[E0425]: cannot find value `x` in this scope
+""".strip()
+    failure = parse_execution_failure(
+        result=ExecutionResult(exit_code=101, stdout=out, stderr=""),
+        executed_command=["cargo", "test"],
+    )
+    assert failure.failure_parser_id == "cargo"
+    assert failure.raw_tail is not None
