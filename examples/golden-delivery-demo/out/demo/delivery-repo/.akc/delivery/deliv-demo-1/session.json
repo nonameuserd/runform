@@ -1,0 +1,127 @@
+{
+  "activation_proof": {
+    "recipients_fully_satisfied": 0,
+    "recipients_provider_satisfied": 0,
+    "recipients_total": 2,
+    "status": "pending"
+  },
+  "compile_run_id": null,
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "delivery_version": "1.0.0",
+  "per_platform": {
+    "ios": {
+      "channels": {
+        "beta": {
+          "details": {},
+          "status": "blocked"
+        },
+        "store": {
+          "details": {},
+          "status": "not_applicable"
+        }
+      }
+    },
+    "web": {
+      "channels": {
+        "beta": {
+          "details": {},
+          "status": "blocked"
+        },
+        "store": {
+          "details": {},
+          "status": "not_applicable"
+        }
+      }
+    }
+  },
+  "per_recipient": {
+    "alice@example.com": {
+      "activation_proof": {
+        "app_proof": "pending",
+        "provider_proof": "pending",
+        "status": "pending"
+      },
+      "invite_token_id": null,
+      "platforms": [
+        "web",
+        "ios"
+      ],
+      "status": "pending"
+    },
+    "bob@example.com": {
+      "activation_proof": {
+        "app_proof": "pending",
+        "provider_proof": "pending",
+        "status": "pending"
+      },
+      "invite_token_id": null,
+      "platforms": [
+        "web",
+        "ios"
+      ],
+      "status": "pending"
+    }
+  },
+  "pipeline": {
+    "build": {
+      "completed_at_unix_ms": null,
+      "error": null,
+      "run_id": null,
+      "started_at_unix_ms": null,
+      "status": "not_started"
+    },
+    "compile": {
+      "completed_at_unix_ms": null,
+      "error": null,
+      "run_id": null,
+      "started_at_unix_ms": null,
+      "status": "not_started"
+    },
+    "distribution": {
+      "completed_at_unix_ms": null,
+      "error": null,
+      "run_id": null,
+      "started_at_unix_ms": null,
+      "status": "not_started"
+    },
+    "package": {
+      "completed_at_unix_ms": null,
+      "error": null,
+      "run_id": null,
+      "started_at_unix_ms": null,
+      "status": "blocked"
+    },
+    "release": {
+      "completed_at_unix_ms": null,
+      "error": null,
+      "run_id": null,
+      "started_at_unix_ms": null,
+      "status": "not_started"
+    }
+  },
+  "platforms": [
+    "web",
+    "ios"
+  ],
+  "release_mode": "beta",
+  "schema_id": "akc:delivery_session:v1",
+  "schema_version": 1,
+  "session_phase": "blocked",
+  "store_release": {
+    "active_promotion_lane": null,
+    "android": {
+      "external_ref": null,
+      "notes": null,
+      "status": "not_applicable"
+    },
+    "ios": {
+      "external_ref": null,
+      "notes": null,
+      "status": "not_applicable"
+    },
+    "last_promotion_requested_at_unix_ms": null,
+    "status": "not_started"
+  },
+  "updated_at_unix_ms": 1774907537459
+}

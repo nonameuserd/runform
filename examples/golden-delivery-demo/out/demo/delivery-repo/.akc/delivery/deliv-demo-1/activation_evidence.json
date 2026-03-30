@@ -1,0 +1,8 @@
+{
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "records": [],
+  "schema_id": "akc:delivery_activation_evidence:v1",
+  "schema_version": 1,
+  "updated_at_unix_ms": 1774907537459
+}

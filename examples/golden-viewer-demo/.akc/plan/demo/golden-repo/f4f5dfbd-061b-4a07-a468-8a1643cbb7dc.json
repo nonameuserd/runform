@@ -1,0 +1,67 @@
+{
+  "budgets": {},
+  "created_at_ms": 1774893077686,
+  "goal": "Golden demo: inspectable plan state + emitted artifacts (no compile run required).",
+  "id": "f4f5dfbd-061b-4a07-a468-8a1643cbb7dc",
+  "last_feedback": {},
+  "next_step_id": "51d8113c-48ec-4df7-9206-0ef2addcaf3b",
+  "repo_id": "golden-repo",
+  "schema_id": "akc:plan_state:v1",
+  "schema_version": 1,
+  "status": "active",
+  "steps": [
+    {
+      "finished_at_ms": 1774893077687,
+      "id": "51d8113c-48ec-4df7-9206-0ef2addcaf3b",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "5abf81497a293d8a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": "Demo: ingestion complete.",
+      "order_idx": 0,
+      "outputs": {},
+      "started_at_ms": null,
+      "status": "done",
+      "title": "Ingest source documents"
+    },
+    {
+      "finished_at_ms": 1774893077687,
+      "id": "d3653dff-c880-43eb-adc5-d597e5d6344f",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "5abf81497a293d8a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": "Demo: patch artifact recorded below.",
+      "order_idx": 1,
+      "outputs": {},
+      "started_at_ms": null,
+      "status": "done",
+      "title": "Retrieve constraints and synthesize patch"
+    },
+    {
+      "finished_at_ms": null,
+      "id": "1a74f87f-1d8b-4259-9fdf-cb9524ad0220",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "5abf81497a293d8a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": null,
+      "order_idx": 2,
+      "outputs": {},
+      "started_at_ms": 1774893077687,
+      "status": "in_progress",
+      "title": "Execute tests in workspace"
+    }
+  ],
+  "tenant_id": "demo",
+  "updated_at_ms": 1774893077687
+}

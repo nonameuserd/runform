@@ -1,0 +1,25 @@
+{
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "platforms": {
+    "ios": {
+      "adapter_kind": null,
+      "details": {},
+      "external_refs": {},
+      "last_error": null,
+      "last_updated_at_unix_ms": null,
+      "status": "not_started"
+    },
+    "web": {
+      "adapter_kind": null,
+      "details": {},
+      "external_refs": {},
+      "last_error": null,
+      "last_updated_at_unix_ms": null,
+      "status": "not_started"
+    }
+  },
+  "schema_id": "akc:delivery_provider_state:v1",
+  "schema_version": 1,
+  "updated_at_unix_ms": 1774907537459
+}
