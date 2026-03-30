@@ -67,6 +67,21 @@ def _read_json_response(resp: Any) -> Any:
         return {"_raw": body}
 
 
+def _last_json_mapping(raw: str) -> dict[str, Any] | None:
+    for line in reversed([ln.strip() for ln in raw.splitlines() if ln.strip()]):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def http_request_json(
     *,
     method: str,
@@ -269,6 +284,107 @@ def firebase_distribute_release(
     if st not in {200, 201, 204}:
         return {"ok": False, "http_status": st, "error": data}
     return {"ok": True, "http_status": st, "response": data}
+
+
+def firebase_upload_and_distribute_artifact(
+    *,
+    app_id: str,
+    binary_path: Path,
+    tester_emails: list[str],
+    group_aliases: list[str],
+    tenant_id: str,
+    repo_id: str,
+) -> dict[str, Any]:
+    """Upload a packaged Android binary to Firebase App Distribution and distribute it."""
+
+    _ = (tenant_id, repo_id)
+    if provider_dry_run() or not execute_providers_requested():
+        return {
+            "ok": True,
+            "dry_run": True,
+            "app_id": app_id,
+            "binary_path": str(binary_path),
+            "release_name": f"apps/{app_id}/releases/dry-run",
+        }
+    if not binary_path.is_file():
+        return {"ok": False, "error": f"firebase distribution artifact not found: {binary_path}"}
+    firebase_cli = shutil.which("firebase")
+    if not firebase_cli:
+        return {"ok": False, "error": "firebase CLI not found on PATH for artifact-backed App Distribution"}
+
+    argv = [firebase_cli, "appdistribution:distribute", str(binary_path), "--app", app_id.strip(), "--json"]
+    emails = [e.strip() for e in tester_emails if e.strip()]
+    groups = [g.strip() for g in group_aliases if g.strip()]
+    if emails:
+        argv.extend(["--testers", ",".join(emails)])
+    if groups:
+        argv.extend(["--groups", ",".join(groups)])
+
+    proc = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    log = {
+        "argv": argv,
+        "exit_code": int(proc.returncode),
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+    if proc.returncode != 0:
+        return {"ok": False, "error": "firebase artifact distribution failed", "command_log": log}
+
+    parsed = _last_json_mapping(proc.stdout) or {}
+    release = parsed.get("release")
+    release_name = None
+    artifact_url = None
+    console_url = None
+    if isinstance(release, dict):
+        for key in ("name", "releaseName"):
+            value = release.get(key)
+            if isinstance(value, str) and value.strip():
+                release_name = value.strip()
+                break
+        for key in ("binaryDownloadUri", "downloadUri", "testingUri"):
+            value = release.get(key)
+            if isinstance(value, str) and value.strip():
+                artifact_url = value.strip()
+                break
+        for key in ("firebaseConsoleUri", "consoleUri"):
+            value = release.get(key)
+            if isinstance(value, str) and value.strip():
+                console_url = value.strip()
+                break
+    if release_name is None:
+        for key in ("release_name", "releaseName", "name"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                release_name = value.strip()
+                break
+    if artifact_url is None:
+        for key in ("binaryDownloadUri", "downloadUri", "testingUri"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                artifact_url = value.strip()
+                break
+    if console_url is None:
+        for key in ("firebaseConsoleUri", "consoleUri"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                console_url = value.strip()
+                break
+
+    return {
+        "ok": True,
+        "app_id": app_id,
+        "binary_path": str(binary_path),
+        "release_name": release_name,
+        "artifact_url": artifact_url,
+        "console_url": console_url,
+        "response": parsed,
+        "command_log": log,
+    }
 
 
 # --- Google Play Developer API ---

@@ -72,7 +72,8 @@ def test_preflight_rejects_outside_mutation_allowlist(tmp_path: Path) -> None:
         mutation_paths=("src/", "tests/"),
     )
     assert ok is False
-    assert reason == "path_not_in_mutation_allowlist"
+    assert reason is not None and reason.startswith("path_not_in_mutation_allowlist")
+    assert "touched=" in reason and "allowed_prefixes=" in reason
     assert parsed is None
 
 

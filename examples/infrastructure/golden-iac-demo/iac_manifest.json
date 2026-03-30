@@ -1,0 +1,94 @@
+{
+  "cloud_provider": "aws",
+  "environments": [
+    "staging",
+    "production"
+  ],
+  "infra_plan_ref": {
+    "fingerprint": "cf5ad2e70edbc104a7b7d12d64db50d755b392b02c4d68b8f959aa848373d49f",
+    "path": ".akc/infra/run-demo.infra_plan.json"
+  },
+  "output_contract": {
+    "stable_outputs": [
+      "cluster_name",
+      "cluster_endpoint",
+      "cluster_oidc_provider_arn",
+      "repository_url",
+      "redis_primary_endpoint",
+      "postgres_endpoint",
+      "bucket_name",
+      "queue_url"
+    ]
+  },
+  "preferred_backend": "terraform",
+  "provisioning_readiness": {
+    "blocking_inputs": [],
+    "default_backend": "terraform",
+    "default_environment": "staging",
+    "is_provisioning_ready": true,
+    "provisioning_blockers": [],
+    "status": "ready",
+    "supported_environments": [
+      "staging",
+      "production"
+    ]
+  },
+  "repo_id": "fullstack-demo",
+  "run_id": "run-demo",
+  "schema_id": "akc:iac_manifest:v1",
+  "schema_version": 1,
+  "supported_backends": [
+    "terraform",
+    "aws_cdk"
+  ],
+  "tenant_id": "demo",
+  "workspaces": {
+    "aws_cdk": {
+      "apply_command": [
+        "cdk",
+        "deploy",
+        "--require-approval",
+        "never"
+      ],
+      "entrypoint": "bin/app.ts",
+      "files": [
+        ".akc/infra/run-demo/aws-cdk/package.json",
+        ".akc/infra/run-demo/aws-cdk/cdk.json",
+        ".akc/infra/run-demo/aws-cdk/tsconfig.json",
+        ".akc/infra/run-demo/aws-cdk/bin/app.ts",
+        ".akc/infra/run-demo/aws-cdk/lib/fullstackdemoinfrastack.ts"
+      ],
+      "plan_command": [
+        "cdk",
+        "synth"
+      ],
+      "tool_bin_env_var": "AKC_CDK_BIN",
+      "workspace_root": ".akc/infra/run-demo/aws-cdk"
+    },
+    "terraform": {
+      "apply_command": [
+        "terraform",
+        "apply",
+        "-auto-approve"
+      ],
+      "entrypoint": "main.tf.json",
+      "files": [
+        ".akc/infra/run-demo/terraform/backend.tf.json",
+        ".akc/infra/run-demo/terraform/providers.tf.json",
+        ".akc/infra/run-demo/terraform/variables.tf.json",
+        ".akc/infra/run-demo/terraform/main.tf.json",
+        ".akc/infra/run-demo/terraform/outputs.tf.json",
+        ".akc/infra/run-demo/terraform/README.md"
+      ],
+      "plan_command": [
+        "terraform",
+        "plan",
+        "-refresh=false",
+        "-lock=false",
+        "-input=false"
+      ],
+      "tool_bin_env_var": "AKC_TERRAFORM_BIN",
+      "workspace_root": ".akc/infra/run-demo/terraform"
+    }
+  }
+}

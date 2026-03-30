@@ -1,0 +1,15 @@
+{
+  "conflict_groups": {},
+  "conflict_reports": [],
+  "knowledge_envelope": null,
+  "knowledge_mediation_envelope": null,
+  "knowledge_paths": {
+    "dir": ".akc/knowledge",
+    "mediation": ".akc/knowledge/mediation.json",
+    "snapshot": ".akc/knowledge/snapshot.json",
+    "snapshot_fingerprint": ".akc/knowledge/snapshot.fingerprint.json"
+  },
+  "mediation_events": [],
+  "supersession_hints": [],
+  "unresolved_knowledge_conflicts_count": 0
+}

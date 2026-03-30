@@ -676,6 +676,15 @@ class DockerExecutor(Executor):
         env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         env.setdefault("PYTHONPYCACHEPREFIX", str(home_dir) + "/.pycache")
         env.setdefault("PYTEST_ADDOPTS", f"--override-ini=cache_dir={home_dir}/.pytest_cache")
+        # Invoking `pytest` as an installed console script sets sys.path[0] to the
+        # entrypoint location, not the repo root; mirror `python -m pytest` by
+        # putting the mounted worktree on PYTHONPATH (prepend preserves caller extras).
+        _work_import_root = self.container_workdir
+        _existing_pp = str(env.get("PYTHONPATH", "")).strip()
+        if _existing_pp:
+            env["PYTHONPATH"] = f"{_work_import_root}{os.pathsep}{_existing_pp}"
+        else:
+            env["PYTHONPATH"] = _work_import_root
 
         docker_user = _validate_docker_user(self.user)
         tmpfs_mounts = _validate_docker_tmpfs_mounts(self.tmpfs_mounts)

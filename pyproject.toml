@@ -1,5 +1,5 @@
 [project]
-name = "akc"
+name = "runform-akc"
 version = "0.1.0"
 description = "Agentic Knowledge Compiler — turn messy real-world information into executable knowledge"
 readme = "README.md"

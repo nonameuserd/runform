@@ -1,0 +1,277 @@
+{
+  "cloud_provider": "aws",
+  "inputs_fingerprint": "61a64977dae22bf64976333fd251a34d4b1e6177a644d2508bc0525d4aeb9441",
+  "preferred_iac_backend": "terraform",
+  "provisioning_environments": [
+    "staging",
+    "production"
+  ],
+  "provisioning_readiness": {
+    "blocking_inputs": [],
+    "default_backend": "terraform",
+    "default_environment": "staging",
+    "is_provisioning_ready": true,
+    "provisioning_blockers": [],
+    "status": "ready",
+    "supported_environments": [
+      "staging",
+      "production"
+    ]
+  },
+  "repo_id": "fullstack-demo",
+  "resources": [
+    {
+      "provider": "aws",
+      "resource_id": "aws_network_vpc",
+      "resource_kind": "vpc",
+      "scope": "shared"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "aws_network_public_subnets",
+      "resource_kind": "public_subnets",
+      "scope": "shared"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "aws_network_private_subnets",
+      "resource_kind": "private_subnets",
+      "scope": "shared"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "aws_network_nat_gateway",
+      "resource_kind": "nat_gateway",
+      "scope": "shared"
+    },
+    {
+      "outputs": [
+        "cluster_name",
+        "cluster_endpoint",
+        "cluster_oidc_provider_arn"
+      ],
+      "provider": "aws",
+      "resource_id": "fullstack-demo_eks_cluster",
+      "resource_kind": "eks_cluster",
+      "scope": "shared"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "fullstack-demo_eks_node_group",
+      "resource_kind": "eks_managed_node_group",
+      "scope": "shared"
+    },
+    {
+      "outputs": [
+        "repository_url"
+      ],
+      "provider": "aws",
+      "resource_id": "api-backend_ecr_repo",
+      "resource_kind": "ecr_repository",
+      "scope": "target",
+      "target_class": "backend_service",
+      "target_id": "svc_api"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "api-backend_log_group",
+      "resource_kind": "cloudwatch_log_group",
+      "scope": "target",
+      "target_class": "backend_service",
+      "target_id": "svc_api"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "api-backend_irsa_role",
+      "resource_kind": "iam_role_irsa",
+      "scope": "target",
+      "target_class": "backend_service",
+      "target_id": "svc_api"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "api-backend_secret_api-token",
+      "resource_kind": "secrets_manager_placeholder",
+      "scope": "target",
+      "secret_name": "API_TOKEN",
+      "target_id": "svc_api"
+    },
+    {
+      "domain": "api.example.com",
+      "provider": "aws",
+      "resource_id": "api-backend_route53_record",
+      "resource_kind": "route53_record",
+      "scope": "target",
+      "target_id": "svc_api"
+    },
+    {
+      "domain": "api.example.com",
+      "provider": "aws",
+      "resource_id": "api-backend_acm_certificate",
+      "resource_kind": "acm_certificate",
+      "scope": "target",
+      "target_id": "svc_api"
+    },
+    {
+      "outputs": [
+        "repository_url"
+      ],
+      "provider": "aws",
+      "resource_id": "web-frontend_ecr_repo",
+      "resource_kind": "ecr_repository",
+      "scope": "target",
+      "target_class": "web_app",
+      "target_id": "svc_web"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "web-frontend_log_group",
+      "resource_kind": "cloudwatch_log_group",
+      "scope": "target",
+      "target_class": "web_app",
+      "target_id": "svc_web"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "web-frontend_irsa_role",
+      "resource_kind": "iam_role_irsa",
+      "scope": "target",
+      "target_class": "web_app",
+      "target_id": "svc_web"
+    },
+    {
+      "domain": "app.example.com",
+      "provider": "aws",
+      "resource_id": "web-frontend_route53_record",
+      "resource_kind": "route53_record",
+      "scope": "target",
+      "target_id": "svc_web"
+    },
+    {
+      "domain": "app.example.com",
+      "provider": "aws",
+      "resource_id": "web-frontend_acm_certificate",
+      "resource_kind": "acm_certificate",
+      "scope": "target",
+      "target_id": "svc_web"
+    },
+    {
+      "outputs": [
+        "repository_url"
+      ],
+      "provider": "aws",
+      "resource_id": "ios-client_ecr_repo",
+      "resource_kind": "ecr_repository",
+      "scope": "target",
+      "target_class": "mobile_client",
+      "target_id": "svc_mobile"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "ios-client_log_group",
+      "resource_kind": "cloudwatch_log_group",
+      "scope": "target",
+      "target_class": "mobile_client",
+      "target_id": "svc_mobile"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "ios-client_irsa_role",
+      "resource_kind": "iam_role_irsa",
+      "scope": "target",
+      "target_class": "mobile_client",
+      "target_id": "svc_mobile"
+    },
+    {
+      "outputs": [
+        "repository_url"
+      ],
+      "provider": "aws",
+      "resource_id": "redis-cache_ecr_repo",
+      "resource_kind": "ecr_repository",
+      "scope": "target",
+      "target_class": "infrastructure_component",
+      "target_id": "infra_cache"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "redis-cache_log_group",
+      "resource_kind": "cloudwatch_log_group",
+      "scope": "target",
+      "target_class": "infrastructure_component",
+      "target_id": "infra_cache"
+    },
+    {
+      "provider": "aws",
+      "resource_id": "redis-cache_irsa_role",
+      "resource_kind": "iam_role_irsa",
+      "scope": "target",
+      "target_class": "infrastructure_component",
+      "target_id": "infra_cache"
+    },
+    {
+      "outputs": [
+        "redis_primary_endpoint",
+        "redis_port"
+      ],
+      "provider": "aws",
+      "resource_id": "redis-cache_elasticache_redis",
+      "resource_kind": "elasticache_redis",
+      "scope": "target",
+      "target_id": "infra_cache"
+    }
+  ],
+  "run_id": "run-demo",
+  "schema_id": "akc:infra_plan:v1",
+  "schema_version": 1,
+  "supported_iac_backends": [
+    "terraform",
+    "aws_cdk"
+  ],
+  "tenant_id": "demo",
+  "unsupported_target_ids": [],
+  "workload_targets": [
+    {
+      "depends_on": [
+        "infra_cache"
+      ],
+      "domain": "api.example.com",
+      "name": "api backend",
+      "node_kind": "service",
+      "public": true,
+      "target_class": "backend_service",
+      "target_id": "svc_api"
+    },
+    {
+      "depends_on": [
+        "svc_api"
+      ],
+      "domain": "app.example.com",
+      "name": "web frontend",
+      "node_kind": "service",
+      "public": true,
+      "target_class": "web_app",
+      "target_id": "svc_web"
+    },
+    {
+      "depends_on": [
+        "svc_api"
+      ],
+      "domain": null,
+      "name": "ios client",
+      "node_kind": "service",
+      "public": false,
+      "target_class": "mobile_client",
+      "target_id": "svc_mobile"
+    },
+    {
+      "depends_on": [],
+      "domain": null,
+      "name": "redis cache",
+      "node_kind": "infrastructure",
+      "public": false,
+      "target_class": "infrastructure_component",
+      "target_id": "infra_cache"
+    }
+  ]
+}

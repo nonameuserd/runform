@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from akc.cli import deliver as cli_deliver
 from akc.cli import main
+from akc.delivery import orchestrate as delivery_orchestrate
+from akc.delivery.compile_handoff import run_manifest_path
+from akc.run.manifest import PassRecord, RunManifest
 
 
 def test_cli_deliver_submit_status_events_resend_promote(
@@ -120,10 +125,11 @@ def test_cli_deliver_submit_status_events_resend_promote(
                 "store",
             ]
         )
-    assert exc5.value.code == 0
+    assert exc5.value.code == 2
     prom_out = json.loads(capsys.readouterr().out)
     assert prom_out["event"]["event_type"] == "delivery.store.promotion_requested"
     assert prom_out["event"]["payload"]["lane"] == "store"
+    assert prom_out["distribution"]["ok"] is False
 
 
 def test_cli_deliver_accepts_recipients_file_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -194,3 +200,280 @@ def test_cli_deliver_resend_rejects_unknown_recipient(tmp_path: Path, capsys: py
         )
     assert exc2.value.code == 2
     assert "not part of this delivery" in capsys.readouterr().err
+
+
+def test_cli_deliver_compile_outputs_structured_packaging_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AKC_DELIVERY_RELAX_ADAPTER_PREFLIGHT", "1")
+    monkeypatch.setattr(delivery_orchestrate, "run_delivery_compile", lambda **_kwargs: (0, "run-1"))
+    monkeypatch.setattr(
+        cli_deliver,
+        "load_compile_handoff",
+        lambda **_kwargs: {
+            "compile_run_id": "run-1",
+            "manifest_present": True,
+            "manifest_rel_path": ".akc/run/run-1.manifest.json",
+            "delivery_plan_rel_path": ".akc/deployment/run-1.delivery_plan.json",
+            "delivery_plan_loaded": True,
+            "delivery_plan_ref": {"path": ".akc/deployment/run-1.delivery_plan.json", "fingerprint": "a" * 64},
+            "promotion_readiness": {"status": "ready"},
+            "runtime_bundle_rel_path": ".akc/runtime/run-1.runtime_bundle.json",
+        },
+    )
+    monkeypatch.setattr(
+        delivery_orchestrate,
+        "run_delivery_build_and_package",
+        lambda **_kwargs: {
+            "ok": True,
+            "preflight_issues": [],
+            "requested_preflight_issues": [],
+            "provider_versions": {"delivery_version": "1.0.0"},
+            "mode_resolution": {
+                "requested_mode": "plan",
+                "resolved_mode": "plan",
+                "mode_source": "explicit",
+                "reason": "explicit_plan",
+                "outcome": "inspectable_plan",
+                "auto_fallback": False,
+                "fallback_issues": [],
+            },
+            "distribution": {"ok": True, "skipped": True, "reason": "plan_only"},
+            "summary": {
+                "mode": "plan",
+                "store_submit_mode": "auto",
+                "ready_platforms": [],
+                "planned_only_platforms": ["web"],
+                "distribution_ready": False,
+                "mode_resolution": {
+                    "requested_mode": "plan",
+                    "resolved_mode": "plan",
+                    "mode_source": "explicit",
+                    "reason": "explicit_plan",
+                    "outcome": "inspectable_plan",
+                    "auto_fallback": False,
+                    "fallback_issues": [],
+                },
+            },
+        },
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "deliver",
+                "--project-dir",
+                str(tmp_path),
+                "--request",
+                "build a web app",
+                "--recipient",
+                "alice@example.com",
+                "--platforms",
+                "web",
+                "--compile",
+                "--packaging-mode",
+                "plan",
+                "--store-submit",
+                "auto",
+            ]
+        )
+    assert exc.value.code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["packaging_ok"] is True
+    assert out["packaging"]["mode"] == "plan"
+    assert out["packaging"]["store_submit_mode"] == "auto"
+    assert out["packaging"]["planned_only_platforms"] == ["web"]
+    assert out["packaging"]["distribution_ready"] is False
+    assert out["journey"]["outcome"] == "inspectable_plan"
+    assert out["journey"]["resolved_packaging_mode"] == "plan"
+    assert out["compile_outputs"]["delivery_plan_ref"]["path"] == ".akc/deployment/run-1.delivery_plan.json"
+
+
+def test_cli_deliver_compile_default_mode_enables_auto_plan_fallback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(delivery_orchestrate, "run_delivery_compile", lambda **_kwargs: (0, "run-1"))
+    monkeypatch.setattr(
+        cli_deliver,
+        "load_compile_handoff",
+        lambda **_kwargs: {
+            "compile_run_id": "run-1",
+            "manifest_present": True,
+            "manifest_rel_path": ".akc/run/run-1.manifest.json",
+            "delivery_plan_loaded": True,
+            "delivery_plan_ref": {"path": ".akc/deployment/run-1.delivery_plan.json", "fingerprint": "a" * 64},
+            "runtime_bundle_rel_path": ".akc/runtime/run-1.runtime_bundle.json",
+            "promotion_readiness": {"status": "blocked"},
+        },
+    )
+
+    def _fake_build_and_package(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "preflight_issues": [],
+            "requested_preflight_issues": [{"platform": "ios", "lane": "ios_build", "reason": "missing token"}],
+            "provider_versions": {"delivery_version": "1.0.0"},
+            "mode_resolution": {
+                "requested_mode": "execute",
+                "resolved_mode": "plan",
+                "mode_source": "default",
+                "reason": "packaging_preflight_blocked",
+                "outcome": "inspectable_plan",
+                "auto_fallback": True,
+                "fallback_issues": [{"platform": "ios", "lane": "ios_build", "reason": "missing token"}],
+            },
+            "distribution": {"ok": True, "skipped": True, "reason": "plan_only"},
+            "summary": {
+                "mode": "plan",
+                "store_submit_mode": "auto",
+                "ready_platforms": [],
+                "planned_only_platforms": ["ios"],
+                "distribution_ready": False,
+                "mode_resolution": {
+                    "requested_mode": "execute",
+                    "resolved_mode": "plan",
+                    "mode_source": "default",
+                    "reason": "packaging_preflight_blocked",
+                    "outcome": "inspectable_plan",
+                    "auto_fallback": True,
+                    "fallback_issues": [{"platform": "ios", "lane": "ios_build", "reason": "missing token"}],
+                },
+            },
+        }
+
+    monkeypatch.setattr(delivery_orchestrate, "run_delivery_build_and_package", _fake_build_and_package)
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "deliver",
+                "--project-dir",
+                str(tmp_path),
+                "--request",
+                "build an ios app",
+                "--recipient",
+                "alice@example.com",
+                "--platforms",
+                "ios",
+                "--compile",
+                "--store-submit",
+                "auto",
+            ]
+        )
+    assert exc.value.code == 0
+    assert captured["packaging_mode"] == "execute"
+    assert captured["allow_plan_fallback"] is True
+    out = json.loads(capsys.readouterr().out)
+    assert out["journey"]["outcome"] == "inspectable_plan"
+    assert out["journey"]["reason"] == "packaging_preflight_blocked"
+    assert out["packaging"]["mode_resolution"]["auto_fallback"] is True
+
+
+def test_cli_deliver_preflight_reports_missing_credentials(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "deliver",
+                "preflight",
+                "--project-dir",
+                str(tmp_path),
+                "--platforms",
+                "web,ios,android",
+                "--release-mode",
+                "both",
+            ]
+        )
+    assert exc.value.code == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    ids = {str(row.get("id")) for row in out["required_human_inputs"]}
+    assert "app_store_connect_api_credentials" in ids
+    assert "testflight_beta_group_id" in ids
+    assert "firebase_distribution_credentials" in ids
+    assert "google_play_publisher_credentials" in ids
+    assert out["surfaces"]["expo_eas_build_hosting"]["ok"] is False
+    assert out["surfaces"]["firebase_play_upload"]["ok"] is False
+    assert any(
+        "AKC_DELIVERY_ASC_BETA_GROUP_ID" in str(row.get("reason") or "") for row in out["distribution"]["issues"]
+    )
+    assert any(
+        "execution workspace manifest missing from compile handoff" in str(row.get("reason") or "")
+        for row in out["packaging"]["execute"]["issues"]
+    )
+
+
+def test_cli_deliver_preflight_uses_compile_run_id_for_packaging_specific_gaps(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rid = "run-preflight-1"
+    (tmp_path / ".akc" / "run").mkdir(parents=True, exist_ok=True)
+    manifest = RunManifest(
+        run_id=rid,
+        tenant_id="local",
+        repo_id="local",
+        ir_sha256="a" * 64,
+        replay_mode="live",
+        passes=(
+            PassRecord(
+                name="execution_workspace",
+                status="succeeded",
+                metadata={
+                    "execution_workspace_manifest_path": f".akc/execution/{rid}.execution_workspace_manifest.json",
+                },
+            ),
+        ),
+    )
+    run_manifest_path(project_dir=tmp_path, compile_run_id=rid).write_text(
+        json.dumps(manifest.to_json_obj()),
+        encoding="utf-8",
+    )
+    execution_dir = tmp_path / ".akc" / "execution"
+    execution_dir.mkdir(parents=True, exist_ok=True)
+    (execution_dir / f"{rid}.execution_workspace_manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": rid,
+                "tenant_id": "local",
+                "repo_id": "local",
+                "workspace_root": f".akc/execution/{rid}/workspace",
+                "package_manager": "npm",
+                "expo": {
+                    "project_id": "expo-project-1",
+                    "ios_bundle_identifier": "com.example.app",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "deliver",
+                "preflight",
+                "--project-dir",
+                str(tmp_path),
+                "--platforms",
+                "ios",
+                "--release-mode",
+                "beta",
+                "--compile-run-id",
+                rid,
+            ]
+        )
+    assert exc.value.code == 2
+    out = json.loads(capsys.readouterr().out)
+    reasons = [str(row.get("reason") or "") for row in out["packaging"]["execute"]["issues"]]
+    assert all("execution workspace manifest missing from compile handoff" not in reason for reason in reasons)
+    assert "expo_access_token" in {str(row.get("id")) for row in out["required_human_inputs"]}

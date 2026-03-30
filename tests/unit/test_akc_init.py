@@ -42,6 +42,7 @@ def test_cmd_init_writes_project_and_policy_stub(tmp_path: Path) -> None:
     stub = tmp_path / ".akc" / "policy" / "compile_tools.rego"
     assert stub.is_file()
     assert "package akc" in stub.read_text(encoding="utf-8")
+    assert "import rego.v1" in stub.read_text(encoding="utf-8")
 
 
 def test_cmd_init_no_policy_stub(tmp_path: Path) -> None:

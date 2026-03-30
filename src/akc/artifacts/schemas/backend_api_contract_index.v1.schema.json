@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:backend_api_contract_index:v1",
+  "title": "AKC backend API contract index",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:backend_api_contract_index:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_format": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "openapi_rel_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "target_class": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server_env_var": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_url_env_var": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contract_depth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "feature_groups": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "auth_modes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "target_id",
+          "openapi_rel_path",
+          "fingerprint"
+        ]
+      }
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "selected_runtime_plugin",
+    "contract_format",
+    "contract_refs"
+  ]
+}

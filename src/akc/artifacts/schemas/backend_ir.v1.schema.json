@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:backend_ir:v1",
+  "title": "AKC practical backend IR",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:backend_ir:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "goal_statement": {
+      "type": ["string", "null"]
+    },
+    "selected_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "cross_cut_requirements": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "repo_anchor_plan": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "acceptance_scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "selected_runtime_plugin",
+    "resources",
+    "cross_cut_requirements",
+    "repo_anchor_plan",
+    "acceptance_scenarios"
+  ]
+}

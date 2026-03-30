@@ -37,6 +37,7 @@ from akc.delivery.ingest import (
     probe_android_application_id,
     probe_android_gradle_android_project,
     probe_apple_team_id,
+    probe_firebase_android_app_id,
     probe_firebase_project_config,
     probe_google_services_present,
     probe_ios_bundle_id,
@@ -121,7 +122,23 @@ def _firebase_app_distribution_groups_hint(*, op: dict[str, Any]) -> bool:
     return bool(_env_strip("FIREBASE_APP_DISTRIBUTION_GROUPS"))
 
 
+def _testflight_beta_group_configured(*, op: dict[str, Any]) -> bool:
+    if _op_flag(op, ("ios", "testflight_beta_group_id")):
+        return True
+    return bool(_env_strip("AKC_DELIVERY_ASC_BETA_GROUP_ID"))
+
+
 def _web_invite_base_resolved(*, project_dir: Path, spec: PlatformBuildSpec, op: dict[str, Any]) -> bool:
+    packaging = spec.metadata.get("packaging")
+    if isinstance(packaging, dict):
+        direct = packaging.get("hosting_url")
+        if isinstance(direct, str) and direct.strip():
+            return True
+        artifact_urls = packaging.get("artifact_urls")
+        if isinstance(artifact_urls, dict):
+            hosted = artifact_urls.get("hosting_url")
+            if isinstance(hosted, str) and hosted.strip():
+                return True
     if _metadata_str(spec, "web_invite_base_url"):
         return True
     if _env_strip("AKC_DELIVERY_WEB_INVITE_BASE_URL"):
@@ -213,6 +230,7 @@ def _android_firebase_app_signal(*, project_dir: Path, op: dict[str, Any]) -> bo
     return bool(
         probe_google_services_present(project_dir)
         or probe_firebase_project_config(project_dir)
+        or probe_firebase_android_app_id(project_dir)
         or _op_flag(op, ("android", "firebase_app_id")),
     )
 
@@ -288,10 +306,16 @@ class TestFlightAdapter(_ConfiguredDistributionAdapter):
     def _strict_issues(self, *, project_dir: Path, spec: PlatformBuildSpec) -> list[str]:
         _ = spec.platform
         op = load_operator_prereqs_manifest(project_dir)
-        return [
+        issues = [
             *_ios_beta_prereqs_met(project_dir=project_dir, op=op),
             *_ios_asc_app_registration_issues(op=op, context="TestFlight beta"),
         ]
+        if not _testflight_beta_group_configured(op=op):
+            issues.append(
+                "Apple / iOS (TestFlight beta): TestFlight beta group id missing "
+                "(AKC_DELIVERY_ASC_BETA_GROUP_ID or operator_prereqs ios.testflight_beta_group_id)",
+            )
+        return issues
 
 
 class FirebaseAppDistributionAdapter(_ConfiguredDistributionAdapter):
@@ -315,6 +339,16 @@ class FirebaseAppDistributionAdapter(_ConfiguredDistributionAdapter):
             issues.append(
                 "Android beta (Firebase App Distribution): Firebase Android app signal missing "
                 "(google-services.json / firebase.json, or operator_prereqs android.firebase_app_id)",
+            )
+        if not (
+            probe_firebase_android_app_id(project_dir)
+            or _env_strip("AKC_DELIVERY_FIREBASE_APP_ID")
+            or _op_flag(op, ("android", "firebase_app_id"))
+        ):
+            issues.append(
+                "Android beta (Firebase App Distribution): Firebase Android app id missing "
+                "(AKC_DELIVERY_FIREBASE_APP_ID, google-services.json mobilesdk_app_id, "
+                "or operator_prereqs android.firebase_app_id)",
             )
         if not _op_flag(op, ("android", "firebase_distribution_auth")) and not _firebase_cli_auth_hint():
             issues.append(
@@ -375,10 +409,10 @@ class GooglePlayReleaseAdapter(_ConfiguredDistributionAdapter):
                 "Android store: applicationId / package not found "
                 "(expo `android.package`, Gradle applicationId, or operator_prereqs android.play_package)",
             )
-        if not _op_flag(op, ("android", "play_publisher_api")):
+        if not _op_flag(op, ("android", "play_publisher_api")) and not _gac_path_configured():
             issues.append(
-                "Google Play store lane: Play Developer Publishing API credentials not acknowledged "
-                "(operator_prereqs android.play_publisher_api)",
+                "Google Play store lane: Play Developer Publishing API credentials not configured "
+                "(GOOGLE_APPLICATION_CREDENTIALS or operator_prereqs android.play_publisher_api)",
             )
         if not probe_android_gradle_android_project(project_dir) and not _op_flag(
             op,

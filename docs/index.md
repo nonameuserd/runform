@@ -1,6 +1,25 @@
 # AKC Documentation
 
+## What’s missing to ship?
+
+Start here:
+
+```bash
+akc deliver preflight
+```
+
+`preflight` checks your repo + environment and returns a structured report of the **exact prerequisites** missing for execute-mode delivery (web / iOS / Android, plus store lanes when applicable).
+
 The docs in this directory focus on the AKC surfaces that exist in the repository today.
+
+## Ops quickstart (suggested path)
+
+If you're operating AKC and want a single “what do I do next?” track, follow this path:
+
+- **evaluate** → [Delivery architecture](delivery-architecture.md)
+- **preflight** → [Ops runbook](ops-runbook.md)
+- **execute** → [Runtime execution](runtime-execution.md)
+- **observe evidence** → [Runtime execution](runtime-execution.md) (evidence + replay surfaces) and [Ops runbook](ops-runbook.md) (incident handling)
 
 ## Start here
 

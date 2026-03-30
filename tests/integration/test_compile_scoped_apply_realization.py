@@ -21,15 +21,19 @@ from tests.unit.test_cli_compile import (
     _write_minimal_repo,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_TESTS_ROOT = Path(__file__).resolve().parents[1]
+_FIXTURE_POLICY_NO_PATCH_APPLY = _TESTS_ROOT / "fixtures/policy/compile_tools_no_patch_apply.rego"
 
 
 def _run_compile(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     compile_realization_mode: str,
     extra_args: list[str] | None = None,
 ) -> Path:
+    # Isolate from the developer repo's .akc/project.json (OPA path / policy).
+    monkeypatch.chdir(tmp_path)
     tenant_id = "t1"
     repo_id = "repo1"
     outputs_root = tmp_path
@@ -66,8 +70,9 @@ def _load_run_manifest(base: Path) -> RunManifest:
 
 def test_compile_artifact_only_skips_apply_and_attestation_verifies_against_manifest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    base = _run_compile(tmp_path, compile_realization_mode="artifact_only")
+    base = _run_compile(tmp_path, monkeypatch, compile_realization_mode="artifact_only")
     run_manifest = _load_run_manifest(base)
     assert run_manifest.control_plane is not None
     cp = dict(run_manifest.control_plane)
@@ -97,8 +102,9 @@ def test_compile_artifact_only_skips_apply_and_attestation_verifies_against_mani
 @pytest.mark.skipif(shutil.which("patch") is None, reason="patch(1) not available")
 def test_compile_scoped_apply_without_opa_applies_patch_and_attestation_matches_manifest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    base = _run_compile(tmp_path, compile_realization_mode="scoped_apply")
+    base = _run_compile(tmp_path, monkeypatch, compile_realization_mode="scoped_apply")
     run_manifest = _load_run_manifest(base)
     assert run_manifest.control_plane is not None
     cp = dict(run_manifest.control_plane)
@@ -126,15 +132,16 @@ def test_compile_scoped_apply_without_opa_applies_patch_and_attestation_matches_
 @pytest.mark.skipif(shutil.which("opa") is None, reason="opa CLI not available")
 def test_compile_scoped_apply_policy_denied_when_opa_rejects_compile_patch_apply(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policy_path = _REPO_ROOT / "configs/policy/compile_tools.rego"
-    assert policy_path.is_file()
+    assert _FIXTURE_POLICY_NO_PATCH_APPLY.is_file()
     base = _run_compile(
         tmp_path,
+        monkeypatch,
         compile_realization_mode="scoped_apply",
         extra_args=[
             "--opa-policy-path",
-            str(policy_path),
+            str(_FIXTURE_POLICY_NO_PATCH_APPLY),
             "--opa-decision-path",
             "data.akc.allow",
             "--policy-mode",

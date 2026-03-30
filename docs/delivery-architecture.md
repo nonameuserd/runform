@@ -6,6 +6,8 @@ AKC delivery is a **named-recipient control plane** built around `akc deliver` a
 
 It sits **after** compile. `akc compile` may emit a `delivery_plan` and related manifest/runtime refs, but delivery orchestration, packaging, recipient tracking, distribution, and activation evidence are separate from the core compile controller loop.
 
+Cloud provisioning is also separate. Compile can now emit infrastructure-planning artifacts under `.akc/infra/`, while actual cloud mutation is handled explicitly by `akc provision`.
+
 ## Overview
 
 Delivery turns a plain-language request plus an explicit recipient list into a tracked delivery session.
@@ -74,8 +76,16 @@ Related local-only operator input:
 Related compile handoff artifacts:
 
 - `.akc/deployment/<run_id>.delivery_plan.json`
+- `.akc/infra/<run_id>.infra_plan.json`
+- `.akc/infra/<run_id>.iac_manifest.json`
 - `.akc/run/<run_id>.manifest.json`
 - `.akc/runtime/<run_id>.runtime_bundle.json`
+
+Related provision evidence when infrastructure is planned/applied:
+
+- `.akc/provision/<provision_id>/session.json`
+- `.akc/provision/<provision_id>/plan.json`
+- `.akc/provision/<provision_id>/apply.json`
 
 The request/session documents store only **refs and summaries** of compile outputs. Delivery does not copy the full compile artifacts into its own sidecars.
 
@@ -147,7 +157,11 @@ Current handoff fields include:
 - `compile_run_id`
 - manifest presence and relative path
 - `delivery_plan` relative path and fingerprint
+- `infra_plan` relative path and fingerprint when compile emitted infra artifacts
+- `iac_manifest` relative path and fingerprint when compile emitted infra artifacts
+- latest provision summary ref when provision evidence exists locally
 - promotion readiness from the `delivery_plan` when present
+- provisioning readiness from compile outputs when present
 - runtime bundle relative path
 
 Delivery also derives non-secret platform metadata from compile outputs, especially web distribution hints such as suggested base URLs.
@@ -155,6 +169,8 @@ Delivery also derives non-secret platform metadata from compile outputs, especia
 This is a one-way handoff:
 
 - compile remains the producer of `delivery_plan`, manifest, and runtime bundle artifacts
+- compile remains the producer of `infra_plan` and `iac_manifest` artifacts
+- `akc provision` remains the cloud-mutation surface for those IaC artifacts
 - delivery consumes those artifacts for packaging and distribution
 - delivery does not extend the compile controller loop itself
 
@@ -170,10 +186,15 @@ Current packaging lanes:
 
 Current implementation status:
 
-- packaging adapters are still **v1 stubs**
-- they produce structured outputs and provider-version metadata
+- packaging defaults to **execute when possible**, with an automatic fallback to **plan artifacts** when the default path detects missing prerequisites
+- `--packaging-mode plan` is the explicit dry-run / planning path
+- `--packaging-mode execute` is the explicit fail-closed path when callers do not want automatic fallback
+- packaging outputs now distinguish `execution_mode`, `artifact_authority`, and `distribution_ready`
+- delivery CLI output now reports the resolved journey (`executed_distribution` vs `inspectable_plan`) plus compile artifact refs
 - strict packaging preflight is enforced by default for `store` and `both`
 - `beta` packaging defaults to a more relaxed local-iteration posture unless overridden by `AKC_PACKAGING_ENFORCE_PREFLIGHT`
+- web packaging exports the bundle and records a deploy result / `hosting_url`
+- iOS and Android packaging record authoritative EAS build refs and artifact metadata
 
 On successful packaging, AKC also writes:
 
@@ -204,6 +225,9 @@ Current execution behavior:
 - distribution adapter preflight is fail-closed by default
 - prereqs are resolved from environment variables, `.akc/delivery/operator_prereqs.json`, and local repo probes
 - provider execution is explicit; when real provider execution is not enabled, dispatch returns stub/dry-run shaped results rather than pretending a release happened
+- distribution only consumes authoritative packaging outputs; plan-only packaging does not auto-distribute
+- when the default `akc deliver --compile` path falls back to plan mode, distribution is skipped explicitly and the CLI reports the inspectable-plan outcome instead of leaving the mode implicit
+- store lanes auto-submit by default for `release_mode=store|both` unless `--store-submit manual` is selected
 - per-platform per-lane outcomes are recorded in both `session.json` and `provider_state.json`
 
 ## Activation and recipient lifecycle

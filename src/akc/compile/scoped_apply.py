@@ -103,6 +103,7 @@ def preflight_scoped_apply(
     if mutation_paths is not None and not allow_prefixes:
         # Explicitly configured allowlist that results in "allow nothing".
         return False, "mutation_paths_empty_or_invalid", None
+    denied_mutation: list[str] = []
     for p in paths:
         if p.startswith(".akc/") or p == ".akc":
             return False, "patch_touches_internal_artifacts", None
@@ -113,7 +114,15 @@ def preflight_scoped_apply(
         if not ok:
             return False, err or "path_not_confined", None
         if mutation_paths is not None and not _path_allowed_by_prefixes(p, allow_prefixes):
-            return False, "path_not_in_mutation_allowlist", None
+            denied_mutation.append(p)
+    if denied_mutation:
+        allow_s = ",".join(allow_prefixes[:16]) if allow_prefixes else ""
+        bad_s = ",".join(sorted(set(denied_mutation))[:16])
+        return (
+            False,
+            f"path_not_in_mutation_allowlist:touched={bad_s};allowed_prefixes={allow_s}",
+            None,
+        )
     return True, None, parsed
 
 

@@ -45,6 +45,8 @@ Compile and living policy paths can also resolve from:
 - `AKC_OPA_POLICY_PATH`
 - `AKC_OPA_DECISION_PATH`
 
+Provisioning uses the same repo-scoped project resolution for `--project-dir`, then reads synthesized IaC artifacts from `.akc/infra/` and writes provision evidence to `.akc/provision/`.
+
 ## Project config
 
 Repo-scoped defaults live in `.akc/project.json` or `.akc/project.yaml`. `project.json` wins if both files exist.
@@ -116,6 +118,74 @@ Minimal example:
 }
 ```
 
+## Backend generator support matrix
+
+AKC now separates backend detection from backend materialization:
+
+- mixed or polyglot repositories are valid compile inputs
+- built-in authoritative backend materializers now cover `typescript_node`, `python_fastapi`, `go`, `rust`, and `java`
+- external generator manifests remain the stable extension path for custom runtimes, organization-specific generators, or overriding the builtin output contract
+- when a requested runtime has no installed materializer, compile fails closed for authoritative materialization and emits fallback diagnostic artifacts instead of silently widening to another runtime
+
+Repo-local external generator manifests are JSON files matched by `backend_generator_plugin_manifest.v1` and discovered from:
+
+- `.akc/backend_generators/*.json` by default
+- `plugin_manifest_paths`
+- `plugin_manifest_dirs`
+
+External generator manifests describe an operator-trusted command contract. During execution-workspace materialization AKC sends a JSON request on stdin, expects JSON on stdout, and only accepts files written under the provided `output_root`.
+
+The policy file for this surface is `.akc/backend_generator_policy.json` (or the compatibility alias `.akc/generator_policy.json`). Current keys are:
+
+- `runtime_preferences`
+- `allowed_target_runtimes`
+- `disallowed_target_runtimes`
+- `eligible_repo_paths`
+- `ignored_repo_paths`
+- `plugin_manifest_paths`
+- `plugin_manifest_dirs`
+- `minimum_adoption_confidence`
+- `fallback_mode`
+
+## Infrastructure synthesis and provisioning
+
+Compile and provision are separate stages.
+
+- `akc compile` may emit delivery, runtime, and infrastructure artifacts
+- `akc provision` is the explicit cloud-mutation surface
+- current v1 provisioning is AWS-only
+- dual target means AKC emits both Terraform-native and AWS CDK workspaces from one shared infra plan
+
+Current infra artifacts emitted by compile:
+
+- `.akc/infra/<run_id>.infra_plan.json`
+- `.akc/infra/<run_id>.iac_manifest.json`
+- `.akc/infra/<run_id>/terraform/...`
+- `.akc/infra/<run_id>/aws-cdk/...`
+- `.akc/design/<run_id>.infra_summary.md`
+
+Current provision evidence emitted by `akc provision`:
+
+- `.akc/provision/<provision_id>/session.json`
+- `.akc/provision/<provision_id>/plan.json`
+- `.akc/provision/<provision_id>/apply.json`
+
+The delivery projection can now block provisioning on missing operator inputs. Common AWS-oriented inputs surfaced through `required_human_inputs` include:
+
+- AWS account ID
+- AWS region
+- Route53 hosted zone for public targets
+- Terraform remote state backend
+- AWS CDK bootstrap confirmation
+- cluster or GitOps destination
+- secret-store ownership label
+
+`local` remains non-cloud. IaC synthesis and provisioning readiness are modeled for `staging` and `production`.
+
+### Compile: native tests on existing repositories
+
+When `akc compile` runs without an explicit `--test-mode`, it defaults to **native** smoke or full (`native_smoke` / `native_full`) if the tenant/repo working tree looks like a real codebase: for example a populated `.akc/project_profile.json`, a detected manifest such as `package.json` / `Cargo.toml` / `go.mod`, or `native_test_mode` in `.akc/project.json`. The adoption ladder (`adoption_level` `copilot` and above) still selects native modes as before. To force the older implicit **pytest-oriented** `smoke` / `full` resolution when you are not passing `--test-mode`, set `AKC_COMPILE_FORCE_LEGACY_TEST_MODE=1`.
+
 ## Core operator settings
 
 These are the most common non-secret variables:
@@ -136,6 +206,21 @@ These variables enable optional surfaces rather than providing credentials:
 | --- | --- |
 | `AKC_WEIGHTED_MEMORY_ENABLED` | enables weighted-memory behavior by default for assistant and compile |
 | `AKC_ACTION_PLANE` | exposes the optional `akc action` command tree |
+
+## IaC tool selection
+
+`akc provision` can use either Terraform or AWS CDK workspaces emitted by compile.
+
+Current tool override variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `AKC_TERRAFORM_BIN` | explicit Terraform executable path for `akc provision` |
+| `AKC_CDK_BIN` | explicit AWS CDK executable path for `akc provision` |
+
+If these are unset, AKC falls back to `terraform` or `cdk` resolved from `PATH`.
+
+These variables do not carry cloud credentials themselves. Provider authentication is still handled by the underlying Terraform, AWS CDK, and AWS credential chain you run them with.
 
 ## Embedders and provider keys
 
@@ -293,10 +378,14 @@ Deployment-provider gating that verify reports today:
 | --- | --- |
 | `AKC_DELIVERY_PROVIDER_DRY_RUN` | skip outbound provider calls and synthesize success |
 | `AKC_DELIVERY_EXECUTE_PROVIDERS` | master toggle for provider execution |
+| `AKC_DELIVERY_EXECUTE_PACKAGING` | deprecated compatibility alias: set to `0` to force `--packaging-mode plan` |
+| `AKC_DELIVERY_EAS_AUTO_SUBMIT` | deprecated compatibility alias for store auto-submit behavior |
 | `AKC_DELIVERY_RELAX_ADAPTER_PREFLIGHT` | relax fail-closed adapter prerequisite checks |
 | `AKC_DELIVERY_ENFORCE_ADAPTER_PREFLIGHT` | legacy inverse toggle |
 | `AKC_DELIVERY_TARGET_LANE` | default delivery lane in runtime/delivery flows |
 | `AKC_DELIVERY_WEB_INVITE_BASE_URL` | public base URL for hosted web invites |
+| `AKC_DELIVERY_WEB_HOSTING_PROVIDER` | optional explicit hosting provider for web deploy execution |
+| `AKC_DELIVERY_WEB_DEPLOY_COMMAND` | optional explicit web deploy command template (supports `{export_dir}` and `{base_url}`) |
 | `AKC_DELIVERY_INVITE_EMAIL_FROM` | sender address for invite email delivery |
 | `AKC_DELIVERY_SMTP_URL` | SMTP URL for direct mail transport |
 | `SMTP_HOST` | SMTP host fallback |
@@ -323,12 +412,17 @@ Deployment-provider gating that verify reports today:
 | --- | --- |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google OAuth credentials file |
 | `FIREBASE_TOKEN` | Firebase CLI auth fallback |
+| `AKC_DELIVERY_FIREBASE_APP_ID` | Firebase Android app id for artifact-backed uploads |
 | `AKC_DELIVERY_FIREBASE_RELEASE_NAME` | Firebase release display name |
 | `AKC_DELIVERY_PLAY_PACKAGE_NAME` | Play package name |
 | `AKC_DELIVERY_FIREBASE_APP_DIST_GROUPS` | Firebase tester groups |
 | `FIREBASE_APP_DISTRIBUTION_GROUPS` | legacy/alternate Firebase tester groups |
 
 Delivery sessions may also emit local prerequisite hints under `.akc/delivery/operator_prereqs.json`.
+
+Use `akc deliver preflight` when you want a first-class readiness report before running `akc deliver --compile`: it reports missing operator inputs, credential/env gaps, distribution-lane blockers, and compile-handoff/packaging gaps for Expo/EAS, TestFlight/App Store Connect, Firebase App Distribution, and Google Play.
+
+`akc deliver --compile` now prefers execute packaging by default and automatically falls back to a plan/artifact outcome when delivery or packaging prerequisites are missing. Use `--packaging-mode plan` for an explicit plan-only run, use `--packaging-mode execute` when you want missing prerequisites to fail closed instead of downgrading, and use `--store-submit manual` only when you want packaging without automatic store submission.
 
 ## Living recompile and webhook configuration
 

@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:execution_workspace_manifest:v1",
+  "title": "AKC execution workspace manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:execution_workspace_manifest:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_role": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generation_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "practical_generation_proof": {
+      "type": "boolean"
+    },
+    "workspace_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_manager": {
+      "type": "string",
+      "minLength": 1
+    },
+    "toolchain": {
+      "type": "object"
+    },
+    "runtime_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_runtime_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "materialization_status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "materializer_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expo": {
+      "type": "object"
+    },
+    "build_profiles": {
+      "type": "object"
+    },
+    "build_entrypoints": {
+      "type": "object"
+    },
+    "expected_outputs": {
+      "type": "object"
+    },
+    "practical_backend_generation": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "api_contract_refs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "client_codegen_summary": {
+      "type": "object"
+    },
+    "frontend_integration_summary": {
+      "type": "object"
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "generated_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "size_bytes"
+        ]
+      }
+    },
+    "workspace_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "artifact_role",
+    "generation_mode",
+    "practical_generation_proof",
+    "workspace_root",
+    "package_manager",
+    "toolchain",
+    "runtime_profile",
+    "requested_runtime_plugin",
+    "requested_runtime_source",
+    "materialization_status",
+    "materializer_kind",
+    "build_entrypoints",
+    "expected_outputs",
+    "targets",
+    "generated_files",
+    "workspace_fingerprint"
+  ]
+}

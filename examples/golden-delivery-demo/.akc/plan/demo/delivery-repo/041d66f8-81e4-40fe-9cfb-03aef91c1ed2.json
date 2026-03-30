@@ -1,0 +1,67 @@
+{
+  "budgets": {},
+  "created_at_ms": 1774907537459,
+  "goal": "Golden demo: inspectable delivery session artifacts (no deliver run required).",
+  "id": "041d66f8-81e4-40fe-9cfb-03aef91c1ed2",
+  "last_feedback": {},
+  "next_step_id": "38188474-3046-43ff-98f5-cd8bbbba4ecf",
+  "repo_id": "delivery-repo",
+  "schema_id": "akc:plan_state:v1",
+  "schema_version": 1,
+  "status": "active",
+  "steps": [
+    {
+      "finished_at_ms": 1774907537460,
+      "id": "38188474-3046-43ff-98f5-cd8bbbba4ecf",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "94180f1f72ba8b6a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": null,
+      "order_idx": 0,
+      "outputs": {},
+      "started_at_ms": null,
+      "status": "done",
+      "title": "Collect delivery preflight"
+    },
+    {
+      "finished_at_ms": 1774907537461,
+      "id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "94180f1f72ba8b6a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": null,
+      "order_idx": 1,
+      "outputs": {},
+      "started_at_ms": null,
+      "status": "done",
+      "title": "Create delivery session sidecars"
+    },
+    {
+      "finished_at_ms": null,
+      "id": "eb2b135f-2201-4c52-8bd1-f135eba1b0a3",
+      "inputs": {
+        "active_objectives": [],
+        "active_success_criteria": [],
+        "goal_fingerprint": "94180f1f72ba8b6a",
+        "intent_id": "",
+        "linked_constraints": []
+      },
+      "notes": null,
+      "order_idx": 2,
+      "outputs": {},
+      "started_at_ms": 1774907537461,
+      "status": "in_progress",
+      "title": "Inspect in viewer"
+    }
+  ],
+  "tenant_id": "demo",
+  "updated_at_ms": 1774907537461
+}

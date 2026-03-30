@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,11 @@ from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
 from akc.viewer import ViewerInputs, load_viewer_snapshot
 from akc.viewer.export import export_bundle
 from akc.viewer.models import ViewerSnapshot
+from akc.viewer.snapshot import ViewerError
 from akc.viewer.web import build_static_viewer
+
+from .profile_defaults import resolve_optional_project_string
+from .project_config import load_akc_project_config
 
 
 def _print_view_tui_text_fallback(snap: ViewerSnapshot) -> None:
@@ -37,6 +42,41 @@ def _default_out_dir(*, outputs_root: Path, tenant_id: str, repo_id: str, kind: 
 
 
 def cmd_view(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    proj = load_akc_project_config(cwd)
+    tenant_r = resolve_optional_project_string(
+        cli_value=getattr(args, "tenant_id", None),
+        env_key="AKC_TENANT_ID",
+        file_value=proj.tenant_id if proj is not None else None,
+        env=os.environ,
+    )
+    repo_r = resolve_optional_project_string(
+        cli_value=getattr(args, "repo_id", None),
+        env_key="AKC_REPO_ID",
+        file_value=proj.repo_id if proj is not None else None,
+        env=os.environ,
+    )
+    outputs_r = resolve_optional_project_string(
+        cli_value=getattr(args, "outputs_root", None),
+        env_key="AKC_OUTPUTS_ROOT",
+        file_value=proj.outputs_root if proj is not None else None,
+        env=os.environ,
+    )
+    if tenant_r.value is None:
+        raise SystemExit(
+            "Missing tenant id: provide --tenant-id, set AKC_TENANT_ID, or add tenant_id to .akc/project.json"
+        )
+    if repo_r.value is None:
+        raise SystemExit("Missing repo id: provide --repo-id, set AKC_REPO_ID, or add repo_id to .akc/project.json")
+    if outputs_r.value is None:
+        raise SystemExit(
+            "Missing outputs root: provide --outputs-root, set AKC_OUTPUTS_ROOT, "
+            "or add outputs_root to .akc/project.json"
+        )
+    args.tenant_id = tenant_r.value
+    args.repo_id = repo_r.value
+    args.outputs_root = outputs_r.value
+
     outputs_root = safe_resolve_path(args.outputs_root)
     plan_base = Path(args.plan_base_dir).expanduser() if args.plan_base_dir else None
 
@@ -47,7 +87,19 @@ def cmd_view(args: argparse.Namespace) -> int:
         plan_base_dir=plan_base,
         schema_version=int(getattr(args, "schema_version", 1)),
     )
-    snap = load_viewer_snapshot(inputs)
+    try:
+        snap = load_viewer_snapshot(inputs)
+    except ViewerError as e:
+        scope = outputs_root / args.tenant_id / args.repo_id
+        print(f"ERROR: {e}", file=sys.stderr)
+        print(
+            "The viewer needs plan state for this tenant/repo under the outputs root.\n"
+            f"  Resolved scope: {scope}\n"
+            "  Fix: use the same --tenant-id / --repo-id as your last `akc compile` "
+            "(or update .akc/project.json), or run `akc compile` for this scope first.",
+            file=sys.stderr,
+        )
+        return 2
 
     sub = str(getattr(args, "view_command", "") or "")
     if sub == "tui":

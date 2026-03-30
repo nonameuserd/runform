@@ -163,6 +163,55 @@ def _dominant_language(profile: ProjectProfile | None) -> str | None:
     return _normalize_language(profile.languages[0].language)
 
 
+def _command_language_hint(command: list[str] | tuple[str, ...] | None) -> str | None:
+    if not command:
+        return None
+    head = str(command[0]).strip().lower()
+    joined = " ".join(str(part).strip().lower() for part in command if str(part).strip())
+    if head in {"pytest", "tox", "nox", "mypy", "pyright", "ruff", "uv", "pip"}:
+        return "python"
+    if head in {"cargo", "rustc"}:
+        return "rust"
+    if head == "go":
+        return "go"
+    if head in {"node", "npm", "npx", "pnpm", "pnpx", "yarn", "bun", "turbo", "nx", "tsc", "eslint", "prettier"}:
+        return "typescript" if any(token in joined for token in ("tsc", "typecheck", "typescript")) else "javascript"
+    if head == "python" and "-m" in command and any(str(part) == "pytest" or "pytest" in str(part) for part in command):
+        return "python"
+    if "cargo test" in joined or "cargo build" in joined or "cargo check" in joined:
+        return "rust"
+    if "go test" in joined or "go build" in joined or "go vet" in joined:
+        return "go"
+    if any(token in joined for token in ("pytest", "mypy", "pyright", "ruff")):
+        return "python"
+    if any(
+        token in joined for token in ("jest", "vitest", "eslint", "prettier", "turbo", "nx", "pnpm", "npm ", "yarn ")
+    ):
+        return "javascript"
+    return None
+
+
+def _package_manager_from_command(command: list[str] | tuple[str, ...] | None) -> str | None:
+    if not command:
+        return None
+    head = str(command[0]).strip().lower()
+    if head in {"pnpm", "pnpx"}:
+        return "pnpm"
+    if head in {"npm", "npx"}:
+        return "npm"
+    if head == "yarn":
+        return "yarn"
+    if head == "uv":
+        return "uv"
+    if head == "pip":
+        return "pip"
+    if head == "cargo":
+        return "cargo"
+    if head == "go":
+        return "go"
+    return None
+
+
 def _package_manager_from_evidence(*, language: str, package_managers: list[str]) -> str | None:
     pm = set(package_managers)
 
@@ -197,10 +246,101 @@ def _package_manager_from_evidence(*, language: str, package_managers: list[str]
     return None
 
 
-def _first_command_by_kind(profile: ProjectProfile, *, kind: str) -> list[str] | None:
-    for bc in profile.build_commands:
-        if bc.kind == kind:
-            return list(bc.command)
+def _source_depth(root: Path, source: str | None) -> int:
+    if not source:
+        return 99
+    raw = str(source).split("#", 1)[0].strip()
+    if not raw:
+        return 99
+    try:
+        rel = Path(raw).resolve().relative_to(root.resolve())
+    except Exception:
+        return 99
+    return max(0, len(rel.parts) - 1)
+
+
+def _command_score(profile: ProjectProfile, *, kind: str, command: tuple[str, ...], source: str | None) -> int:
+    score = 0
+    source_s = str(source or "")
+    source_path = source_s.split("#", 1)[0]
+    depth = _source_depth(profile.root, source)
+    dominant_language = _dominant_language(profile)
+    hinted_language = _command_language_hint(command)
+    head = str(command[0]).strip().lower() if command else ""
+    joined = " ".join(str(part).strip().lower() for part in command if str(part).strip())
+    monorepo = bool(profile.architecture_hints.get("monorepo"))
+
+    if ".github/workflows" in source_s or ".gitlab-ci.yml" in source_s or "Jenkinsfile" in source_s:
+        score += 500
+    if monorepo:
+        if head in {"pnpm", "npm", "yarn", "bun", "turbo", "nx", "lerna"}:
+            score += 140
+        if any(token in joined for token in ("run-many", "--workspace", " workspaces ", "turbo run", " nx ")):
+            score += 60
+    elif head in {"make", "just"}:
+        score += 80
+
+    if hinted_language is not None and dominant_language is not None and hinted_language == dominant_language:
+        score += 40
+    if source_path.endswith("package.json"):
+        score += 90
+    elif source_path.endswith(("pyproject.toml", "Cargo.toml", "go.mod", "Makefile")):
+        score += 70
+    elif source_path.endswith((".yml", ".yaml")):
+        score += 40
+
+    score += max(0, 80 - depth * 10)
+    if kind == "test" and any(
+        token in joined for token in ("test", "pytest", "jest", "vitest", "cargo test", "go test")
+    ):
+        score += 20
+    if kind == "build" and "build" in joined:
+        score += 20
+    if kind == "lint" and "lint" in joined:
+        score += 20
+    if kind == "typecheck" and any(
+        token in joined for token in ("typecheck", "type-check", "tsc", "mypy", "pyright", "cargo check")
+    ):
+        score += 20
+    if kind == "format" and any(token in joined for token in ("format", "prettier", "ruff format", "cargo fmt")):
+        score += 20
+
+    return score
+
+
+def _preferred_command_by_kind(profile: ProjectProfile, *, kind: str) -> list[str] | None:
+    candidates = [bc for bc in profile.build_commands if bc.kind == kind]
+    if not candidates:
+        return None
+    ranked = max(
+        enumerate(candidates),
+        key=lambda item: (
+            _command_score(profile, kind=kind, command=item[1].command, source=item[1].source),
+            -item[0],
+        ),
+    )
+    return list(ranked[1].command)
+
+
+def _preferred_language_from_commands(profile: ProjectProfile | None) -> str | None:
+    if profile is None:
+        return None
+    for kind in ("test", "build", "typecheck", "lint", "format"):
+        command = _preferred_command_by_kind(profile, kind=kind)
+        hinted = _command_language_hint(command)
+        if hinted is not None:
+            return _normalize_language(hinted)
+    return None
+
+
+def _preferred_package_manager_from_commands(profile: ProjectProfile | None) -> str | None:
+    if profile is None:
+        return None
+    for kind in ("test", "build", "typecheck", "lint", "format"):
+        command = _preferred_command_by_kind(profile, kind=kind)
+        hinted = _package_manager_from_command(command)
+        if hinted is not None:
+            return hinted
     return None
 
 
@@ -440,10 +580,21 @@ def resolve_toolchain_profile(
     """
     explicit_patch = _coerce_optional_patch(explicit_toolchain)
     extracted_lang = _dominant_language(extracted_profile)
+    extracted_command_lang = _preferred_language_from_commands(extracted_profile)
     resolved_lang = (
         explicit_patch.language
         if explicit_patch is not None and explicit_patch.language is not None
-        else (extracted_lang if extracted_lang is not None else "python")
+        else (
+            extracted_command_lang
+            if extracted_profile is not None
+            and extracted_command_lang is not None
+            and (
+                bool(extracted_profile.architecture_hints.get("mixed_language"))
+                or extracted_lang is None
+                or extracted_command_lang == extracted_lang
+            )
+            else (extracted_lang if extracted_lang is not None else (extracted_command_lang or "python"))
+        )
     )
 
     root = extracted_profile.root if extracted_profile is not None else None
@@ -455,26 +606,29 @@ def resolve_toolchain_profile(
             language=_normalize_language(resolved_lang),
             package_managers=extracted_profile.package_managers,
         )
+        pm_from_commands = _preferred_package_manager_from_commands(extracted_profile)
+        if pm_from_commands is not None:
+            pm = pm_from_commands
         if pm is not None:
             base = _with_changes(base, package_manager=pm)
 
-        test = _first_command_by_kind(extracted_profile, kind="test")
+        test = _preferred_command_by_kind(extracted_profile, kind="test")
         if test:
             base = _with_changes(base, test_command=test)
 
-        typecheck = _first_command_by_kind(extracted_profile, kind="typecheck")
+        typecheck = _preferred_command_by_kind(extracted_profile, kind="typecheck")
         if typecheck:
             base = _with_changes(base, typecheck_command=typecheck)
 
-        build = _first_command_by_kind(extracted_profile, kind="build")
+        build = _preferred_command_by_kind(extracted_profile, kind="build")
         if build:
             base = _with_changes(base, build_command=build)
 
-        lint = _first_command_by_kind(extracted_profile, kind="lint")
+        lint = _preferred_command_by_kind(extracted_profile, kind="lint")
         if lint:
             base = _with_changes(base, lint_command=lint)
 
-        fmt = _first_command_by_kind(extracted_profile, kind="format")
+        fmt = _preferred_command_by_kind(extracted_profile, kind="format")
         if fmt:
             base = _with_changes(base, format_command=fmt)
 
@@ -485,6 +639,15 @@ def resolve_toolchain_profile(
         )
         if install is not None:
             base = _with_changes(base, install_command=install)
+
+        # Do not impose conventional lint/format/typecheck when the repo did not declare
+        # them in extracted manifests (avoids fail-closed preflight on missing ruff/eslint/tsc).
+        if _preferred_command_by_kind(extracted_profile, kind="lint") is None:
+            base = _with_changes(base, lint_command=None)
+        if _preferred_command_by_kind(extracted_profile, kind="format") is None:
+            base = _with_changes(base, format_command=None)
+        if _preferred_command_by_kind(extracted_profile, kind="typecheck") is None:
+            base = _with_changes(base, typecheck_command=None)
 
     # Explicit overlay (per-field).
     if explicit_patch is not None:

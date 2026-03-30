@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "example_stdio": {
+      "transport": "stdio",
+      "command": "REPLACE_WITH_MCP_SERVER_COMMAND",
+      "args": [],
+      "env": {}
+    }
+  },
+  "default_server": "example_stdio"
+}

@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 
 from akc.delivery import ingest as delivery_ingest
 from akc.delivery import orchestrate as delivery_orchestrate
+from akc.delivery import preflight as delivery_preflight
 from akc.delivery import store as delivery_store
 from akc.delivery.compile_handoff import load_compile_handoff
 from akc.delivery.control_index import append_delivery_control_audit_event
@@ -20,6 +21,7 @@ from akc.delivery.event_types import (
     DELIVERY_FAILED,
 )
 from akc.delivery.metrics import compute_delivery_metrics
+from akc.delivery.types import PackagingMode, StoreSubmitMode
 
 
 def _project_dir(args: argparse.Namespace) -> Path:
@@ -38,6 +40,79 @@ def _tenant_repo_for_project(project_dir: Path) -> tuple[str, str]:
     return t, r
 
 
+def _packaging_mode_arg(args: argparse.Namespace) -> tuple[PackagingMode, bool]:
+    raw = getattr(args, "packaging_mode", None)
+    if raw is None or not str(raw).strip():
+        return "execute", False
+    normalized = str(raw).strip().lower()
+    return cast(PackagingMode, normalized if normalized in {"execute", "plan"} else "execute"), True
+
+
+def _store_submit_mode_arg(args: argparse.Namespace, *, release_mode: str) -> StoreSubmitMode:
+    if release_mode == "beta":
+        return "manual"
+    raw = str(getattr(args, "store_submit_mode", "auto") or "auto").strip().lower()
+    return cast(StoreSubmitMode, raw if raw in {"auto", "manual"} else "auto")
+
+
+def _compile_outputs_payload(handoff: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(handoff, dict):
+        return None
+    return {
+        "manifest_present": bool(handoff.get("manifest_present")),
+        "manifest_path": handoff.get("manifest_rel_path"),
+        "delivery_plan_loaded": bool(handoff.get("delivery_plan_loaded")),
+        "delivery_plan_ref": handoff.get("delivery_plan_ref"),
+        "runtime_bundle_path": handoff.get("runtime_bundle_rel_path"),
+        "promotion_readiness": handoff.get("promotion_readiness"),
+    }
+
+
+def _journey_payload(
+    *,
+    compile_exit: int | None,
+    packaging_summary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if compile_exit is None:
+        return None
+    if compile_exit != 0:
+        return {
+            "outcome": "compile_failed",
+            "message": "Compile failed before delivery packaging/distribution could run.",
+        }
+    if not isinstance(packaging_summary, dict):
+        return {
+            "outcome": "compile_only",
+            "message": "Compile completed, but no packaging summary was recorded.",
+        }
+    resolution = packaging_summary.get("mode_resolution")
+    if not isinstance(resolution, dict):
+        return None
+    outcome = str(resolution.get("outcome") or "").strip() or "unknown"
+    reason = str(resolution.get("reason") or "").strip() or None
+    requested_mode = str(resolution.get("requested_mode") or "").strip() or None
+    resolved_mode = str(resolution.get("resolved_mode") or "").strip() or None
+    mode_source = str(resolution.get("mode_source") or "").strip() or None
+    if outcome == "inspectable_plan":
+        message = (
+            "Delivery converged on an inspectable plan/artifact path instead of live packaging/distribution."
+            if reason in {"delivery_preflight_blocked", "packaging_preflight_blocked"}
+            else "Delivery ran in plan mode and wrote inspectable packaging artifacts."
+        )
+    elif outcome == "executed_distribution":
+        message = "Delivery converged on live packaging/distribution outputs."
+    else:
+        message = "Delivery packaging completed with a resolved mode summary."
+    return {
+        "outcome": outcome,
+        "requested_packaging_mode": requested_mode,
+        "resolved_packaging_mode": resolved_mode,
+        "mode_source": mode_source,
+        "reason": reason,
+        "message": message,
+    }
+
+
 def cmd_deliver_submit(args: argparse.Namespace) -> int:
     project_dir = _project_dir(args)
     request_text = str(getattr(args, "request", "") or "").strip()
@@ -47,6 +122,9 @@ def cmd_deliver_submit(args: argparse.Namespace) -> int:
     release_mode = str(getattr(args, "release_mode", "beta"))
     do_compile = bool(getattr(args, "deliver_compile", False))
     delivery_version = str(getattr(args, "delivery_version", "1.0.0") or "1.0.0").strip() or "1.0.0"
+    packaging_mode, packaging_mode_explicit = _packaging_mode_arg(args)
+    store_submit_mode = _store_submit_mode_arg(args, release_mode=release_mode)
+    tenant_id, repo_id = _tenant_repo_for_project(project_dir)
 
     if not request_text:
         print("akc deliver: --request is required", file=sys.stderr)
@@ -93,6 +171,7 @@ def cmd_deliver_submit(args: argparse.Namespace) -> int:
     compile_run_id: str | None = None
     packaging_ok: bool = True
     packaging_summary: dict[str, Any] | None = None
+    compile_handoff: dict[str, Any] | None = None
     if do_compile:
         req = summary.get("request")
         parsed_goal = ""
@@ -128,6 +207,7 @@ def cmd_deliver_submit(args: argparse.Namespace) -> int:
         )
         if compile_exit == 0:
             handoff = load_compile_handoff(project_dir=project_dir, compile_run_id=compile_run_id)
+            compile_handoff = dict(handoff)
             try:
                 delivery_store.update_delivery_request_compile_handoff(
                     project_dir=project_dir,
@@ -170,6 +250,9 @@ def cmd_deliver_submit(args: argparse.Namespace) -> int:
                 release_mode=cast(Literal["beta", "store", "both"], release_mode),
                 delivery_version=delivery_version,
                 compile_run_id=compile_run_id,
+                packaging_mode=packaging_mode,
+                store_submit_mode=store_submit_mode,
+                allow_plan_fallback=not packaging_mode_explicit,
             )
             packaging_ok = bool(packaging_summary.get("ok"))
         summary["session"] = delivery_store.load_session(project_dir, str(summary["delivery_id"]))
@@ -183,23 +266,44 @@ def cmd_deliver_submit(args: argparse.Namespace) -> int:
         p = req_out.get("parsed")
         if isinstance(p, dict):
             parsed_out = dict(p)
+    preflight_report = delivery_preflight.collect_delivery_preflight_report(
+        project_dir=project_dir,
+        platforms=platforms,
+        release_mode=cast(Literal["beta", "store", "both"], release_mode),
+        delivery_version=delivery_version,
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        store_submit_mode=store_submit_mode,
+        compile_run_id=compile_run_id,
+    )
     out: dict[str, Any] = {
         "delivery_id": summary["delivery_id"],
         "delivery_dir": summary["delivery_dir"],
         "session_phase": sess.get("session_phase"),
         "preflight_ok": len(summary.get("preflight_issues") or []) == 0,
         "parsed": parsed_out,
+        "preflight": preflight_report,
         "required_human_inputs_count": len(summary.get("required_human_inputs") or []),
     }
     if do_compile:
         out["compile_exit_code"] = compile_exit
         out["compile_run_id"] = compile_run_id
         out["delivery_version"] = delivery_version
+        out["journey"] = _journey_payload(compile_exit=compile_exit, packaging_summary=packaging_summary)
+        out["compile_outputs"] = _compile_outputs_payload(compile_handoff)
         if packaging_summary is not None:
             out["packaging_ok"] = packaging_ok
             out["packaging"] = {
+                "mode": packaging_summary.get("summary", {}).get("mode"),
+                "mode_resolution": packaging_summary.get("mode_resolution"),
+                "store_submit_mode": packaging_summary.get("summary", {}).get("store_submit_mode"),
+                "ready_platforms": packaging_summary.get("summary", {}).get("ready_platforms"),
+                "planned_only_platforms": packaging_summary.get("summary", {}).get("planned_only_platforms"),
+                "distribution_ready": packaging_summary.get("summary", {}).get("distribution_ready"),
                 "provider_versions": packaging_summary.get("provider_versions"),
                 "preflight_issues": packaging_summary.get("preflight_issues"),
+                "requested_preflight_issues": packaging_summary.get("requested_preflight_issues"),
+                "distribution": packaging_summary.get("distribution"),
             }
     print(json.dumps(out, indent=2, sort_keys=True))
     if not do_compile:
@@ -256,6 +360,36 @@ def cmd_deliver_events(args: argparse.Namespace) -> int:
 
     print(json.dumps({"delivery_id": delivery_id, "events": events}, indent=2, sort_keys=True))
     return 0
+
+
+def cmd_deliver_preflight(args: argparse.Namespace) -> int:
+    project_dir = _project_dir(args)
+    release_mode = str(getattr(args, "release_mode", "beta") or "beta").strip().lower()
+    delivery_version = str(getattr(args, "delivery_version", "1.0.0") or "1.0.0").strip() or "1.0.0"
+    compile_run_id = str(getattr(args, "compile_run_id", "") or "").strip() or None
+    try:
+        platforms = delivery_store.parse_platforms_csv(str(getattr(args, "platforms", "") or "web,ios,android"))
+        if release_mode not in delivery_store.RELEASE_MODES:
+            raise ValueError(
+                f"invalid --release-mode {release_mode!r}; expected one of {list(delivery_store.RELEASE_MODES)}",
+            )
+    except ValueError as exc:
+        print(f"akc deliver preflight: {exc}", file=sys.stderr)
+        return 2
+    tenant_id, repo_id = _tenant_repo_for_project(project_dir)
+    store_submit_mode = _store_submit_mode_arg(args, release_mode=release_mode)
+    report = delivery_preflight.collect_delivery_preflight_report(
+        project_dir=project_dir,
+        platforms=platforms,
+        release_mode=cast(Literal["beta", "store", "both"], release_mode),
+        delivery_version=delivery_version,
+        tenant_id=tenant_id,
+        repo_id=repo_id,
+        store_submit_mode=store_submit_mode,
+        compile_run_id=compile_run_id,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if bool(report.get("ok")) else 2
 
 
 def cmd_deliver_resend(args: argparse.Namespace) -> int:
@@ -417,10 +551,29 @@ def cmd_deliver_gate_pass(args: argparse.Namespace) -> int:
 def register_deliver_parsers(sub: Any) -> None:
     deliver = sub.add_parser(
         "deliver",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Named-recipient delivery sessions and delivery lifecycle operations.\n"
+            "\n"
+            "What's missing to ship?\n"
+            "  akc deliver preflight\n"
+        ),
         help=(
             "Named-recipient delivery sessions: capture a plain-language request, recipients, "
             "and platform targets under .akc/delivery/<id>/. After compile, packaging and release "
             "lanes consume compile-time delivery_plan / runtime outputs — not the compile controller loop."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  # What's missing to ship? (repo/env/operator prerequisites)\n"
+            "  akc deliver preflight\n"
+            "\n"
+            "  # Create a delivery session (request + recipients)\n"
+            '  akc deliver --request "Ship the beta" --recipient you@example.com\n'
+            "\n"
+            "  # Run compile + delivery packaging (execute by default; falls back to plan when prerequisites are\n"
+            "  # missing)\n"
+            '  akc deliver --compile --request "Ship the beta" --recipient you@example.com\n'
         ),
     )
     deliver.add_argument(
@@ -464,6 +617,23 @@ def register_deliver_parsers(sub: Any) -> None:
         ),
     )
     deliver.add_argument(
+        "--packaging-mode",
+        choices=["execute", "plan"],
+        default=None,
+        help=(
+            "Packaging execution mode for --compile. When omitted, the default path prefers execute and "
+            "automatically falls back to plan when prerequisites are missing; set plan/execute explicitly "
+            "to force one mode."
+        ),
+    )
+    deliver.add_argument(
+        "--store-submit",
+        dest="store_submit_mode",
+        choices=["auto", "manual"],
+        default="auto",
+        help="Store-lane submission mode for --compile: auto submit by default for store/both; ignored for beta",
+    )
+    deliver.add_argument(
         "--delivery-version",
         default="1.0.0",
         help="Logical semver-like version for this session (drives iOS/Android/Web build metadata; default: 1.0.0)",
@@ -499,6 +669,46 @@ def register_deliver_parsers(sub: Any) -> None:
         help="Project root containing .akc/ (default: current working directory)",
     )
     ev.set_defaults(func=cmd_deliver_events)
+
+    pf = deliver_sub.add_parser(
+        "preflight",
+        help="Report the exact operator prerequisites missing for execute-mode delivery and store submission",
+    )
+    pf.add_argument(
+        "--project-dir",
+        type=Path,
+        default=None,
+        help="Project root containing .akc/ (default: current working directory)",
+    )
+    pf.add_argument(
+        "--platforms",
+        default="web,ios,android",
+        help="Comma-separated platforms: web, ios, android (default: web,ios,android)",
+    )
+    pf.add_argument(
+        "--release-mode",
+        choices=list(delivery_store.RELEASE_MODES),
+        default="beta",
+        help="beta | store | both (default: beta)",
+    )
+    pf.add_argument(
+        "--delivery-version",
+        default="1.0.0",
+        help="Logical semver-like version used for the preflight context (default: 1.0.0)",
+    )
+    pf.add_argument(
+        "--store-submit",
+        dest="store_submit_mode",
+        choices=["auto", "manual"],
+        default="auto",
+        help="Store submission mode to evaluate for store/both (default: auto)",
+    )
+    pf.add_argument(
+        "--compile-run-id",
+        default=None,
+        help="Optional compile run id; when omitted, preflight tries the latest manifest-linked run if available",
+    )
+    pf.set_defaults(func=cmd_deliver_preflight)
 
     rs = deliver_sub.add_parser(
         "resend",

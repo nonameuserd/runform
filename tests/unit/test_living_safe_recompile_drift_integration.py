@@ -59,6 +59,10 @@ def _write_minimal_repo(root: Path) -> None:
         "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
         encoding="utf-8",
     )
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["."]\n',
+        encoding="utf-8",
+    )
 
 
 def _executor_cwd(outputs_root: Path, tenant_id: str, repo_id: str) -> Path:

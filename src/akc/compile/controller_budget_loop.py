@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Set
+from collections.abc import Callable, Mapping, Set
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -199,6 +199,7 @@ def run_budgeted_generate_execute_repair_loop(
     current_tier = gen_tier
     stage: StageName = "generate"
     last_exec: ExecutionResult | None = None
+    last_exec_command: list[str] | None = None
     best: Candidate | None = best_initial
     compile_succeeded_seen = compile_succeeded_seen_initial
     intent_satisfied = intent_satisfied_initial
@@ -211,6 +212,10 @@ def run_budgeted_generate_execute_repair_loop(
     repair_prompt_pass = DefaultIRRepairPromptPass()
 
     conventions_system_preamble: str | None = build_conventions_system_preamble(project_root=project_root)
+    practical_context = None
+    raw_practical = dict(config.metadata or {}).get("practical_backend_prompt_context")
+    if isinstance(raw_practical, Mapping):
+        practical_context = dict(raw_practical)
 
     while True:
         if accounting["iterations_total"] >= max_iters_total:
@@ -272,7 +277,7 @@ def run_budgeted_generate_execute_repair_loop(
             # Repair stage: parse failure and build a more structured prompt.
             step = next(s for s in plan.steps if s.id == step_id)
             assert last_exec is not None
-            failure = parse_execution_failure(result=last_exec)
+            failure = parse_execution_failure(result=last_exec, executed_command=last_exec_command)
             # If the previous iteration was vetoed by the verifier, the controller
             # stores its structured result in step outputs. Thread it into repair context.
             verifier_fb = None
@@ -366,6 +371,7 @@ def run_budgeted_generate_execute_repair_loop(
             last_generation_text=last_generation_text,
             failure=failure,
             verifier_feedback=verifier_fb,
+            practical_context=practical_context,
             replay_mode=replay_mode,
             replay_manifest=effective_replay_manifest,
             should_call_model=pass_decision.should_call_model,
@@ -514,6 +520,7 @@ def run_budgeted_generate_execute_repair_loop(
                 )
                 smoke_res = StageRunResult(stage=smoke_res.stage, command=list(smoke_res.command), result=exec_result)
             last_exec = exec_result
+            last_exec_command = list(smoke_res.command)
             smoke_end_ns = now_unix_nano()
             smoke_start_ns = smoke_end_ns - max(1, int(exec_result.duration_ms or 0) * 1_000_000)
             _append_span(
@@ -544,6 +551,7 @@ def run_budgeted_generate_execute_repair_loop(
             )
             exec_result = cached_result
             last_exec = exec_result
+            last_exec_command = list(cached_command)
 
         full_res = None
         should_run_full = False
@@ -604,6 +612,7 @@ def run_budgeted_generate_execute_repair_loop(
                 )
                 full_res = StageRunResult(stage=full_res.stage, command=list(full_res.command), result=exec_result)
             last_exec = exec_result
+            last_exec_command = list(full_res.command)
             full_end_ns = now_unix_nano()
             full_start_ns = full_end_ns - max(1, int(exec_result.duration_ms or 0) * 1_000_000)
             _append_span(
@@ -672,7 +681,12 @@ def run_budgeted_generate_execute_repair_loop(
         # Persist "best so far" into plan step outputs (monotonic).
         failure_json = None
         if int(exec_result.exit_code) != 0:
-            failure_json = parse_execution_failure(result=exec_result).to_json_obj()
+            fail_cmd = (
+                list(full_res.command)
+                if full_res is not None and int(full_res.result.exit_code) != 0
+                else list(smoke_res.command)
+            )
+            failure_json = parse_execution_failure(result=exec_result, executed_command=fail_cmd).to_json_obj()
         plan = _set_step_outputs(
             plan=plan,
             step_id=step_id,
@@ -697,6 +711,7 @@ def run_budgeted_generate_execute_repair_loop(
             monotonic_msg = "monotonic improvement violated: repair candidate did not improve candidate score"
             monotonic_exec = ExecutionResult(exit_code=3, stdout="", stderr=monotonic_msg, duration_ms=0)
             last_exec = monotonic_exec
+            last_exec_command = None
             plan = _set_step_outputs(
                 plan=plan,
                 step_id=step_id,
@@ -726,6 +741,7 @@ def run_budgeted_generate_execute_repair_loop(
             )
             policy_exec = ExecutionResult(exit_code=2, stdout="", stderr=policy_msg, duration_ms=0)
             last_exec = policy_exec
+            last_exec_command = None
             plan = _set_step_outputs(
                 plan=plan,
                 step_id=step_id,
@@ -772,6 +788,7 @@ def run_budgeted_generate_execute_repair_loop(
             if not vres.passed:
                 # Treat verifier veto as a failure eligible for repair (budgeted).
                 last_exec = exec_result
+                last_exec_command = list(full_res.command) if full_res is not None else list(smoke_res.command)
                 if repairs_used >= max_repairs:
                     break
                 repairs_used += 1
@@ -833,6 +850,7 @@ def run_budgeted_generate_execute_repair_loop(
                     else "intent.acceptance_failed"
                 )
                 last_exec = ExecutionResult(exit_code=4, stdout="", stderr=intent_msg, duration_ms=0)
+                last_exec_command = None
                 intent_satisfied = False
                 if repairs_used >= max_repairs:
                     break
@@ -887,6 +905,7 @@ def run_budgeted_generate_execute_repair_loop(
                     plan_store.save_plan(tenant_id=tenant_id, repo_id=repo_id, plan=plan)
                     scope_exec = ExecutionResult(exit_code=2, stdout="", stderr=block_msg, duration_ms=0)
                     last_exec = scope_exec
+                    last_exec_command = None
                     if repairs_used >= max_repairs:
                         break
                     repairs_used += 1
