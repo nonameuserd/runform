@@ -4,6 +4,16 @@ AKC is an **AI-native software factory** for turning project knowledge into buil
 
 It grounds software generation in real project context: docs, codebases, OpenAPI specs, messaging exports, and MCP resources. Instead of stopping at a one-shot AI answer, AKC moves work through structured stages that can generate code and other artifacts, verify results, track evidence, and support runtime, delivery, and control-plane workflows.
 
+## What’s missing to ship?
+
+Run:
+
+```bash
+akc deliver preflight
+```
+
+AKC will tell you **exactly what prerequisites are missing** (repo, environment, operator inputs) to ship via execute-mode delivery and store lanes.
+
 The core loop is:
 
 **Plan -> Retrieve -> Generate -> Execute -> Repair**
@@ -36,6 +46,33 @@ AKC defaults to an offline-friendly path for local demos:
 - [uv](https://docs.astral.sh/uv/)
 
 ### Install
+
+Operator-friendly installs (one command, predictable upgrades):
+
+```bash
+# Preferred (isolated tool install)
+uv tool install runform-akc
+
+# Upgrade later
+uv tool upgrade runform-akc
+```
+
+```bash
+# Alternative (also isolated)
+pipx install runform-akc
+
+# Upgrade later
+pipx upgrade runform-akc
+```
+
+Optional: install a prebuilt standalone binary from GitHub Releases (no Python env):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nonameuserd/runform/main/scripts/install-akc.sh | sh
+~/.local/bin/akc --help
+```
+
+From source (contributors / editable dev):
 
 ```bash
 git clone https://github.com/nonameuserd/runform.git
@@ -101,11 +138,19 @@ export AKC_WEIGHTED_MEMORY_ENABLED=1
 
 ### Ingest
 
-Index repository or external knowledge sources for later retrieval:
+Index repository or external knowledge sources for later retrieval. Supported connectors: `docs`, `codebase`, `openapi`, `slack`, `discord`, `telegram`, `whatsapp`, `mcp` (see `akc ingest --help` and [`examples/README.md`](examples/README.md) for one recipe per connector).
 
 ```bash
+# Local docs tree (tiny sample under examples/)
+akc ingest --tenant-id demo --connector docs --input ./examples/docs-sample --embedder hash --index-backend sqlite
+
+# Repository code
 akc ingest --tenant-id demo --connector codebase --input . --embedder hash --index-backend sqlite
-akc ingest --tenant-id demo --connector openapi --input ./examples/openapi/petstore.json
+
+# OpenAPI 3.x (JSON path or URL; YAML specs need akc[ingest-openapi])
+akc ingest --tenant-id demo --connector openapi --input ./examples/openapi/petstore.json --embedder hash --index-backend sqlite
+
+# Messaging / MCP need tokens or payload paths—see examples/messaging and examples/mcp
 ```
 
 ### Compile and Verify
@@ -118,6 +163,8 @@ akc verify --tenant-id demo --repo-id runform --outputs-root ./out
 ```
 
 `akc compile` defaults to `scoped_apply`, so use `--artifact-only` when you want a non-mutating run.
+
+For backend execution-workspace generation, mixed and polyglot repositories are valid inputs, but v1 built-in authoritative backend materializers are limited to `typescript_node` and `python_fastapi`. Other requested runtimes such as `go`, `rust`, or `java` require an external generator manifest under `.akc/backend_generators/`; otherwise AKC fails closed for authoritative materialization and emits fallback diagnostic workspaces.
 
 To execute observability or mobile validators before operational verification:
 
@@ -170,7 +217,7 @@ The CLI also exposes:
 | `docs/` | Getting started, CLI reference, architecture, runtime, delivery, viewer, ops |
 | `configs/` | Example policy, eval, and SLO configuration |
 | `deploy/` | Deployment references for systemd, Compose, Kubernetes, and CI |
-| `examples/` | Sample OpenAPI, WASM, and backend integration examples |
+| `examples/` | Ingest recipes for every connector, sample OpenAPI/docs/WASM, LLM backend wiring, golden viewer snapshot |
 | `rust/` | Optional Rust crates for ingest, executor, and protocol surfaces |
 | `scripts/` | CI and quality gate helpers |
 | `packaging/`, `tools/nuitka/` | Packaging and standalone binary build helpers |

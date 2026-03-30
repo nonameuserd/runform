@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from akc.adopt.detect import detect_project_profile
 from akc.adopt.toolchain import ToolchainPreflightError, preflight_toolchain, resolve_toolchain_profile
@@ -30,9 +30,17 @@ from akc.compile.artifact_passes import (
     run_agent_coordination_pass,
     run_delivery_plan_pass,
     run_deployment_config_pass,
+    run_execution_workspace_pass,
+    run_infrastructure_synthesis_pass,
     run_orchestration_spec_pass,
+    run_practical_backend_generation_pass,
     run_runtime_bundle_pass,
     run_system_design_pass,
+)
+from akc.compile.backend_generation import (
+    PracticalBackendHandoff,
+    build_practical_backend_context,
+    practical_backend_handoff_from_context,
 )
 from akc.compile.controller import ControllerResult, run_compile_loop
 from akc.compile.controller_config import ControllerConfig
@@ -533,6 +541,59 @@ class CompileSession:
             plan_id=plan.id,
         )
 
+        developer_profile_decisions_effective = dict(developer_profile_decisions or {})
+        if project_root is not None:
+            initial_intent_node_properties: dict[str, Any] = {
+                "intent_id": intent_spec.intent_id if intent_spec is not None else "goal_only",
+                "spec_version": int(intent_spec.spec_version) if intent_spec is not None else 1,
+                "goal_statement": (intent_spec.goal_statement if intent_spec is not None else derived_goal),
+                "operating_bounds": (
+                    intent_spec.operating_bounds.to_json_obj()
+                    if intent_spec is not None and intent_spec.operating_bounds is not None
+                    else None
+                ),
+            }
+            try:
+                initial_ir_doc = self._ir_from_plan(
+                    plan=plan,
+                    intent_node_properties=initial_intent_node_properties,
+                    intent_store=None,
+                    controller_intent_spec=intent_spec,
+                )
+            except Exception:
+                initial_ir_doc = IRDocument(
+                    tenant_id=self.tenant_id,
+                    repo_id=self.repo_id,
+                    nodes=(),
+                )
+            practical_ctx = build_practical_backend_context(
+                run_id=plan.id,
+                ir_document=initial_ir_doc,
+                intent_spec=intent_spec,
+                project_root=Path(project_root).expanduser().resolve(),
+            )
+            md3 = dict(config.metadata or {})
+            md3["practical_backend_prompt_context"] = cast(
+                JSONValue,
+                dict(cast(dict[str, Any], practical_ctx["prompt_context"])),
+            )
+            md3["practical_backend_seed_steps"] = cast(JSONValue, list(practical_ctx["seed_steps"]))
+            acceptance_contract = cast(dict[str, Any], practical_ctx["implementation_acceptance_contract"])
+            proof_command = acceptance_contract.get("proof_command")
+            if isinstance(proof_command, list) and proof_command:
+                md3["practical_generation_contract_smoke_command"] = [str(x) for x in proof_command]
+            config = replace(config, metadata=md3)
+            profile_obj = cast(dict[str, Any], practical_ctx["backend_generation_profile"])
+            plugin_obj = cast(dict[str, Any], practical_ctx["runtime_plugin_decision"])
+            developer_profile_decisions_effective["practical_backend_generation"] = {
+                "selected_runtime_plugin": plugin_obj.get("plugin_id"),
+                "adoption_readiness": profile_obj.get("adoption_readiness"),
+                "adoption_confidence_score": profile_obj.get("adoption_confidence_score"),
+                "persistence_strategy": profile_obj.get("persistence_strategy"),
+                "repo_anchor_candidates": profile_obj.get("repo_anchor_candidates"),
+                "seed_steps": list(practical_ctx["seed_steps"]),
+            }
+
         intent_store_for_controller: IntentStore | None = None
         if outputs_root is not None:
             intent_store_for_controller = JsonFileIntentStore(base_dir=safe_resolve_path(outputs_root))
@@ -667,6 +728,7 @@ class CompileSession:
                     intent_spec=intent_spec,
                     step_outputs=step_outputs,
                     outputs_root=outputs_root,
+                    project_root=Path(project_root).expanduser().resolve() if project_root is not None else None,
                     replay_manifest=effective_replay_manifest,
                     current_intent_semantic_fingerprint=intent_fingerprint.semantic,
                     current_stable_intent_sha256=stable_intent_hash,
@@ -857,8 +919,8 @@ class CompileSession:
             )
             developer_profile_decisions_obj: dict[str, Any] | None = None
             developer_profile_decisions_path = f".akc/run/{result.plan.id}.developer_profile_decisions.json"
-            if profile_mode == "emerging" and developer_profile_decisions is not None:
-                developer_profile_decisions_obj = dict(developer_profile_decisions)
+            if profile_mode == "emerging" and developer_profile_decisions_effective:
+                developer_profile_decisions_obj = dict(developer_profile_decisions_effective)
                 if "fingerprint_sha256" not in developer_profile_decisions_obj:
                     developer_profile_decisions_obj["fingerprint_sha256"] = stable_json_fingerprint(
                         {k: v for k, v in developer_profile_decisions_obj.items() if k != "fingerprint_sha256"}
@@ -994,6 +1056,70 @@ class CompileSession:
                     "path": developer_profile_decisions_path,
                     "sha256": output_hashes.get(developer_profile_decisions_path),
                 }
+            practical_md = artifact_bundle_md.get("practical_backend_generation")
+            if isinstance(practical_md, dict):
+                bg_path = practical_md.get("backend_generation_profile_path")
+                if isinstance(bg_path, str) and bg_path.strip():
+                    control_plane_obj["backend_generation_profile_ref"] = {
+                        "path": bg_path,
+                        "sha256": output_hashes.get(bg_path),
+                    }
+                bi_path = practical_md.get("backend_ir_path")
+                if isinstance(bi_path, str) and bi_path.strip():
+                    control_plane_obj["backend_ir_ref"] = {
+                        "path": bi_path,
+                        "sha256": output_hashes.get(bi_path),
+                    }
+                ip_path = practical_md.get("implementation_plan_path")
+                if isinstance(ip_path, str) and ip_path.strip():
+                    control_plane_obj["implementation_plan_ref"] = {
+                        "path": ip_path,
+                        "sha256": output_hashes.get(ip_path),
+                    }
+                pr_path = practical_md.get("practical_generation_result_path")
+                if isinstance(pr_path, str) and pr_path.strip():
+                    control_plane_obj["practical_generation_result_ref"] = {
+                        "path": pr_path,
+                        "sha256": output_hashes.get(pr_path),
+                    }
+                ac_path = practical_md.get("implementation_acceptance_contract_path")
+                if isinstance(ac_path, str) and ac_path.strip():
+                    control_plane_obj["implementation_acceptance_contract_ref"] = {
+                        "path": ac_path,
+                        "sha256": output_hashes.get(ac_path),
+                    }
+                rp_path = practical_md.get("runtime_plugin_decision_path")
+                if isinstance(rp_path, str) and rp_path.strip():
+                    control_plane_obj["runtime_plugin_decision_ref"] = {
+                        "path": rp_path,
+                        "sha256": output_hashes.get(rp_path),
+                    }
+                selected_runtime_plugin = practical_md.get("selected_runtime_plugin")
+                if isinstance(selected_runtime_plugin, str) and selected_runtime_plugin.strip():
+                    control_plane_obj["selected_runtime_plugin"] = selected_runtime_plugin
+                adoption_readiness = practical_md.get("adoption_readiness")
+                if isinstance(adoption_readiness, str) and adoption_readiness.strip():
+                    control_plane_obj["practical_generation_status"] = adoption_readiness
+                adoption_confidence = practical_md.get("adoption_confidence_score")
+                if isinstance(adoption_confidence, (int, float)) and not isinstance(adoption_confidence, bool):
+                    control_plane_obj["practical_generation_confidence_score"] = float(adoption_confidence)
+            infra_md = artifact_bundle_md.get("infrastructure_synthesis")
+            if isinstance(infra_md, dict):
+                infra_plan_path = infra_md.get("infra_plan_path")
+                if isinstance(infra_plan_path, str) and infra_plan_path.strip():
+                    control_plane_obj["infra_plan_ref"] = {
+                        "path": infra_plan_path,
+                        "sha256": output_hashes.get(infra_plan_path),
+                    }
+                iac_manifest_path = infra_md.get("iac_manifest_path")
+                if isinstance(iac_manifest_path, str) and iac_manifest_path.strip():
+                    control_plane_obj["iac_manifest_ref"] = {
+                        "path": iac_manifest_path,
+                        "sha256": output_hashes.get(iac_manifest_path),
+                    }
+                provisioning_readiness = infra_md.get("provisioning_readiness")
+                if isinstance(provisioning_readiness, dict):
+                    control_plane_obj["provisioning_readiness"] = dict(provisioning_readiness)
             if promotion_packet_obj is not None:
                 control_plane_obj["promotion_packet_ref"] = {
                     "path": promotion_packet_path,
@@ -1740,6 +1866,7 @@ class CompileSession:
         intent_spec: IntentSpecV1,
         step_outputs: dict[str, Any],
         outputs_root: str | Path,
+        project_root: Path | None,
         replay_manifest: RunManifest | None,
         current_intent_semantic_fingerprint: str | None,
         current_stable_intent_sha256: str | None = None,
@@ -1765,6 +1892,7 @@ class CompileSession:
         artifacts_by_group: dict[str, list[OutputArtifact]] = {
             "specs": [],
             "code_stubs": [],
+            "execution": [],
             "runtime": [],
             "deployment_configs": [],
         }
@@ -1773,6 +1901,7 @@ class CompileSession:
         groups: dict[str, list[str]] = {
             "specs": [],
             "code_stubs": [],
+            "execution": [],
             "runtime": [],
             "deployment_configs": [],
         }
@@ -1887,9 +2016,15 @@ class CompileSession:
             span_start_ns: int,
         ) -> None:
             def _artifact_group_for_path(path: str) -> str:
+                if path.startswith(".akc/execution/"):
+                    return "execution"
                 if path.startswith(".akc/runtime/"):
                     return "runtime"
-                if path.startswith(".akc/deployment/") or path.startswith(".github/workflows/"):
+                if (
+                    path.startswith(".akc/deployment/")
+                    or path.startswith(".akc/infra/")
+                    or path.startswith(".github/workflows/")
+                ):
                     return "deployment_configs"
                 if path.endswith(".py") or path.endswith(".ts"):
                     return "code_stubs"
@@ -1915,6 +2050,12 @@ class CompileSession:
                 rb_path = next((p for p in artifact_paths if str(p).endswith(".runtime_bundle.json")), None)
                 if rb_path is not None:
                     metadata["runtime_bundle_path"] = rb_path
+            if name == "execution_workspace":
+                ew_path = next(
+                    (p for p in artifact_paths if str(p).endswith(".execution_workspace_manifest.json")), None
+                )
+                if ew_path is not None:
+                    metadata["execution_workspace_manifest_path"] = ew_path
             if name == "delivery_plan":
                 dp_path = next((p for p in artifact_paths if str(p).endswith(".delivery_plan.json")), None)
                 if dp_path is not None:
@@ -1922,6 +2063,29 @@ class CompileSession:
                 ds_path = next((p for p in artifact_paths if str(p).endswith(".delivery_summary.md")), None)
                 if ds_path is not None:
                     metadata["delivery_summary_path"] = ds_path
+            if name == "infrastructure_synthesis":
+                ip_path = next((p for p in artifact_paths if str(p).endswith(".infra_plan.json")), None)
+                if ip_path is not None:
+                    metadata["infra_plan_path"] = ip_path
+                im_path = next((p for p in artifact_paths if str(p).endswith(".iac_manifest.json")), None)
+                if im_path is not None:
+                    metadata["iac_manifest_path"] = im_path
+                is_path = next((p for p in artifact_paths if str(p).endswith(".infra_summary.md")), None)
+                if is_path is not None:
+                    metadata["infra_summary_path"] = is_path
+            if name == "practical_backend_generation":
+                pr_path = next(
+                    (p for p in artifact_paths if str(p).endswith(".practical_generation_result.json")),
+                    None,
+                )
+                if pr_path is not None:
+                    metadata["practical_generation_result_path"] = pr_path
+                ac_path = next(
+                    (p for p in artifact_paths if str(p).endswith(".implementation_acceptance_contract.json")),
+                    None,
+                )
+                if ac_path is not None:
+                    metadata["implementation_acceptance_contract_path"] = ac_path
             pass_records.append(
                 PassRecord(
                     name=name,
@@ -1973,8 +2137,29 @@ class CompileSession:
                 return None
             return _load_replayed_pass_artifacts(name=pass_name)
 
+        def _practical_handoff_from_artifacts(artifacts: list[OutputArtifact]) -> PracticalBackendHandoff | None:
+            by_suffix = {
+                ".generation_profile.json": "backend_generation_profile",
+                ".backend_ir.json": "backend_ir",
+                ".implementation_plan.json": "implementation_plan",
+                ".implementation_acceptance_contract.json": "implementation_acceptance_contract",
+                ".practical_generation_result.json": "practical_generation_result",
+                ".runtime_plugin_decision.json": "runtime_plugin_decision",
+            }
+            ctx: dict[str, Any] = {}
+            for artifact in artifacts:
+                for suffix, key in by_suffix.items():
+                    if artifact.path.endswith(suffix):
+                        parsed = parse_json_artifact_text(artifact.text())
+                        ctx[key] = parsed
+                        break
+            if set(ctx) != set(by_suffix.values()):
+                return None
+            return practical_backend_handoff_from_context(ctx)
+
         orchestration_json_text: str
         coordination_json_text: str
+        practical_backend_handoff: PracticalBackendHandoff | None = None
 
         system_replayed = _maybe_load_replay_pass("system_design")
         if system_replayed is not None:
@@ -2094,6 +2279,8 @@ class CompileSession:
             )
 
         delivery_plan_json_text: str
+        infra_plan_json_text: str | None = None
+        iac_manifest_json_text: str | None = None
         delivery_plan_replayed = _maybe_load_replay_pass("delivery_plan")
         if delivery_plan_replayed is not None:
             delivery_plan_span_start_ns = now_unix_nano()
@@ -2148,6 +2335,137 @@ class CompileSession:
                 span_start_ns=delivery_plan_span_start_ns,
             )
 
+        infrastructure_synthesis_replayed = _maybe_load_replay_pass("infrastructure_synthesis")
+        if infrastructure_synthesis_replayed is not None:
+            infrastructure_synthesis_span_start_ns = now_unix_nano()
+            previous, infrastructure_artifacts = infrastructure_synthesis_replayed
+            infra_plan_artifact = next(
+                (artifact for artifact in infrastructure_artifacts if artifact.path.endswith(".infra_plan.json")),
+                None,
+            )
+            iac_manifest_artifact = next(
+                (artifact for artifact in infrastructure_artifacts if artifact.path.endswith(".iac_manifest.json")),
+                None,
+            )
+            infra_plan_json_text = infra_plan_artifact.text() if infra_plan_artifact else None
+            iac_manifest_json_text = iac_manifest_artifact.text() if iac_manifest_artifact else None
+            _register_pass(
+                name="infrastructure_synthesis",
+                pass_artifacts=infrastructure_artifacts,
+                group="deployment_configs",
+                base_metadata={
+                    **dict(previous.metadata or {}),
+                    **({"replay_mode": replay_manifest.replay_mode} if replay_manifest else {}),
+                },
+                replay_source_run_id=replay_manifest.run_id if replay_manifest else None,
+                span_start_ns=infrastructure_synthesis_span_start_ns,
+            )
+        else:
+            infrastructure_synthesis_span_start_ns = now_unix_nano()
+            infrastructure_result = run_infrastructure_synthesis_pass(
+                run_id=run_id,
+                ir_document=ir_doc,
+                delivery_plan_text=delivery_plan_json_text,
+            )
+            infra_plan_json_text = infrastructure_result.artifact_infra_plan_json.text()
+            iac_manifest_json_text = infrastructure_result.artifact_iac_manifest_json.text()
+            _register_pass(
+                name="infrastructure_synthesis",
+                pass_artifacts=[
+                    infrastructure_result.artifact_infra_plan_json,
+                    infrastructure_result.artifact_iac_manifest_json,
+                    infrastructure_result.artifact_summary_md,
+                    *infrastructure_result.additional_artifacts,
+                ],
+                group="deployment_configs",
+                base_metadata=dict(infrastructure_result.metadata),
+                span_start_ns=infrastructure_synthesis_span_start_ns,
+            )
+
+        practical_backend_generation_replayed = _maybe_load_replay_pass("practical_backend_generation")
+        if practical_backend_generation_replayed is not None:
+            practical_backend_generation_span_start_ns = now_unix_nano()
+            previous, practical_backend_generation_artifacts = practical_backend_generation_replayed
+            practical_backend_handoff = _practical_handoff_from_artifacts(practical_backend_generation_artifacts)
+            _register_pass(
+                name="practical_backend_generation",
+                pass_artifacts=practical_backend_generation_artifacts,
+                group="specs",
+                base_metadata={
+                    **dict(previous.metadata or {}),
+                    **({"replay_mode": replay_manifest.replay_mode} if replay_manifest else {}),
+                },
+                replay_source_run_id=replay_manifest.run_id if replay_manifest else None,
+                span_start_ns=practical_backend_generation_span_start_ns,
+            )
+        else:
+            practical_backend_generation_span_start_ns = now_unix_nano()
+            practical_backend_generation_result = run_practical_backend_generation_pass(
+                run_id=run_id,
+                ir_document=ir_doc,
+                intent_spec=intent_spec,
+                project_root=project_root,
+                delivery_plan_text=delivery_plan_json_text,
+                compile_succeeded=True,
+            )
+            practical_backend_handoff = practical_backend_generation_result.handoff
+            _register_pass(
+                name="practical_backend_generation",
+                pass_artifacts=list(practical_backend_generation_result.artifacts),
+                group="specs",
+                base_metadata=dict(practical_backend_generation_result.metadata),
+                span_start_ns=practical_backend_generation_span_start_ns,
+            )
+
+        execution_workspace_manifest_text: str | None = None
+        execution_workspace_replayed = _maybe_load_replay_pass("execution_workspace")
+        if execution_workspace_replayed is not None:
+            execution_workspace_span_start_ns = now_unix_nano()
+            previous, execution_workspace_artifacts = execution_workspace_replayed
+            execution_workspace_manifest = next(
+                (
+                    artifact
+                    for artifact in execution_workspace_artifacts
+                    if artifact.path.endswith(".execution_workspace_manifest.json")
+                ),
+                None,
+            )
+            execution_workspace_manifest_text = (
+                execution_workspace_manifest.text() if execution_workspace_manifest else None
+            )
+            _register_pass(
+                name="execution_workspace",
+                pass_artifacts=execution_workspace_artifacts,
+                group="execution",
+                base_metadata={
+                    **dict(previous.metadata or {}),
+                    **({"replay_mode": replay_manifest.replay_mode} if replay_manifest else {}),
+                },
+                replay_source_run_id=replay_manifest.run_id if replay_manifest else None,
+                span_start_ns=execution_workspace_span_start_ns,
+            )
+        else:
+            execution_workspace_span_start_ns = now_unix_nano()
+            execution_workspace_result = run_execution_workspace_pass(
+                run_id=run_id,
+                ir_document=ir_doc,
+                intent_spec=intent_spec,
+                delivery_plan_text=delivery_plan_json_text,
+                project_root=project_root,
+                practical_backend_handoff=practical_backend_handoff,
+            )
+            execution_workspace_manifest_text = execution_workspace_result.artifact_manifest_json.text()
+            _register_pass(
+                name="execution_workspace",
+                pass_artifacts=[
+                    execution_workspace_result.artifact_manifest_json,
+                    *execution_workspace_result.additional_artifacts,
+                ],
+                group="execution",
+                base_metadata=dict(execution_workspace_result.metadata),
+                span_start_ns=execution_workspace_span_start_ns,
+            )
+
         runtime_bundle_replayed = _maybe_load_replay_pass("runtime_bundle")
         if runtime_bundle_replayed is not None:
             runtime_bundle_span_start_ns = now_unix_nano()
@@ -2175,6 +2493,9 @@ class CompileSession:
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
                 delivery_plan_text=delivery_plan_json_text,
+                infra_plan_text=infra_plan_json_text,
+                iac_manifest_text=iac_manifest_json_text,
+                execution_workspace_manifest_text=execution_workspace_manifest_text,
                 embed_system_ir=bool(runtime_bundle_embed_system_ir),
                 runtime_bundle_schema_version=int(runtime_bundle_schema_version),
                 reconcile_deploy_targets_from_ir_only=bool(reconcile_deploy_targets_from_ir_only),
@@ -2218,6 +2539,7 @@ class CompileSession:
                 orchestration_spec_text=orchestration_json_text,
                 coordination_spec_text=coordination_json_text,
                 delivery_plan_text=delivery_plan_json_text,
+                execution_workspace_manifest_text=execution_workspace_manifest_text,
             )
             deployment_docker_compose_text = deployment_result.artifact_docker_compose.text()
             _register_pass(
@@ -2281,15 +2603,22 @@ class CompileSession:
             (record for record in pass_records if record.name == "runtime_bundle"),
             None,
         )
+        practical_generation_record = next(
+            (record for record in pass_records if record.name == "practical_backend_generation"),
+            None,
+        )
         if runtime_bundle_record is not None and runtime_bundle_record.metadata is not None:
             bundle_md["runtime_bundle"] = dict(runtime_bundle_record.metadata)
             # Runtime CLI appends per-run coordination audit JSONL; record the stable relative layout for manifests.
             bundle_md["runtime_coordination_audit_evidence_relative_path"] = (
                 ".akc/runtime/<compile_run_id>/<runtime_run_id>/evidence/coordination_audit.jsonl"
             )
+        if practical_generation_record is not None and practical_generation_record.metadata is not None:
+            bundle_md["practical_backend_generation"] = dict(practical_generation_record.metadata)
         ordered_artifacts = (
             artifacts_by_group["specs"]
             + artifacts_by_group["code_stubs"]
+            + artifacts_by_group["execution"]
             + artifacts_by_group["runtime"]
             + artifacts_by_group["deployment_configs"]
         )

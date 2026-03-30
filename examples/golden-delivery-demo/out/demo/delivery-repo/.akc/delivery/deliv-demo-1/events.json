@@ -1,0 +1,24 @@
+{
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "events": [
+    {
+      "event_type": "delivery_request_parsed",
+      "occurred_at_unix_ms": 1774907537459,
+      "payload": {
+        "delivery_id": "deliv-demo-1"
+      }
+    },
+    {
+      "event_type": "delivery_preflight_completed",
+      "occurred_at_unix_ms": 1774907537459,
+      "payload": {
+        "ok": false,
+        "reason": "packaging preflight blocked (golden demo)"
+      }
+    }
+  ],
+  "schema_id": "akc:delivery_events:v1",
+  "schema_version": 1,
+  "updated_at_unix_ms": 1774907537459
+}

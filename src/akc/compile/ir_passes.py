@@ -33,6 +33,7 @@ class IRGeneratePromptPass(Protocol):
         retrieved_context: Mapping[str, Any],
         test_policy: Mapping[str, Any],
         stage: str,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -55,6 +56,7 @@ class IRRepairPromptPass(Protocol):
         last_generation_text: str,
         failure: FailureSummary,
         verifier_feedback: Mapping[str, Any] | None,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -75,6 +77,7 @@ class DefaultIRGeneratePromptPass:
         retrieved_context: Mapping[str, Any],
         test_policy: Mapping[str, Any],
         stage: str,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str:
         # Prefix the prompt with an IR fingerprint so the prompt key and
         # cached candidate mapping become IR-sensitive.
@@ -123,10 +126,16 @@ class DefaultIRGeneratePromptPass:
             "- By default, include relevant test changes in the same patch "
             "(add/update tests that cover your change).\n"
         )
+        practical_section = (
+            format_prompt_json_section("Practical backend generation context:", practical_context)
+            if practical_context
+            else ""
+        )
         return (
             head
             + format_prompt_json_section("IR (compact structural graph):", ir_compact)
             + format_prompt_json_section("Plan execution trace:", plan_trace)
+            + practical_section
             + tail
         )
 
@@ -151,6 +160,7 @@ class DefaultIRRepairPromptPass:
         last_generation_text: str,
         failure: FailureSummary,
         verifier_feedback: Mapping[str, Any] | None,
+        practical_context: Mapping[str, Any] | None = None,
     ) -> str:
         ir_fingerprint = ir_doc.fingerprint()
         prompt = build_repair_prompt(
@@ -167,5 +177,6 @@ class DefaultIRRepairPromptPass:
             last_generation_text=last_generation_text,
             failure=failure,
             verifier_feedback=verifier_feedback,
+            practical_context=practical_context,
         )
         return f"IR fingerprint: {ir_fingerprint}\n\n{prompt}"

@@ -392,7 +392,7 @@ class ControllerConfig:
     # When None, inherits ``warn``/``error`` from ``ir_operational_structure_policy`` (off when IR policy is off).
     deployment_intents_ir_alignment_policy: Literal["off", "warn", "error"] | None = None
     # Runtime bundle artifact envelope (see docs/ir-schema.md). Use v1/v2 only for legacy tests.
-    runtime_bundle_schema_version: int = 4
+    runtime_bundle_schema_version: int = 5
     # Embed full IR JSON in the bundle (larger artifact; use for air-gapped / debugging only).
     runtime_bundle_embed_system_ir: bool = False
     # When True, emitted v4+ bundles set ``reconcile_deploy_targets_from_ir_only`` so the reconciler
@@ -535,8 +535,8 @@ class ControllerConfig:
             and self.deployment_intents_ir_alignment_policy not in {"off", "warn", "error"}
         ):
             raise ValueError("deployment_intents_ir_alignment_policy must be one of: off, warn, error, or None")
-        if int(self.runtime_bundle_schema_version) not in (1, 2, 3, 4):
-            raise ValueError("runtime_bundle_schema_version must be 1, 2, 3, or 4")
+        if int(self.runtime_bundle_schema_version) not in (1, 2, 3, 4, 5):
+            raise ValueError("runtime_bundle_schema_version must be 1, 2, 3, 4, or 5")
         if not isinstance(self.runtime_bundle_embed_system_ir, bool):
             raise ValueError("runtime_bundle_embed_system_ir must be a bool")
         if not isinstance(self.reconcile_deploy_targets_from_ir_only, bool):

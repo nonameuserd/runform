@@ -32,9 +32,30 @@ sorted artifact path + sha256; see `CompileSession._register_pass`):
     `.akc/design/<run_id>.delivery_summary.md` (non-technical narrative; JSON remains authoritative).
   - Hash inputs: same registration rule.
 
+- **infrastructure_synthesis**
+  - Inputs: `IRDocument`, optional delivery-plan JSON text.
+  - Outputs: `.akc/infra/<run_id>.infra_plan.json`, `.akc/infra/<run_id>.iac_manifest.json`,
+    generated Terraform/AWS CDK workspaces under `.akc/infra/<run_id>/`, and companion
+    `.akc/design/<run_id>.infra_summary.md`.
+  - Hash inputs: same registration rule.
+
+- **execution_workspace**
+  - Inputs: `IRDocument`, `IntentSpec`, optional delivery-plan JSON text, optional `project_root`.
+  - Outputs: `.akc/execution/<run_id>.execution_workspace_manifest.json` and generated
+    workspace files under `.akc/execution/<run_id>/workspace/`.
+  - Hash inputs: same registration rule.
+
+- **practical_backend_generation**
+  - Inputs: `IRDocument`, `IntentSpec`, optional delivery-plan JSON text, optional `project_root`.
+  - Outputs: `.akc/backend/<run_id>.*.json` practical backend analysis, IR, derived contract index,
+    plan, acceptance, result, runtime-plugin decision artifacts, and per-target `.openapi.json`
+    HTTP contracts for code generation.
+  - Hash inputs: same registration rule.
+
 - **runtime_bundle**
   - Inputs: `IRDocument`, `IntentSpec`, orchestration JSON text, coordination
-    JSON text, optional delivery-plan JSON text (from prior passes; may be replay-cloned).
+    JSON text, optional delivery-plan JSON text, optional execution-workspace manifest JSON text
+    (from prior passes; may be replay-cloned).
   - Outputs: `.akc/runtime/<run_id>.runtime_bundle.json` (schema envelope);
     bundle embeds `spec_hashes` (fingerprints of orchestration/coordination JSON
     objects) and IR/intent references.
@@ -61,11 +82,18 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from akc.artifacts.contracts import apply_schema_envelope
 from akc.artifacts.schemas import RUNTIME_BUNDLE_SCHEMA_VERSION
 from akc.compile.artifact_consistency import effective_allow_network_for_handoff
+from akc.compile.backend_generation import (
+    PracticalBackendHandoff,
+    build_practical_backend_context,
+    practical_backend_handoff_from_context,
+)
 from akc.compile.delivery_projection import (
     build_delivery_plan,
     parse_json_artifact_text,
     render_delivery_summary_markdown,
 )
+from akc.compile.execution_workspace import build_execution_workspace
+from akc.compile.infrastructure_synthesis import build_infrastructure_synthesis
 from akc.compile.interfaces import LLMMessage, LLMRequest, TenantRepoScope
 from akc.compile.patch_utils import extract_touched_paths
 from akc.intent.policy_projection import (
@@ -160,6 +188,32 @@ class RuntimeBundlePassResult:
 class DeliveryPlanPassResult:
     artifact_json: OutputArtifact
     artifact_summary_md: OutputArtifact
+    output_sha256: str
+    metadata: dict[str, JSONValue]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionWorkspacePassResult:
+    artifact_manifest_json: OutputArtifact
+    additional_artifacts: tuple[OutputArtifact, ...]
+    output_sha256: str
+    metadata: dict[str, JSONValue]
+
+
+@dataclass(frozen=True, slots=True)
+class PracticalBackendGenerationPassResult:
+    artifacts: tuple[OutputArtifact, ...]
+    handoff: PracticalBackendHandoff
+    output_sha256: str
+    metadata: dict[str, JSONValue]
+
+
+@dataclass(frozen=True, slots=True)
+class InfrastructureSynthesisPassResult:
+    artifact_infra_plan_json: OutputArtifact
+    artifact_iac_manifest_json: OutputArtifact
+    artifact_summary_md: OutputArtifact
+    additional_artifacts: tuple[OutputArtifact, ...]
     output_sha256: str
     metadata: dict[str, JSONValue]
 
@@ -1208,6 +1262,180 @@ def run_delivery_plan_pass(
     )
 
 
+def run_infrastructure_synthesis_pass(
+    *,
+    run_id: str,
+    ir_document: IRDocument,
+    delivery_plan_text: str | None = None,
+) -> InfrastructureSynthesisPassResult:
+    delivery_plan_obj = (
+        parse_json_artifact_text(delivery_plan_text)
+        if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
+    infra_plan_obj, iac_manifest_obj, artifacts = build_infrastructure_synthesis(
+        run_id=run_id,
+        ir_document=ir_document,
+        delivery_plan_obj=delivery_plan_obj,
+    )
+    infra_plan_artifact = artifacts[0]
+    iac_manifest_artifact = artifacts[1]
+    summary_artifact = artifacts[2]
+    return InfrastructureSynthesisPassResult(
+        artifact_infra_plan_json=infra_plan_artifact,
+        artifact_iac_manifest_json=iac_manifest_artifact,
+        artifact_summary_md=summary_artifact,
+        additional_artifacts=tuple(artifacts[3:]),
+        output_sha256=stable_json_fingerprint({artifact.path: artifact.sha256_hex() for artifact in artifacts}),
+        metadata={
+            "run_id": run_id,
+            "infra_plan_path": infra_plan_artifact.path,
+            "iac_manifest_path": iac_manifest_artifact.path,
+            "infra_summary_path": summary_artifact.path,
+            "supported_iac_backends": cast(
+                JSONValue,
+                list(cast(list[Any], iac_manifest_obj.get("supported_backends", []))),
+            ),
+            "preferred_iac_backend": str(iac_manifest_obj.get("preferred_backend") or "terraform"),
+            "provisioning_readiness": cast(
+                JSONValue,
+                dict(cast(dict[str, Any], infra_plan_obj.get("provisioning_readiness") or {})),
+            ),
+            "generated_artifact_count": len(artifacts),
+        },
+    )
+
+
+def run_practical_backend_generation_pass(
+    *,
+    run_id: str,
+    ir_document: IRDocument,
+    intent_spec: IntentSpec,
+    project_root: Path | None,
+    delivery_plan_text: str | None = None,
+    compile_succeeded: bool | None = None,
+) -> PracticalBackendGenerationPassResult:
+    delivery_plan_obj = (
+        parse_json_artifact_text(delivery_plan_text)
+        if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
+    ctx = build_practical_backend_context(
+        run_id=run_id,
+        ir_document=ir_document,
+        intent_spec=cast(Any, intent_spec),
+        project_root=project_root,
+        delivery_plan_obj=delivery_plan_obj,
+        compile_succeeded=compile_succeeded,
+    )
+    handoff = practical_backend_handoff_from_context(ctx)
+    specs: tuple[tuple[str, str], ...] = (
+        ("backend_generation_profile", f".akc/backend/{run_id}.generation_profile.json"),
+        ("backend_ir", f".akc/backend/{run_id}.backend_ir.json"),
+        ("backend_api_contract_index", f".akc/backend/{run_id}.backend_api_contract_index.json"),
+        ("implementation_plan", f".akc/backend/{run_id}.implementation_plan.json"),
+        (
+            "implementation_acceptance_contract",
+            f".akc/backend/{run_id}.implementation_acceptance_contract.json",
+        ),
+        ("practical_generation_result", f".akc/backend/{run_id}.practical_generation_result.json"),
+        ("runtime_plugin_decision", f".akc/backend/{run_id}.runtime_plugin_decision.json"),
+    )
+    emitted: list[OutputArtifact] = []
+    output_sha_parts: dict[str, str] = {}
+    for kind, path in specs:
+        obj = apply_schema_envelope(obj=dict(cast(dict[str, Any], ctx[kind])), kind=cast(Any, kind), version=1)
+        art = OutputArtifact.from_json(path=path, obj=obj, metadata={"run_id": run_id, "kind": kind})
+        emitted.append(art)
+        output_sha_parts[path] = art.sha256_hex()
+    api_contracts = cast(dict[str, dict[str, Any]], ctx.get("api_contracts") or {})
+    contract_index_obj = cast(dict[str, Any], ctx["backend_api_contract_index"])
+    contract_ref_paths = {
+        str(row.get("target_id", "")).strip(): str(row.get("openapi_rel_path", "")).strip()
+        for row in cast(list[Any], contract_index_obj.get("contract_refs", []))
+        if isinstance(row, Mapping)
+        and str(row.get("target_id", "")).strip()
+        and str(row.get("openapi_rel_path", "")).strip()
+    }
+    for target_id in sorted(api_contracts):
+        contract_obj = api_contracts[target_id]
+        path = contract_ref_paths.get(target_id, f".akc/backend/{run_id}.{target_id}.openapi.json")
+        art = OutputArtifact.from_json(
+            path=path,
+            obj=contract_obj,
+            metadata={"run_id": run_id, "kind": "backend_openapi_contract", "target_id": target_id},
+        )
+        emitted.append(art)
+        output_sha_parts[path] = art.sha256_hex()
+    result_obj = cast(dict[str, Any], ctx["practical_generation_result"])
+    plugin_obj = cast(dict[str, Any], ctx["runtime_plugin_decision"])
+    profile_obj = cast(dict[str, Any], ctx["backend_generation_profile"])
+    return PracticalBackendGenerationPassResult(
+        artifacts=tuple(emitted),
+        handoff=handoff,
+        output_sha256=stable_json_fingerprint(output_sha_parts),
+        metadata={
+            "run_id": run_id,
+            "selected_runtime_plugin": str(plugin_obj.get("plugin_id", "")),
+            "selected_runtime_maturity": str(plugin_obj.get("maturity", "")),
+            "adoption_readiness": str(profile_obj.get("adoption_readiness", "")),
+            "adoption_confidence_score": cast(JSONValue, profile_obj.get("adoption_confidence_score")),
+            "backend_generation_profile_path": f".akc/backend/{run_id}.generation_profile.json",
+            "backend_ir_path": f".akc/backend/{run_id}.backend_ir.json",
+            "backend_api_contract_index_path": f".akc/backend/{run_id}.backend_api_contract_index.json",
+            "implementation_plan_path": f".akc/backend/{run_id}.implementation_plan.json",
+            "practical_generation_result_path": f".akc/backend/{run_id}.practical_generation_result.json",
+            "implementation_acceptance_contract_path": (
+                f".akc/backend/{run_id}.implementation_acceptance_contract.json"
+            ),
+            "runtime_plugin_decision_path": f".akc/backend/{run_id}.runtime_plugin_decision.json",
+            "api_contract_refs": cast(JSONValue, list(contract_index_obj.get("contract_refs", []))),
+            "blocked_reasons": cast(JSONValue, list(result_obj.get("blocked_reasons", []))),
+        },
+    )
+
+
+def run_execution_workspace_pass(
+    *,
+    run_id: str,
+    ir_document: IRDocument,
+    intent_spec: IntentSpec,
+    delivery_plan_text: str | None = None,
+    project_root: Path | None = None,
+    practical_backend_handoff: PracticalBackendHandoff | None = None,
+) -> ExecutionWorkspacePassResult:
+    _ = intent_spec
+    delivery_plan_obj = (
+        parse_json_artifact_text(delivery_plan_text)
+        if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
+    manifest_obj, artifacts = build_execution_workspace(
+        run_id=run_id,
+        ir_document=ir_document,
+        delivery_plan_obj=delivery_plan_obj,
+        project_root=project_root,
+        practical_backend_handoff=practical_backend_handoff,
+    )
+    manifest_artifact = artifacts[0]
+    return ExecutionWorkspacePassResult(
+        artifact_manifest_json=manifest_artifact,
+        additional_artifacts=tuple(artifacts[1:]),
+        output_sha256=manifest_artifact.sha256_hex(),
+        metadata={
+            "run_id": run_id,
+            "execution_workspace_manifest_path": manifest_artifact.path,
+            "execution_workspace_root": str(manifest_obj.get("workspace_root") or ""),
+            "generated_file_count": len(cast(list[Any], manifest_obj.get("generated_files", []))),
+            "runtime_profile": str(manifest_obj.get("runtime_profile") or ""),
+            "package_manager": str(manifest_obj.get("package_manager") or ""),
+            "build_profiles": cast(JSONValue, dict(cast(dict[str, Any], manifest_obj.get("build_profiles") or {}))),
+            "artifact_role": str(manifest_obj.get("artifact_role") or "fallback_debug_reference"),
+            "practical_generation_proof": bool(manifest_obj.get("practical_generation_proof", False)),
+        },
+    )
+
+
 def run_runtime_bundle_pass(
     *,
     run_id: str,
@@ -1216,6 +1444,9 @@ def run_runtime_bundle_pass(
     orchestration_spec_text: str,
     coordination_spec_text: str,
     delivery_plan_text: str | None = None,
+    infra_plan_text: str | None = None,
+    iac_manifest_text: str | None = None,
+    execution_workspace_manifest_text: str | None = None,
     embed_system_ir: bool = False,
     runtime_bundle_schema_version: int = RUNTIME_BUNDLE_SCHEMA_VERSION,
     reconcile_deploy_targets_from_ir_only: bool = False,
@@ -1227,6 +1458,19 @@ def run_runtime_bundle_pass(
     delivery_plan_obj = (
         parse_json_artifact_text(delivery_plan_text)
         if isinstance(delivery_plan_text, str) and delivery_plan_text
+        else None
+    )
+    infra_plan_obj = (
+        parse_json_artifact_text(infra_plan_text) if isinstance(infra_plan_text, str) and infra_plan_text else None
+    )
+    iac_manifest_obj = (
+        parse_json_artifact_text(iac_manifest_text)
+        if isinstance(iac_manifest_text, str) and iac_manifest_text
+        else None
+    )
+    execution_workspace_obj = (
+        parse_json_artifact_text(execution_workspace_manifest_text)
+        if isinstance(execution_workspace_manifest_text, str) and execution_workspace_manifest_text
         else None
     )
 
@@ -1348,6 +1592,28 @@ def run_runtime_bundle_pass(
         "path": f".akc/agents/{run_id}.coordination.json",
         "fingerprint": stable_json_fingerprint(coordination_obj),
     }
+    execution_workspace_snapshot = (
+        {
+            "workspace_root": execution_workspace_obj.get("workspace_root"),
+            "runtime_profile": execution_workspace_obj.get("runtime_profile"),
+            "package_manager": execution_workspace_obj.get("package_manager"),
+            "toolchain": execution_workspace_obj.get("toolchain"),
+            "expo": execution_workspace_obj.get("expo"),
+            "build_profiles": execution_workspace_obj.get("build_profiles"),
+            "artifact_role": execution_workspace_obj.get("artifact_role"),
+            "generation_mode": execution_workspace_obj.get("generation_mode"),
+            "practical_generation_proof": execution_workspace_obj.get("practical_generation_proof"),
+            "api_contract_refs": execution_workspace_obj.get("api_contract_refs"),
+        }
+        if isinstance(execution_workspace_obj, Mapping)
+        else None
+    )
+    practical_backend_generation_summary = (
+        dict(cast(dict[str, Any], execution_workspace_obj.get("practical_backend_generation") or {}))
+        if isinstance(execution_workspace_obj, Mapping)
+        and isinstance(execution_workspace_obj.get("practical_backend_generation"), Mapping)
+        else None
+    )
     bundle_payload: dict[str, Any] = {
         "run_id": run_id,
         "tenant_id": scope.tenant_id,
@@ -1371,11 +1637,41 @@ def run_runtime_bundle_pass(
             if isinstance(delivery_plan_obj, Mapping)
             else None
         ),
+        "execution_workspace_ref": (
+            {
+                "path": f".akc/execution/{run_id}.execution_workspace_manifest.json",
+                "fingerprint": stable_json_fingerprint(execution_workspace_obj),
+            }
+            if isinstance(execution_workspace_obj, Mapping)
+            else None
+        ),
+        "infra_plan_ref": (
+            {
+                "path": f".akc/infra/{run_id}.infra_plan.json",
+                "fingerprint": stable_json_fingerprint(infra_plan_obj),
+            }
+            if isinstance(infra_plan_obj, Mapping)
+            else None
+        ),
+        "iac_manifest_ref": (
+            {
+                "path": f".akc/infra/{run_id}.iac_manifest.json",
+                "fingerprint": stable_json_fingerprint(iac_manifest_obj),
+            }
+            if isinstance(iac_manifest_obj, Mapping)
+            else None
+        ),
         "promotion_readiness": (
             cast(dict[str, Any], delivery_plan_obj.get("promotion_readiness"))
             if isinstance(delivery_plan_obj, Mapping)
             else {"status": "unknown"}
         ),
+        "provisioning_readiness": (
+            cast(dict[str, Any], infra_plan_obj.get("provisioning_readiness"))
+            if isinstance(infra_plan_obj, Mapping)
+            else {"status": "unknown"}
+        ),
+        "execution_workspace": execution_workspace_snapshot,
         "runtime_policy_envelope": runtime_policy_envelope,
         "deployment_provider_contract": _default_deployment_provider_contract(),
         "workflow_execution_contract": _default_workflow_execution_contract(),
@@ -1391,6 +1687,17 @@ def run_runtime_bundle_pass(
             bundle_payload["deployment_intents_ir_alignment"] = "strict"
         if reconcile_deploy_targets_from_ir_only:
             bundle_payload["reconcile_deploy_targets_from_ir_only"] = True
+    if int(runtime_bundle_schema_version) >= 5:
+        bundle_payload["execution_workspace_authority"] = (
+            {
+                "artifact_role": execution_workspace_obj.get("artifact_role"),
+                "generation_mode": execution_workspace_obj.get("generation_mode"),
+                "practical_generation_proof": bool(execution_workspace_obj.get("practical_generation_proof")),
+            }
+            if isinstance(execution_workspace_obj, Mapping)
+            else None
+        )
+        bundle_payload["practical_backend_generation"] = practical_backend_generation_summary
     evidence_expectations = derive_runtime_evidence_expectations(
         projection=runtime_intent_projection.to_json_obj(),
         policy_envelope=runtime_policy_envelope,
@@ -1431,6 +1738,25 @@ def run_runtime_bundle_pass(
             "runtime_bundle_schema_version": int(runtime_bundle_schema_version),
             "orchestration_spec_sha256": stable_json_fingerprint(orchestration_obj),
             "coordination_spec_sha256": stable_json_fingerprint(coordination_obj),
+            "execution_workspace_manifest_path": (
+                f".akc/execution/{run_id}.execution_workspace_manifest.json"
+                if isinstance(execution_workspace_obj, Mapping)
+                else None
+            ),
+            "infra_plan_path": f".akc/infra/{run_id}.infra_plan.json" if isinstance(infra_plan_obj, Mapping) else None,
+            "iac_manifest_path": (
+                f".akc/infra/{run_id}.iac_manifest.json" if isinstance(iac_manifest_obj, Mapping) else None
+            ),
+            "execution_workspace_artifact_role": (
+                str(execution_workspace_obj.get("artifact_role"))
+                if isinstance(execution_workspace_obj, Mapping) and execution_workspace_obj.get("artifact_role")
+                else None
+            ),
+            "practical_generation_proof": (
+                bool(execution_workspace_obj.get("practical_generation_proof"))
+                if isinstance(execution_workspace_obj, Mapping)
+                else False
+            ),
         },
     )
 
@@ -1661,6 +1987,7 @@ def run_deployment_config_pass(
     orchestration_spec_text: str,
     coordination_spec_text: str,
     delivery_plan_text: str | None = None,
+    execution_workspace_manifest_text: str | None = None,
 ) -> DeploymentConfigPassResult:
     image_name = f"ghcr.io/{ir_document.repo_id}/akc:{run_id}"
     intent_ref = build_handoff_intent_ref(intent=intent_spec)
@@ -1671,11 +1998,46 @@ def run_deployment_config_pass(
         if isinstance(delivery_plan_text, str) and delivery_plan_text
         else None
     )
+    execution_workspace_obj = (
+        parse_json_artifact_text(execution_workspace_manifest_text)
+        if isinstance(execution_workspace_manifest_text, str) and execution_workspace_manifest_text
+        else None
+    )
     delivery_targets = (
         cast(list[dict[str, Any]], delivery_plan_obj.get("targets", []))
         if isinstance(delivery_plan_obj, Mapping)
         else []
     )
+    workspace_targets = (
+        cast(list[dict[str, Any]], execution_workspace_obj.get("targets", []))
+        if isinstance(execution_workspace_obj, Mapping) and isinstance(execution_workspace_obj.get("targets"), list)
+        else []
+    )
+    use_workspace_targets = bool(
+        isinstance(execution_workspace_obj, Mapping)
+        and execution_workspace_obj.get("practical_generation_proof")
+        and workspace_targets
+    )
+    if use_workspace_targets:
+        workspace_targets_by_id = {
+            str(row.get("target_id")).strip(): dict(row)
+            for row in workspace_targets
+            if isinstance(row, Mapping) and str(row.get("target_id", "")).strip()
+        }
+        merged_targets: list[dict[str, Any]] = []
+        seen_target_ids: set[str] = set()
+        for target in delivery_targets:
+            target_id = str(target.get("target_id", "")).strip()
+            merged = dict(workspace_targets_by_id.get(target_id, {}))
+            merged.update(dict(target))
+            if merged:
+                merged_targets.append(merged)
+                if target_id:
+                    seen_target_ids.add(target_id)
+        for target_id, row in workspace_targets_by_id.items():
+            if target_id not in seen_target_ids:
+                merged_targets.append(dict(row))
+        delivery_targets = merged_targets
     non_mobile = [t for t in delivery_targets if str(t.get("target_class")) != "mobile_client"]
     deploy_targets = non_mobile if non_mobile else list(delivery_targets)
     primary_target = deploy_targets[0] if deploy_targets else (delivery_targets[0] if delivery_targets else {})
@@ -2349,11 +2711,34 @@ def run_deployment_config_pass(
                 if isinstance(delivery_plan_obj, Mapping)
                 else None
             ),
+            "execution_workspace_ref": (
+                {
+                    "path": f".akc/execution/{run_id}.execution_workspace_manifest.json",
+                    "fingerprint": stable_json_fingerprint(execution_workspace_obj),
+                }
+                if isinstance(execution_workspace_obj, Mapping)
+                else None
+            ),
             "workflow_path": workflow_artifact.path,
             "k8s_deployment_path": deployment_artifact.path,
             "rollout_strategy": rollout_strategy,
             "canary_direct_apply_supported": canary_direct_apply_supported,
             "k8s_secret_manifest_count": len(k8s_secrets),
             "additional_artifact_count": len(additional_artifacts),
+            "runtime_profile": (
+                str(execution_workspace_obj.get("runtime_profile"))
+                if isinstance(execution_workspace_obj, Mapping) and execution_workspace_obj.get("runtime_profile")
+                else None
+            ),
+            "execution_workspace_artifact_role": (
+                str(execution_workspace_obj.get("artifact_role"))
+                if isinstance(execution_workspace_obj, Mapping) and execution_workspace_obj.get("artifact_role")
+                else None
+            ),
+            "practical_generation_proof": (
+                bool(execution_workspace_obj.get("practical_generation_proof"))
+                if isinstance(execution_workspace_obj, Mapping)
+                else False
+            ),
         },
     )

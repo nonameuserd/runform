@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:backend_generator_plugin_manifest:v1",
+  "title": "AKC backend generator plugin manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:backend_generator_plugin_manifest:v1"
+    },
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "interface_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "runtime_family": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "materializer_kind": {
+      "type": "string",
+      "const": "command"
+    },
+    "supports_authoritative_workspace": {
+      "type": "boolean"
+    },
+    "supported_frameworks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_languages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_native_command_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "unsupported_behavior": {
+      "type": "string",
+      "minLength": 1
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "maturity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supported_persistence_modes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_auth_modes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_job_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_observability_libraries": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "plugin_id",
+    "interface_version",
+    "runtime_family",
+    "source",
+    "materializer_kind",
+    "supports_authoritative_workspace",
+    "supported_frameworks",
+    "supported_languages",
+    "required_native_command_kinds",
+    "unsupported_behavior",
+    "command"
+  ]
+}

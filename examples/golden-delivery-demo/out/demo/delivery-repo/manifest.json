@@ -1,0 +1,73 @@
+{
+  "artifacts": [
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c"
+      },
+      "path": ".akc/delivery/deliv-demo-1/request.json",
+      "sha256": "4bb91378a951d2d593576dc2d2b82837df4febb49985217c8180a75e45d666c5",
+      "size_bytes": 757
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c"
+      },
+      "path": ".akc/delivery/deliv-demo-1/session.json",
+      "sha256": "09d446b73a51f7df3fd370d1ff9dfdc611568dc0e5dd5f363b1ab9b7c5282b1a",
+      "size_bytes": 2787
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c"
+      },
+      "path": ".akc/delivery/deliv-demo-1/recipients.json",
+      "sha256": "94c95cbbb3d0c2df45b696f914c433296f5627d53035d4e22defb5eba5c259e1",
+      "size_bytes": 708
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "38188474-3046-43ff-98f5-cd8bbbba4ecf"
+      },
+      "path": ".akc/delivery/deliv-demo-1/events.json",
+      "sha256": "7ae0af9bc7e0f9df72ed68575dc3b0be600fa217a3c5ef9c91e70a6cca6e96cb",
+      "size_bytes": 584
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c"
+      },
+      "path": ".akc/delivery/deliv-demo-1/provider_state.json",
+      "sha256": "d962c8536d652d36676702de5971cfcab78815b4ce80dce33341de80b4ca4e02",
+      "size_bytes": 589
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "2c143d9a-db34-483f-a3fd-61fd1b52a30c"
+      },
+      "path": ".akc/delivery/deliv-demo-1/activation_evidence.json",
+      "sha256": "d295462b7fcdc93f602935b736c6cbb742b427eb624995ce9f01dc41af2a668e",
+      "size_bytes": 208
+    },
+    {
+      "media_type": "text/plain; charset=utf-8",
+      "metadata": {
+        "step_id": "eb2b135f-2201-4c52-8bd1-f135eba1b0a3"
+      },
+      "path": ".akc/delivery/deliv-demo-1/README.txt",
+      "sha256": "40a164c885bfeaaf9d32cb91845f376acf87c6b785bf6a3962e571c4b950d1fa",
+      "size_bytes": 81
+    }
+  ],
+  "metadata": null,
+  "name": "golden_delivery_demo",
+  "repo_id": "delivery-repo",
+  "schema_id": "akc:manifest:v1",
+  "schema_version": 1,
+  "tenant_id": "demo"
+}

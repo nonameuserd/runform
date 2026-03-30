@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:implementation_acceptance_contract:v1",
+  "title": "AKC practical backend acceptance contract",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:implementation_acceptance_contract:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_runtime_plugin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "required_native_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "source": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["kind", "command"]
+      }
+    },
+    "proof_strategy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "proof_command": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ]
+    },
+    "repo_anchor_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_cross_cuts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "persistence_expectation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unsupported_feature_behavior": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "selected_runtime_plugin",
+    "required_native_commands",
+    "proof_strategy",
+    "repo_anchor_paths",
+    "required_cross_cuts",
+    "persistence_expectation",
+    "unsupported_feature_behavior"
+  ]
+}

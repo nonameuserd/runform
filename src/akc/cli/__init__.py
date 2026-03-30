@@ -140,7 +140,22 @@ def _add_llm_backend_args(parser: argparse.ArgumentParser, *, include_legacy_mod
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="akc", description="Agentic Knowledge Compiler")
+    parser = argparse.ArgumentParser(
+        prog="akc",
+        description=("Agentic Knowledge Compiler\n\nWhat's missing to ship?\n  akc deliver preflight\n"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  # What's missing to ship?\n"
+            "  akc deliver preflight\n"
+            "\n"
+            "  # Safe local demo (artifact-only; no working-tree writes)\n"
+            "  akc init\n"
+            "  akc ingest --tenant-id demo --connector docs --input ./docs --embedder hash --index-backend sqlite\n"
+            "  akc compile --tenant-id demo --repo-id runform --outputs-root ./out --artifact-only\n"
+            "  akc verify --tenant-id demo --repo-id runform --outputs-root ./out\n"
+        ),
+    )
     parser.add_argument("--version", action="version", version=f"akc {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -293,8 +308,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--input",
         required=True,
         help=(
-            "Connector input: docs root, OpenAPI spec path/URL, Slack/Discord channel id, Telegram placeholder, "
-            "comma-separated WhatsApp webhook payload file/dir paths, MCP server name / path to MCP JSON"
+            "Connector input: docs root, codebase root, OpenAPI spec path/URL, Slack/Discord channel id, "
+            "Telegram literal 'updates' (getUpdates drain), comma-separated WhatsApp webhook payload paths, "
+            "MCP server name (see --mcp-config) or path to inline single-server MCP JSON"
         ),
     )
 
@@ -2636,20 +2652,33 @@ def _build_parser() -> argparse.ArgumentParser:
 
     from akc.cli.deliver import register_deliver_parsers
     from akc.cli.fleet import register_fleet_parsers
+    from akc.cli.provision import register_provision_parsers
 
     register_deliver_parsers(sub)
+    register_provision_parsers(sub)
     register_fleet_parsers(sub)
 
     view = sub.add_parser(
         "view",
         help="Read-only local viewer over plan state and emitted artifacts",
     )
-    view.add_argument("--tenant-id", required=True, help="Tenant identifier (required)")
-    view.add_argument("--repo-id", required=True, help="Repo identifier (required)")
+    view.add_argument(
+        "--tenant-id",
+        default=None,
+        help="Tenant identifier (or set AKC_TENANT_ID / .akc/project.json tenant_id)",
+    )
+    view.add_argument(
+        "--repo-id",
+        default=None,
+        help="Repo identifier (or set AKC_REPO_ID / .akc/project.json repo_id)",
+    )
     view.add_argument(
         "--outputs-root",
-        required=True,
-        help="Outputs root (contains <tenant>/<repo>/manifest.json and .akc/* artifacts)",
+        default=None,
+        help=(
+            "Outputs root (contains <tenant>/<repo>/manifest.json and .akc/* artifacts). "
+            "Or set AKC_OUTPUTS_ROOT / .akc/project.json outputs_root."
+        ),
     )
     view.add_argument(
         "--plan-base-dir",

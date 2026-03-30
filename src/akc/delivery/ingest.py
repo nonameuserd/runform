@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -225,6 +226,34 @@ def probe_google_services_present(project_dir: Path) -> bool:
     return any(p.is_file() for p in cands)
 
 
+def probe_firebase_android_app_id(project_dir: Path) -> str | None:
+    for path in (
+        project_dir / "android" / "app" / "google-services.json",
+        project_dir / "google-services.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        clients = data.get("client")
+        if not isinstance(clients, list):
+            continue
+        for raw_client in clients:
+            if not isinstance(raw_client, dict):
+                continue
+            client_info = raw_client.get("client_info")
+            if not isinstance(client_info, dict):
+                continue
+            app_id = client_info.get("mobilesdk_app_id")
+            if isinstance(app_id, str) and app_id.strip():
+                return app_id.strip()
+    return None
+
+
 def probe_ios_firebase_plist(project_dir: Path) -> bool:
     root = project_dir / "ios"
     if not root.is_dir():
@@ -305,16 +334,23 @@ def infer_required_accounts_from_human_inputs(rows: Sequence[Mapping[str, Any]])
     """Map ``required_human_inputs`` rows to stable provider account labels (``request.required_accounts``)."""
 
     id_to_account: dict[str, str] = {
+        "expo_project_id": "expo",
+        "expo_access_token": "expo",
         "ios_bundle_id": "apple_developer",
         "apple_team_registration": "apple_developer",
         "ios_signing_assets": "apple_developer",
         "apple_app_store_registration": "app_store_connect",
+        "app_store_connect_api_credentials": "app_store_connect",
+        "testflight_beta_group_id": "app_store_connect",
         "firebase_ios_app_id": "firebase",
         "firebase_android_app_registration": "firebase",
+        "firebase_android_distribution_app_id": "firebase",
+        "firebase_distribution_credentials": "firebase",
         "google_play_app_registration": "google_play",
         "google_play_publisher_credentials": "google_play",
         "android_signing_assets": "google_play",
         "web_hosting_endpoint": "web_hosting",
+        "web_invite_email_transport": "web_hosting",
     }
     seen: set[str] = set()
     out: list[str] = []
@@ -349,6 +385,37 @@ def collect_prerequisite_human_inputs(
                 return False
             cur = cur.get(key)
         return bool(cur)
+
+    def _google_credentials_configured() -> bool:
+        raw = str(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "") or "").strip()
+        if not raw:
+            return False
+        try:
+            return Path(raw).expanduser().is_file()
+        except OSError:
+            return False
+
+    def _firebase_auth_configured() -> bool:
+        return bool(_google_credentials_configured() or os.environ.get("FIREBASE_TOKEN", "").strip())
+
+    def _app_store_connect_api_configured() -> bool:
+        key_id = (
+            os.environ.get("APP_STORE_CONNECT_API_KEY_ID") or os.environ.get("APP_STORE_CONNECT_KEY_ID") or ""
+        ).strip()
+        issuer_id = (
+            os.environ.get("APP_STORE_CONNECT_API_ISSUER_ID") or os.environ.get("APP_STORE_CONNECT_ISSUER_ID") or ""
+        ).strip()
+        key_path = (
+            os.environ.get("APP_STORE_CONNECT_PRIVATE_KEY_PATH")
+            or os.environ.get("APP_STORE_CONNECT_API_KEY_PATH")
+            or ""
+        ).strip()
+        if not key_id or not issuer_id or not key_path:
+            return False
+        try:
+            return Path(key_path).expanduser().is_file()
+        except OSError:
+            return False
 
     def _row(
         *,
@@ -385,6 +452,34 @@ def collect_prerequisite_human_inputs(
     rows: list[dict[str, Any]] = []
     order = 0
 
+    if any(p in {"web", "ios", "android"} for p in platforms):
+        order += 1
+        if not _op(("expo", "project_id")):
+            rows.append(
+                _row(
+                    id_="expo_project_id",
+                    ask_order=order,
+                    reason="Execution workspace packaging uses Expo/EAS as the shared web/mobile shell.",
+                    title="Expo project id",
+                    question="What Expo project id should EAS builds and hosting use for this app?",
+                    value_kind="uuid",
+                    prop="delivery.expo.project_id",
+                ),
+            )
+        order += 1
+        if not os.environ.get("EXPO_TOKEN", "").strip() and not _op(("expo", "access_token_configured")):
+            rows.append(
+                _row(
+                    id_="expo_access_token",
+                    ask_order=order,
+                    reason="Non-interactive EAS build and submit automation needs Expo authentication.",
+                    title="Expo access token",
+                    question="Configure an Expo access token for CI/operator packaging and release automation.",
+                    value_kind="secret_ref",
+                    prop="delivery.expo.access_token",
+                ),
+            )
+
     if "ios" in platforms:
         order += 1
         if not probe_ios_bundle_id(project_dir) and not _op(("ios", "bundle_id")):
@@ -412,6 +507,23 @@ def collect_prerequisite_human_inputs(
                     prop="delivery.ios.apple_team_id",
                 ),
             )
+        order += 1
+        if not _app_store_connect_api_configured() and not _op(("ios", "app_store_connect_api")):
+            rows.append(
+                _row(
+                    id_="app_store_connect_api_credentials",
+                    ask_order=order,
+                    reason=(
+                        "TestFlight and App Store Connect automation need API credentials for non-interactive access."
+                    ),
+                    title="App Store Connect API credentials",
+                    question=(
+                        "Configure the App Store Connect API key id, issuer id, and private key path for this app."
+                    ),
+                    value_kind="secret_ref",
+                    prop="delivery.ios.app_store_connect_api",
+                ),
+            )
         if need_beta or need_store:
             order += 1
             if not probe_ios_signing_hint(project_dir) and not _op(("ios", "signing_assets")):
@@ -429,6 +541,22 @@ def collect_prerequisite_human_inputs(
                         ),
                         value_kind="signing_profile_bundle",
                         prop="delivery.ios.signing_assets",
+                    ),
+                )
+        if need_beta:
+            order += 1
+            if not os.environ.get("AKC_DELIVERY_ASC_BETA_GROUP_ID", "").strip() and not _op(
+                ("ios", "testflight_beta_group_id"),
+            ):
+                rows.append(
+                    _row(
+                        id_="testflight_beta_group_id",
+                        ask_order=order,
+                        reason="API-driven TestFlight invitations need the App Store Connect beta group id.",
+                        title="TestFlight beta group",
+                        question="What App Store Connect beta group id should TestFlight invites use?",
+                        value_kind="app_store_beta_group_id",
+                        prop="delivery.ios.testflight_beta_group_id",
                     ),
                 )
         if need_store:
@@ -489,6 +617,41 @@ def collect_prerequisite_human_inputs(
                     prop="delivery.android.firebase_app_id",
                 ),
             )
+        order += 1
+        if (
+            not probe_firebase_android_app_id(project_dir)
+            and not os.environ.get("AKC_DELIVERY_FIREBASE_APP_ID", "").strip()
+            and not _op(("android", "firebase_app_id"))
+        ):
+            rows.append(
+                _row(
+                    id_="firebase_android_distribution_app_id",
+                    ask_order=order,
+                    reason="Artifact-backed Firebase App Distribution needs the Firebase Android app id.",
+                    title="Firebase Android app id",
+                    question=(
+                        "Provide the Firebase Android app id used for App Distribution uploads "
+                        "(or add google-services.json with mobilesdk_app_id)."
+                    ),
+                    value_kind="firebase_app_id",
+                    prop="delivery.android.firebase_app_id",
+                ),
+            )
+        order += 1
+        if not _firebase_auth_configured() and not _op(("android", "firebase_distribution_auth")):
+            rows.append(
+                _row(
+                    id_="firebase_distribution_credentials",
+                    ask_order=order,
+                    reason=(
+                        "Firebase App Distribution automation needs FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS."
+                    ),
+                    title="Firebase distribution credentials",
+                    question="Configure Firebase/Google credentials for App Distribution uploads and tester delivery.",
+                    value_kind="secret_ref",
+                    prop="delivery.android.firebase_distribution_auth",
+                ),
+            )
 
     if "android" in platforms and need_store:
         order += 1
@@ -505,14 +668,14 @@ def collect_prerequisite_human_inputs(
                 ),
             )
         order += 1
-        if not _op(("android", "play_publisher_api")):
+        if not _google_credentials_configured() and not _op(("android", "play_publisher_api")):
             rows.append(
                 _row(
                     id_="google_play_publisher_credentials",
                     ask_order=order,
                     reason=(
-                        "Play production automation needs Google Play Developer API credentials "
-                        "with release permissions."
+                        "Play production automation needs GOOGLE_APPLICATION_CREDENTIALS or a "
+                        "service account JSON with release permissions."
                     ),
                     title="Play publisher API credentials",
                     question=("Provide a service account JSON (or CI secret reference) authorized for this Play app."),
@@ -546,6 +709,34 @@ def collect_prerequisite_human_inputs(
                     question="What HTTPS base URL (or hosting provider config) should beta/store web invites target?",
                     value_kind="url",
                     prop="delivery.web.hosting_endpoint",
+                ),
+            )
+        order += 1
+        if not (
+            _op(("web", "invite_email_configured"))
+            or os.environ.get("AKC_DELIVERY_INVITE_EMAIL_FROM", "").strip()
+            or os.environ.get("SENDGRID_API_KEY", "").strip()
+            or os.environ.get("POSTMARK_API_TOKEN", "").strip()
+            or os.environ.get("AKC_DELIVERY_SMTP_URL", "").strip()
+            or (
+                os.environ.get("SMTP_HOST", "").strip()
+                and os.environ.get("SMTP_USER", "").strip()
+                and os.environ.get("SMTP_PASS", "").strip()
+            )
+            or (
+                os.environ.get("AWS_SES_REGION", "").strip()
+                and (os.environ.get("AWS_ACCESS_KEY_ID", "").strip() or os.environ.get("AWS_PROFILE", "").strip())
+            )
+        ):
+            rows.append(
+                _row(
+                    id_="web_invite_email_transport",
+                    ask_order=order,
+                    reason="Hosted web invites need an outbound email transport.",
+                    title="Web invite email transport",
+                    question="Configure the invite email sender and transport used for hosted web delivery.",
+                    value_kind="secret_ref",
+                    prop="delivery.web.invite_email_transport",
                 ),
             )
 

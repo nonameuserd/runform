@@ -32,6 +32,10 @@ def _write_minimal_repo(root: Path) -> None:
         "from src import module\n\ndef test_smoke() -> None:\n    assert module.VALUE == 1\n",
         encoding="utf-8",
     )
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["."]\n',
+        encoding="utf-8",
+    )
 
 
 def test_compile_cli_generate_system_prompt_includes_skill_body(

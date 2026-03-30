@@ -15,7 +15,9 @@ from akc.compile.artifact_passes import (
     run_agent_coordination_pass,
     run_delivery_plan_pass,
     run_deployment_config_pass,
+    run_execution_workspace_pass,
     run_orchestration_spec_pass,
+    run_practical_backend_generation_pass,
     run_runtime_bundle_pass,
     run_system_design_pass,
 )
@@ -781,6 +783,126 @@ def test_run_delivery_plan_pass_blocks_on_production_approval_gate_when_inputs_s
     md = res.artifact_summary_md.text()
     assert "fail-closed" in md
     assert "production_manual_approval_gate" in md
+
+
+def test_run_practical_backend_generation_pass_emits_profile_ir_and_acceptance(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "svc",
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "dependencies": {"express": "^4.0.0", "prisma": "^5.0.0", "pino": "^9.0.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ir_doc = IRDocument(
+        tenant_id="t1",
+        repo_id="repo1",
+        nodes=(IRNode(id="api1", tenant_id="t1", kind="service", name="user api", properties={}),),
+    )
+    res = run_practical_backend_generation_pass(
+        run_id="run_1",
+        ir_document=ir_doc,
+        intent_spec=_intent_spec(allow_network=False),
+        project_root=tmp_path,
+        compile_succeeded=True,
+    )
+    assert len(res.artifacts) == 8
+    artifacts_by_path = {artifact.path: artifact for artifact in res.artifacts}
+    profile = json.loads(artifacts_by_path[".akc/backend/run_1.generation_profile.json"].text())
+    backend_ir = json.loads(artifacts_by_path[".akc/backend/run_1.backend_ir.json"].text())
+    contract_index = json.loads(artifacts_by_path[".akc/backend/run_1.backend_api_contract_index.json"].text())
+    openapi_contract = json.loads(artifacts_by_path[".akc/backend/run_1.api1.openapi.json"].text())
+    acceptance = json.loads(artifacts_by_path[".akc/backend/run_1.implementation_acceptance_contract.json"].text())
+    result = json.loads(artifacts_by_path[".akc/backend/run_1.practical_generation_result.json"].text())
+    assert validate_obj(obj=profile, kind="backend_generation_profile", version=1) == []
+    assert validate_obj(obj=backend_ir, kind="backend_ir", version=1) == []
+    assert validate_obj(obj=contract_index, kind="backend_api_contract_index", version=1) == []
+    assert validate_obj(obj=acceptance, kind="implementation_acceptance_contract", version=1) == []
+    assert validate_obj(obj=result, kind="practical_generation_result", version=1) == []
+    assert profile["selected_runtime_plugin"] == "typescript_node"
+    assert backend_ir["resources"][0]["api_surface"]["contract_format"] == "openapi_3_1"
+    assert backend_ir["resources"][0]["contract_sources"]
+    assert backend_ir["resources"][0]["contract_depth"] == "minimal"
+    assert contract_index["contract_refs"][0]["openapi_rel_path"].endswith(".api1.openapi.json")
+    assert contract_index["contract_refs"][0]["contract_depth"] == "minimal"
+    assert contract_index["contract_refs"][0]["operation_count"] == 2
+    assert openapi_contract["openapi"] == "3.1.0"
+    assert "paths" in openapi_contract
+    assert acceptance["proof_strategy"] == "contract_tests"
+    assert result["execution_workspace_role"] == "authoritative_generated_workspace"
+
+
+def test_run_runtime_bundle_pass_v5_carries_practical_backend_generation_summary(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "svc",
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "dependencies": {"express": "^4.0.0", "prisma": "^5.0.0", "pino": "^9.0.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    ir_doc = IRDocument(
+        tenant_id="tenant_a",
+        repo_id="repo_a",
+        nodes=(IRNode(id="api1", tenant_id="tenant_a", kind="service", name="user api", properties={}),),
+    )
+    intent = _intent_spec(allow_network=False)
+    practical = run_practical_backend_generation_pass(
+        run_id="run_v5",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        project_root=tmp_path,
+        compile_succeeded=True,
+    )
+    execution = run_execution_workspace_pass(
+        run_id="run_v5",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        delivery_plan_text=json.dumps({"targets": [{"target_id": "api1", "target_class": "backend_service"}]}),
+        project_root=tmp_path,
+        practical_backend_handoff=practical.handoff,
+    )
+    result = run_runtime_bundle_pass(
+        run_id="run_v5",
+        ir_document=ir_doc,
+        intent_spec=intent,
+        orchestration_spec_text=(
+            '{"run_id":"run_v5","tenant_id":"tenant_a","repo_id":"repo_a","steps":[{"inputs":{"ir_node_id":"api1"}}]}'
+        ),
+        coordination_spec_text=(
+            '{"run_id":"run_v5","tenant_id":"tenant_a","repo_id":"repo_a",'
+            '"orchestration_bindings":[{"orchestration_step_ids":["workflow_000"]}]}'
+        ),
+        execution_workspace_manifest_text=execution.artifact_manifest_json.text(),
+        runtime_bundle_schema_version=5,
+    )
+    bundle_obj = json.loads(result.artifact_json.text())
+    assert validate_obj(obj=bundle_obj, kind="runtime_bundle", version=5) == []
+    assert bundle_obj["execution_workspace_authority"] == {
+        "artifact_role": "authoritative_generated_workspace",
+        "generation_mode": "backend_ir_materialized_workspace",
+        "practical_generation_proof": True,
+    }
+    assert bundle_obj["practical_backend_generation"]["backend_ir_ref"]["path"].endswith(".backend_ir.json")
+    assert bundle_obj["practical_backend_generation"]["backend_api_contract_index_ref"]["path"].endswith(
+        ".backend_api_contract_index.json"
+    )
+    assert bundle_obj["practical_backend_generation"]["api_contract_refs"][0]["openapi_rel_path"].endswith(
+        ".api1.openapi.json"
+    )
+    assert bundle_obj["execution_workspace"]["artifact_role"] == "authoritative_generated_workspace"
 
 
 def test_run_runtime_bundle_pass_emits_versioned_runtime_bundle_schema() -> None:

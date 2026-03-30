@@ -13,6 +13,8 @@ from akc.artifacts.validate import validate_obj
 DeliveryPlatform: TypeAlias = Literal["web", "ios", "android"]
 ReleaseLane: TypeAlias = Literal["beta", "store"]
 ReleaseMode: TypeAlias = Literal["beta", "store", "both"]
+PackagingMode: TypeAlias = Literal["execute", "plan"]
+StoreSubmitMode: TypeAlias = Literal["auto", "manual"]
 
 RecipientDeliveryStatus: TypeAlias = Literal[
     "pending",

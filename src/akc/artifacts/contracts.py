@@ -35,6 +35,7 @@ def is_runtime_bundle_schema_id(value: str) -> bool:
         schema_id_for(kind="runtime_bundle", version=2),
         schema_id_for(kind="runtime_bundle", version=3),
         schema_id_for(kind="runtime_bundle", version=4),
+        schema_id_for(kind="runtime_bundle", version=5),
     )
 
 

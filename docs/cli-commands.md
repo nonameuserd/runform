@@ -4,6 +4,16 @@ This page summarizes the current `akc` command tree implemented under `src/akc/c
 
 For exact flags, run `akc <command> --help` or `uv run akc <command> --help`.
 
+## What’s missing to ship?
+
+Start with:
+
+```bash
+akc deliver preflight
+```
+
+`preflight` reports the exact repo/env/operator prerequisites missing for execute-mode delivery (web/iOS/Android) and store lanes when applicable.
+
 ## Top-level commands
 
 Current top-level commands:
@@ -27,6 +37,7 @@ Current top-level commands:
 - `control`
 - `control-bot`
 - `deliver`
+- `provision`
 - `fleet`
 - `view`
 
@@ -48,7 +59,8 @@ Creates `.akc/project.json` and, by default, a local compile policy stub under `
 
 Useful flags:
 
-- `--detect` to write `.akc/project_profile.json`
+- `--detect` to write `.akc/project_profile.json` (prints suggested `mutation_paths` when useful)
+- `--detect-respect-gitignore` with `--detect` to skip simple `.gitignore` directory tokens during scans
 - `--adoption-level` to store a progressive-adoption hint
 
 ### `akc assistant`
@@ -79,6 +91,8 @@ Key behaviors:
 ### `akc ingest`
 
 Ingests sources into a vector index.
+
+For **one runnable example per connector** (docs, codebase, openapi, messaging, MCP), see [`examples/README.md`](https://github.com/nonameuserd/runform/blob/main/examples/README.md).
 
 Current connectors:
 
@@ -208,8 +222,18 @@ Operational notes:
 - Git behavior is only active for `scoped_apply`; `artifact_only` never touches the work tree
 - If git flags are requested and `git` is unavailable, or `--apply-scope-root` is not a git repo, AKC fails closed instead of silently downgrading
 - Patch application still uses `patch(1)` with strict preflight and mutation-path confinement; Git is optional provenance and rollback hygiene around that path
+- Mixed and polyglot repositories are valid compile inputs; built-in authoritative backend materializers cover `typescript_node`, `python_fastapi`, `go`, `rust`, and `java`
+- External generator manifests under `.akc/backend_generators/` (or policy-configured manifest paths) remain the stable extension surface for custom runtimes and org-specific backend generators
 - Hosted LLM backends are opt-in; offline is still the default
 - Hosted backends fail closed unless `--llm-allow-network` or `AKC_LLM_ALLOW_NETWORK=1` is set
+
+Compile now also emits infrastructure-planning artifacts when a delivery plan indicates cloud provisioning context:
+
+- `infrastructure_synthesis` is an artifact pass after `delivery_plan`
+- compile writes `.akc/infra/<run_id>.infra_plan.json`
+- compile writes `.akc/infra/<run_id>.iac_manifest.json`
+- compile generates deterministic Terraform and AWS CDK workspaces under `.akc/infra/<run_id>/`
+- compile still stops at artifact emission plus optional `scoped_apply`; it does not mutate cloud resources
 
 ### `akc eval`
 
@@ -258,8 +282,11 @@ Current subcommands:
 
 Named-recipient delivery sessions and delivery lifecycle operations.
 
+If you only run one command first, run `akc deliver preflight`. It uses the same prerequisite probes as packaging/distribution and groups missing items so you can unblock shipping quickly.
+
 Current subcommands:
 
+- `preflight`
 - `status`
 - `events`
 - `resend`
@@ -273,8 +300,73 @@ Base command flags support creating a session directly with:
 - `--request`
 - `--recipient` or `--recipients-file`
 - `--compile`
+- `--packaging-mode`
+- `--store-submit`
 - `--platforms`
 - `--release-mode`
+
+Key delivery behaviors:
+
+- `akc deliver preflight` runs the same repo/env/operator prerequisite probes used by delivery packaging and distribution, then groups the missing items for Expo/EAS, App Store Connect/TestFlight, Firebase, and Play
+- `--compile` now prefers packaging in `execute` mode by default, then auto-falls back to an inspectable `plan` outcome when delivery/packaging prerequisites are missing
+- `--packaging-mode plan` is the explicit plan-only path; it stages outputs but skips automatic distribution
+- `--packaging-mode execute` is now the explicit fail-closed path when you want missing prerequisites to block instead of downgrading
+- `--store-submit auto` is the default for `store` and `both`; `beta` ignores store submission settings
+- submit JSON now includes a `journey` block and `compile_outputs` refs so the caller can see whether the run resolved to live distribution or an inspectable plan
+- submit JSON now also includes a structured `preflight` block instead of only a missing-count summary
+
+### `akc provision`
+
+Provision synthesized infrastructure from compile-emitted IaC artifacts.
+
+Delivery plans can include **backend, web, mobile, worker, integration, and shared infrastructure** targets; synthesis emits resources per target (public DNS/TLS only where `exposure_model.public` is true). A checked-in **full-stack** `delivery_plan` shape lives at [`examples/infrastructure/delivery_plan.fullstack.example.json`](https://github.com/nonameuserd/runform/blob/main/examples/infrastructure/delivery_plan.fullstack.example.json).
+
+Current subcommands:
+
+- `plan`
+- `apply`
+- `status`
+
+Base command flags:
+
+- `--project-dir`
+
+`akc provision plan`:
+
+- requires `--run-id`
+- accepts `--backend terraform|aws_cdk`
+- accepts `--environment staging|production`
+- accepts `--provision-id`
+- loads `.akc/infra/<run_id>.infra_plan.json` and `.akc/infra/<run_id>.iac_manifest.json`
+- validates provisioning readiness and backend/tool availability
+- records evidence under `.akc/provision/<provision_id>/plan.json` and `.akc/provision/<provision_id>/session.json`
+
+`akc provision apply`:
+
+- requires `--provision-id`
+- requires `--approve-production` for production sessions
+- re-checks the desired fingerprint before mutating infrastructure
+- records apply evidence under `.akc/provision/<provision_id>/apply.json`
+
+`akc provision status`:
+
+- accepts `--provision-id`
+- or resolves the latest provision session for `--run-id`
+- reads stored plan/apply/session artifacts without re-running provider tools
+
+Current backend behavior:
+
+- `terraform` runs `init -backend=false`, then `plan` during `akc provision plan`
+- `terraform` runs `apply -auto-approve` during `akc provision apply`
+- `aws_cdk` runs `synth`, then `diff --no-color` during `akc provision plan`
+- `aws_cdk` runs `deploy --require-approval never` during `akc provision apply`
+
+Important provisioning boundaries:
+
+- v1 provisioning scope is AWS-only
+- dual target means one AKC infra IR can emit both Terraform-native and AWS CDK workspaces
+- `local` remains non-cloud; provisioning is modeled for `staging` and `production`
+- production apply is fail-closed without explicit approval and a matching prior plan fingerprint
 
 ### `akc fleet`
 
@@ -307,6 +399,7 @@ If you are new to the repository, these are the least surprising places to start
 akc init --detect
 akc ingest --tenant-id demo --connector codebase --input . --embedder hash --index-backend sqlite
 akc compile --tenant-id demo --repo-id runform --outputs-root ./out --artifact-only
+akc provision plan --project-dir . --run-id <run_id> --backend terraform --environment staging
 akc verify --tenant-id demo --repo-id runform --outputs-root ./out
 akc view --tenant-id demo --repo-id runform --outputs-root ./out web
 ```

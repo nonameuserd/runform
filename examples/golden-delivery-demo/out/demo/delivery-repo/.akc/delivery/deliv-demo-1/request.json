@@ -1,0 +1,37 @@
+{
+  "app_stack": "expo",
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "delivery_version": "1.0.0",
+  "derived_intent_ref": null,
+  "parsed": {
+    "app_goal": "demo",
+    "delivery_mode": "beta",
+    "recipient_set": [
+      "alice@example.com",
+      "bob@example.com"
+    ],
+    "release_lanes": [
+      "beta"
+    ],
+    "requested_platforms": [
+      "web",
+      "ios"
+    ],
+    "warnings": []
+  },
+  "platforms": [
+    "web",
+    "ios"
+  ],
+  "recipients": [
+    "alice@example.com",
+    "bob@example.com"
+  ],
+  "release_mode": "beta",
+  "request_text": "Ship a demo build to two recipients.",
+  "required_accounts": [],
+  "required_human_inputs": [],
+  "schema_id": "akc:delivery_request:v1",
+  "schema_version": 1
+}

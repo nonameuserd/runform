@@ -1,0 +1,112 @@
+{
+  "delivery_paths": {},
+  "environments": [
+    "local",
+    "staging",
+    "production"
+  ],
+  "inputs_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+  "promotion_readiness": {
+    "status": "ready"
+  },
+  "repo_id": "fullstack-demo",
+  "required_human_inputs": [],
+  "run_id": "example-run",
+  "schema_id": "akc:delivery_plan:v1",
+  "schema_version": 1,
+  "targets": [
+    {
+      "target_id": "svc_api",
+      "name": "api backend",
+      "target_class": "backend_service",
+      "node_kind": "service",
+      "domain": "api.example.com",
+      "cloud_account": "acct-1",
+      "aws_account_id": "123456789012",
+      "aws_region": "us-east-1",
+      "route53_zone": "example.com",
+      "terraform_state_backend": "s3://infra-state/fullstack-demo",
+      "cdk_bootstrap_completed": true,
+      "cluster_destination": "eks-staging",
+      "depends_on": [
+        "infra_cache"
+      ],
+      "exposure_model": {
+        "public": true
+      },
+      "config_secrets_contract": {
+        "required_env": [],
+        "required_secrets": [
+          "API_TOKEN"
+        ]
+      }
+    },
+    {
+      "target_id": "svc_web",
+      "name": "web frontend",
+      "target_class": "web_app",
+      "node_kind": "service",
+      "domain": "app.example.com",
+      "cloud_account": "acct-1",
+      "aws_account_id": "123456789012",
+      "aws_region": "us-east-1",
+      "route53_zone": "example.com",
+      "terraform_state_backend": "s3://infra-state/fullstack-demo",
+      "cdk_bootstrap_completed": true,
+      "cluster_destination": "eks-staging",
+      "depends_on": [
+        "svc_api"
+      ],
+      "exposure_model": {
+        "public": true
+      },
+      "config_secrets_contract": {
+        "required_env": [],
+        "required_secrets": []
+      }
+    },
+    {
+      "target_id": "svc_mobile",
+      "name": "ios client",
+      "target_class": "mobile_client",
+      "node_kind": "service",
+      "cloud_account": "acct-1",
+      "aws_account_id": "123456789012",
+      "aws_region": "us-east-1",
+      "terraform_state_backend": "s3://infra-state/fullstack-demo",
+      "cdk_bootstrap_completed": true,
+      "cluster_destination": "eks-staging",
+      "depends_on": [
+        "svc_api"
+      ],
+      "exposure_model": {
+        "public": false
+      },
+      "config_secrets_contract": {
+        "required_env": [],
+        "required_secrets": []
+      }
+    },
+    {
+      "target_id": "infra_cache",
+      "name": "redis cache",
+      "target_class": "infrastructure_component",
+      "node_kind": "infrastructure",
+      "cloud_account": "acct-1",
+      "aws_account_id": "123456789012",
+      "aws_region": "us-east-1",
+      "terraform_state_backend": "s3://infra-state/fullstack-demo",
+      "cdk_bootstrap_completed": true,
+      "cluster_destination": "eks-staging",
+      "depends_on": [],
+      "exposure_model": {
+        "public": false
+      },
+      "config_secrets_contract": {
+        "required_env": [],
+        "required_secrets": []
+      }
+    }
+  ],
+  "tenant_id": "demo"
+}

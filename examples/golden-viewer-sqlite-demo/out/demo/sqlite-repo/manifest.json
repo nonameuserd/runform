@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    {
+      "media_type": "text/plain; charset=utf-8",
+      "metadata": {
+        "step_id": "853b4b41-6d17-4492-ba1b-022019ea9c22"
+      },
+      "path": ".akc/evidence/sqlite_demo.txt",
+      "sha256": "38e0719a38ecda32b1ea70cee9bee047b68a1f6e7d8233bfe1f714af8c7ef728",
+      "size_bytes": 42
+    }
+  ],
+  "metadata": null,
+  "name": "sqlite_viewer_demo",
+  "repo_id": "sqlite-repo",
+  "schema_id": "akc:manifest:v1",
+  "schema_version": 1,
+  "tenant_id": "demo"
+}

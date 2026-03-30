@@ -1,0 +1,35 @@
+{
+  "body": {
+    "entry": [
+      {
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messages": [
+                {
+                  "from": "15551234567",
+                  "id": "wamid.demo.signed",
+                  "text": {
+                    "body": "Signed message"
+                  },
+                  "timestamp": "1742900000",
+                  "type": "text"
+                }
+              ],
+              "metadata": {
+                "phone_number_id": "PN1"
+              }
+            }
+          }
+        ],
+        "id": "WABA1"
+      }
+    ],
+    "object": "whatsapp_business_account"
+  },
+  "headers": {
+    "X-Hub-Signature-256": "sha256=57419263ccba3bbc6640037956b67782197e25bb24d2e158bb137d35fa1c9983"
+  },
+  "raw_body": "{\"entry\":[{\"changes\":[{\"field\":\"messages\",\"value\":{\"messages\":[{\"from\":\"15551234567\",\"id\":\"wamid.demo.signed\",\"text\":{\"body\":\"Signed message\"},\"timestamp\":\"1742900000\",\"type\":\"text\"}],\"metadata\":{\"phone_number_id\":\"PN1\"}}}],\"id\":\"WABA1\"}],\"object\":\"whatsapp_business_account\"}"
+}

@@ -36,6 +36,12 @@ Input can be:
 - current CI/build/test commands
 - current infra/runtime shape
 
+Near-term implementation note:
+
+- repo adoption and detection should handle mixed/polyglot inputs
+- built-in authoritative backend materialization covers `typescript_node`, `python_fastapi`, `go`, `rust`, and `java`
+- external generator contracts remain the extension path for custom runtime families and organization-specific backend generators rather than silent fallback
+
 Required behavior:
 
 1. **Adopt, don't restart**

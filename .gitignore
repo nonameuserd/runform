@@ -8,6 +8,14 @@ build/
 dist/
 site/
 out/
+
+# Golden demo fixtures (unit tests load these; keep them versioned)
+!examples/golden-delivery-demo/out/
+!examples/golden-delivery-demo/out/**
+!examples/golden-viewer-demo/out/
+!examples/golden-viewer-demo/out/**
+!examples/golden-viewer-sqlite-demo/out/
+!examples/golden-viewer-sqlite-demo/out/**
 *.egg-info/
 *.egg
 
@@ -27,6 +35,22 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .akc/
+
+# Golden demo plan state / project metadata (see examples/golden-*-demo)
+!examples/golden-delivery-demo/.akc/
+!examples/golden-delivery-demo/.akc/**
+!examples/golden-viewer-demo/.akc/
+!examples/golden-viewer-demo/.akc/**
+!examples/golden-viewer-sqlite-demo/.akc/
+!examples/golden-viewer-sqlite-demo/.akc/**
+
+# Scoped memory/evidence under golden demo out/ trees (still matched by `.akc/` above)
+!examples/golden-delivery-demo/out/**/.akc/
+!examples/golden-delivery-demo/out/**/.akc/**
+!examples/golden-viewer-demo/out/**/.akc/
+!examples/golden-viewer-demo/out/**/.akc/**
+!examples/golden-viewer-sqlite-demo/out/**/.akc/
+!examples/golden-viewer-sqlite-demo/out/**/.akc/**
 .coverage
 htmlcov/
 

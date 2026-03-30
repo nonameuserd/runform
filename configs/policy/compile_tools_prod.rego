@@ -8,7 +8,7 @@ import rego.v1
 default allow := false
 default reason := "policy.opa.deny"
 
-allowed_actions := {"llm.complete", "executor.run"}
+allowed_actions := {"llm.complete", "executor.run", "compile.patch.apply"}
 allowed_executor_stages := {"tests_smoke", "tests_full"}
 
 approved_executor_repos := {
@@ -418,6 +418,13 @@ allow if {
   input.action == "executor.run"
   approved_executor_repos[input.scope.repo_id]
   allowed_executor_stages[input.context.stage]
+  not has_deny
+}
+
+allow if {
+  capability_matches
+  allowed_actions[input.action]
+  input.action == "compile.patch.apply"
   not has_deny
 }
 

@@ -109,11 +109,17 @@ def cmd_init(args: argparse.Namespace) -> int:
         try:
             from akc.adopt.detect import detect_project_profile
 
-            detected_profile = detect_project_profile(root=root)
+            detected_profile = detect_project_profile(
+                root=root,
+                respect_gitignore=bool(getattr(args, "detect_respect_gitignore", False)),
+            )
             profile_path = akc_dir / "project_profile.json"
             profile_text = detected_profile.to_json_str(indent=2)
             profile_path.write_text(profile_text, encoding="utf-8")
             print(f"  project_profile: {profile_path}")
+            hints = detected_profile.architecture_hints.get("suggested_mutation_paths")
+            if isinstance(hints, list) and hints:
+                print("  suggested_mutation_paths:", ", ".join(str(x) for x in hints))
         except Exception as exc:  # pragma: no cover (defensive; detection should be best-effort)
             print(f"akc init: project detection failed (continuing without profile): {exc}")
 
@@ -186,5 +192,10 @@ def register_init_parser(sub: Any) -> None:
         "--detect",
         action="store_true",
         help="Analyze the repository and emit .akc/project_profile.json",
+    )
+    init.add_argument(
+        "--detect-respect-gitignore",
+        action="store_true",
+        help="When combined with --detect, skip simple directory names listed in .gitignore during scans",
     )
     init.set_defaults(func=cmd_init)

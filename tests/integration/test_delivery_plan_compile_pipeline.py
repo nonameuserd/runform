@@ -6,7 +6,12 @@ from pathlib import Path
 import yaml
 
 from akc.artifacts.validate import validate_obj
-from akc.compile.artifact_passes import run_delivery_plan_pass, run_deployment_config_pass, run_runtime_bundle_pass
+from akc.compile.artifact_passes import (
+    run_delivery_plan_pass,
+    run_deployment_config_pass,
+    run_execution_workspace_pass,
+    run_runtime_bundle_pass,
+)
 from akc.intent import IntentSpecV1, OperatingBound, PolicyRef, SuccessCriterion
 from akc.ir import IRDocument, IRNode
 from akc.runtime.models import RuntimeBundle, RuntimeBundleRef, RuntimeContext
@@ -56,6 +61,13 @@ def test_golden_ir_compile_pipeline_delivery_plan_bundle_and_deployment_artifact
         orchestration_spec_text=orch,
         coordination_spec_text=coord,
         delivery_plan_text=dp.artifact_json.text(),
+        execution_workspace_manifest_text=run_execution_workspace_pass(
+            run_id=run_id,
+            ir_document=ir_document,
+            intent_spec=intent,
+            delivery_plan_text=dp.artifact_json.text(),
+            project_root=tmp_path,
+        ).artifact_manifest_json.text(),
     )
     assert dc.metadata.get("delivery_plan_ref") is not None
     paths = {dc.artifact_docker_compose.path, dc.artifact_k8s_deployment.path, dc.artifact_github_actions.path}
@@ -70,9 +82,17 @@ def test_golden_ir_compile_pipeline_delivery_plan_bundle_and_deployment_artifact
         orchestration_spec_text=orch,
         coordination_spec_text=coord,
         delivery_plan_text=dp.artifact_json.text(),
+        execution_workspace_manifest_text=run_execution_workspace_pass(
+            run_id=run_id,
+            ir_document=ir_document,
+            intent_spec=intent,
+            delivery_plan_text=dp.artifact_json.text(),
+            project_root=tmp_path,
+        ).artifact_manifest_json.text(),
     )
     bundle_obj = json.loads(bundle.artifact_json.text())
     assert bundle_obj.get("delivery_plan_ref", {}).get("path", "").endswith(".delivery_plan.json")
+    assert bundle_obj.get("execution_workspace_ref", {}).get("path", "").endswith(".execution_workspace_manifest.json")
     assert bundle_obj["promotion_readiness"]["status"] == "blocked"
 
     for art in [dp.artifact_json, dc.artifact_docker_compose, bundle.artifact_json]:

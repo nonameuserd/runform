@@ -1,0 +1,31 @@
+{
+  "created_at_unix_ms": 1774907537459,
+  "delivery_id": "deliv-demo-1",
+  "recipients": {
+    "alice@example.com": {
+      "email": "alice@example.com",
+      "invite_token_id": null,
+      "last_invite_sent_at_unix_ms": null,
+      "platforms": [
+        "web",
+        "ios"
+      ],
+      "resend_count": 0,
+      "status": "pending"
+    },
+    "bob@example.com": {
+      "email": "bob@example.com",
+      "invite_token_id": null,
+      "last_invite_sent_at_unix_ms": null,
+      "platforms": [
+        "web",
+        "ios"
+      ],
+      "resend_count": 0,
+      "status": "pending"
+    }
+  },
+  "schema_id": "akc:delivery_recipients:v1",
+  "schema_version": 1,
+  "updated_at_unix_ms": 1774907537459
+}

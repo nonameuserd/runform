@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "akc:runtime_plugin_decision:v1",
+  "title": "AKC practical backend runtime plugin decision",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "schema_id": {
+      "type": "string",
+      "default": "akc:runtime_plugin_decision:v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_family": {
+      "type": "string",
+      "minLength": 1
+    },
+    "maturity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supported_frameworks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_persistence_modes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_auth_modes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_job_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_observability_libraries": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_native_command_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "supported_languages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "unsupported_behavior": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plugin_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "materializer_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supports_authoritative_workspace": {
+      "type": "boolean"
+    },
+    "requested_by_policy": {
+      "type": "boolean"
+    },
+    "availability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "blocked_stage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_because": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "adoption_confidence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "adoption_readiness": {
+      "type": "string",
+      "enum": ["ready", "blocked"]
+    },
+    "blocked_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "run_id",
+    "tenant_id",
+    "repo_id",
+    "plugin_id",
+    "runtime_family",
+    "maturity",
+    "supported_frameworks",
+    "supported_persistence_modes",
+    "supported_auth_modes",
+    "supported_job_patterns",
+    "supported_observability_libraries",
+    "required_native_command_kinds",
+    "supported_languages",
+    "unsupported_behavior",
+    "plugin_source",
+    "materializer_kind",
+    "supports_authoritative_workspace",
+    "requested_by_policy",
+    "availability",
+    "blocked_stage",
+    "selected_because",
+    "adoption_confidence_score",
+    "adoption_readiness",
+    "blocked_reasons"
+  ]
+}

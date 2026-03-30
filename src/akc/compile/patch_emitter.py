@@ -125,6 +125,7 @@ def resolve_patch_candidate_from_prompt(
     last_generation_text: str | None = None,
     failure: FailureSummary | None = None,
     verifier_feedback: Mapping[str, Any] | None = None,
+    practical_context: Mapping[str, Any] | None = None,
     # Replay knobs:
     replay_mode: str,
     replay_manifest: RunManifest,
@@ -155,6 +156,7 @@ def resolve_patch_candidate_from_prompt(
             retrieved_context=retrieved_context,
             test_policy=test_policy,
             stage=stage,
+            practical_context=practical_context,
         )
     else:
         if step_title is None or last_generation_text is None or failure is None:
@@ -173,6 +175,7 @@ def resolve_patch_candidate_from_prompt(
             last_generation_text=last_generation_text,
             failure=failure,
             verifier_feedback=verifier_feedback,
+            practical_context=practical_context,
         )
 
     envelope = build_patch_artifact_prompt_envelope(

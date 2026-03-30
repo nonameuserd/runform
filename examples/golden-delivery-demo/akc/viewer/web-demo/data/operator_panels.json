@@ -1,0 +1,42 @@
+{
+  "autopilot": {
+    "available": false,
+    "latest_decision_relpath": null,
+    "latest_escalation_relpath": null,
+    "paths": {
+      "decisions_glob": ".akc/autopilot/decisions/*.decision.json",
+      "escalations_glob": ".akc/autopilot/escalations/*.json",
+      "state": ".akc/autopilot/state.json"
+    },
+    "schema_ids": {
+      "decision": "akc:autopilot_decision:v1",
+      "human_escalation": "akc:autopilot_human_escalation:v1"
+    },
+    "scope_state": null
+  },
+  "delivery_control_plane": {
+    "available": false
+  },
+  "forensics": null,
+  "playbook": null,
+  "profile_panel": {
+    "available": true,
+    "control_plane_links": {},
+    "developer_profile_decisions": null,
+    "developer_profile_decisions_source_relpath": null,
+    "developer_role_profile": null,
+    "scope_context": {
+      "control_followup_cli": "akc control runs show --tenant-id demo --repo-id delivery-repo --run-id 041d66f8-81e4-40fe-9cfb-03aef91c1ed2 --outputs-root /Users/dami/Documents/Runform/examples/golden-delivery-demo/out",
+      "doc_anchors": {
+        "emerging_role_golden_path": "docs/getting-started.md#emerging-role-golden-path-opt-in",
+        "scoped_realization": "docs/getting-started.md#opt-in-scoped-realization"
+      },
+      "outputs_root": "/Users/dami/Documents/Runform/examples/golden-delivery-demo/out",
+      "repo_id": "delivery-repo",
+      "run_id": "041d66f8-81e4-40fe-9cfb-03aef91c1ed2",
+      "tenant_id": "demo"
+    },
+    "trust_note": "Read-only profile/decisions snapshot; paths are relative to the tenant/repo outputs scope."
+  },
+  "trust_note": "Read-only summaries of local control-plane artifacts; paths are relative to the tenant/repo outputs tree (forensics) or outputs_root (playbook). No compile/runtime."
+}

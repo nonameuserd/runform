@@ -1,0 +1,41 @@
+{
+  "artifacts": [
+    {
+      "media_type": "text/x-diff; charset=utf-8",
+      "metadata": {
+        "kind": "patch_preview",
+        "step_id": "d3653dff-c880-43eb-adc5-d597e5d6344f"
+      },
+      "path": ".akc/artifacts/sample_patch.diff",
+      "sha256": "3cc15d31feffdecae8f1c26a64c0044f425672fd3771750b44cd9e0a5def0436",
+      "size_bytes": 79
+    },
+    {
+      "media_type": "application/json; charset=utf-8",
+      "metadata": {
+        "step_id": "1a74f87f-1d8b-4259-9fdf-cb9524ad0220"
+      },
+      "path": ".akc/tests/golden.tests.json",
+      "sha256": "df21b69eb0564e30d08d7ce929cbfe8b323b07df2de214ad76c2f28aee8bf423",
+      "size_bytes": 151
+    },
+    {
+      "media_type": "text/plain; charset=utf-8",
+      "metadata": {
+        "step_id": "1a74f87f-1d8b-4259-9fdf-cb9524ad0220",
+        "stream": "stdout"
+      },
+      "path": ".akc/tests/golden.stdout.txt",
+      "sha256": "b34eac0000358e4a000588605a9e31a9d7fd2f417b18d7bab2dedee495dbd0cb",
+      "size_bytes": 25
+    }
+  ],
+  "metadata": {
+    "description": "Checked-in snapshot for akc view demos."
+  },
+  "name": "golden_demo",
+  "repo_id": "golden-repo",
+  "schema_id": "akc:manifest:v1",
+  "schema_version": 1,
+  "tenant_id": "demo"
+}
