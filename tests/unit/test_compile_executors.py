@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -156,6 +157,7 @@ def test_docker_executor_builds_expected_docker_command(monkeypatch: pytest.Monk
     assert "PYTHONDONTWRITEBYTECODE=1" in cmd
     assert f"PYTHONPYCACHEPREFIX={ex.container_workdir}/.pycache" in cmd
     assert f"PYTEST_ADDOPTS=--override-ini=cache_dir={ex.container_workdir}/.pytest_cache" in cmd
+    assert f"PYTHONPATH={ex.container_workdir}" in cmd
     assert ex.image in cmd
     # The container workdir should be present and command appended.
     assert "-w" in cmd and ex.container_workdir in cmd
@@ -177,6 +179,40 @@ def test_docker_executor_rejects_cwd_escape(tmp_path: Path) -> None:
                 cwd=str(outside),
             ),
         )
+
+
+def test_docker_executor_prepends_pythonpath(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: dict[str, Any] = {}
+
+    def _fake_helper(
+        *,
+        command: list[str],
+        cwd: str,
+        env: Any,
+        stdin_text: Any,
+        timeout_s: Any,
+        preexec_fn: Any,
+        stdout_max_bytes: Any,
+        stderr_max_bytes: Any,
+    ) -> tuple[int, str, str, int]:
+        calls["cmd"] = command
+        return 0, "ok", "", 1
+
+    import akc.compile.executors as executors_mod
+
+    monkeypatch.setattr(executors_mod, "_run_subprocess_capture_output_with_limits", _fake_helper)
+
+    ex = DockerExecutor(work_root=tmp_path, image="python:3.12-slim")
+    scope = TenantRepoScope(tenant_id="t1", repo_id="repo1")
+    ex.run(
+        scope=scope,
+        request=ExecutionRequest(
+            command=["pytest", "-q"],
+            env={"PYTHONPATH": "/already/set"},
+        ),
+    )
+    joined = " ".join(calls["cmd"])
+    assert f"PYTHONPATH={ex.container_workdir}{os.pathsep}/already/set" in joined
 
 
 def test_docker_executor_returns_streaming_helper_outputs_and_respects_caps(
@@ -264,6 +300,7 @@ def test_docker_executor_run_dir_is_bind_mounted_writable_for_non_root_user(
     assert f"{str(run_dir.resolve())}:{ex.container_run_dir}:rw" in cmd
     assert f"HOME={ex.container_run_dir}" in cmd
     assert f"PYTEST_ADDOPTS=--override-ini=cache_dir={ex.container_run_dir}/.pytest_cache" in cmd
+    assert f"PYTHONPATH={ex.container_workdir}" in cmd
     assert (run_dir, 0o777) in chmod_calls
 
 
