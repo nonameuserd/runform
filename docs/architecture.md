@@ -122,6 +122,7 @@ Important characteristics:
 - policy mode can be `enforce` or `audit_only`
 - replay modes are explicit
 - compile-time skills and compile-time MCP integrations are opt-in
+- practical backend generation is fail-closed for authoritative workspaces unless runtime/language alignment, required native validation commands, repo anchors, and materializer support all pass
 
 Git integration exists inside this compile realization path. When `scoped_apply` is active, AKC can optionally create a topic branch before apply and commit the applied patch afterward. This is not a separate VCS subsystem: it is a git-aware wrapper around the existing fail-closed `patch(1)` apply flow, scoped to `apply_scope_root` and still bounded by mutation-path policy.
 

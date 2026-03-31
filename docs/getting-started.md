@@ -73,6 +73,8 @@ akc init --detect
 
 That also writes `.akc/project_profile.json` with detected toolchain and repository metadata.
 
+That profile feeds existing-codebase compile behavior such as native toolchain resolution and practical backend runtime selection. It does not, by itself, guarantee authoritative backend materialization: AKC still requires runtime/language alignment, required native validation commands, repo anchors, and materializer support before treating generated execution workspaces as authoritative.
+
 ## Safe local demo
 
 This path stays local and avoids working-tree writes.

@@ -76,6 +76,8 @@ def _normalize_language(language: str) -> str:
         return "rust"
     if raw in {"go", "golang"}:
         return "go"
+    if raw in {"java", "jdk"}:
+        return "java"
     if raw in {"node"}:
         return "javascript"
     return raw or "python"
@@ -174,6 +176,8 @@ def _command_language_hint(command: list[str] | tuple[str, ...] | None) -> str |
         return "rust"
     if head == "go":
         return "go"
+    if head in {"mvn", "mvnw", "./mvnw", "gradle", "gradlew", "./gradlew"}:
+        return "java"
     if head in {"node", "npm", "npx", "pnpm", "pnpx", "yarn", "bun", "turbo", "nx", "tsc", "eslint", "prettier"}:
         return "typescript" if any(token in joined for token in ("tsc", "typecheck", "typescript")) else "javascript"
     if head == "python" and "-m" in command and any(str(part) == "pytest" or "pytest" in str(part) for part in command):
@@ -182,6 +186,8 @@ def _command_language_hint(command: list[str] | tuple[str, ...] | None) -> str |
         return "rust"
     if "go test" in joined or "go build" in joined or "go vet" in joined:
         return "go"
+    if any(token in joined for token in ("mvn ", "mvnw", "gradle ", "gradlew", "spring-boot")):
+        return "java"
     if any(token in joined for token in ("pytest", "mypy", "pyright", "ruff")):
         return "python"
     if any(
@@ -209,6 +215,10 @@ def _package_manager_from_command(command: list[str] | tuple[str, ...] | None) -
         return "cargo"
     if head == "go":
         return "go"
+    if head in {"mvn", "mvnw", "./mvnw"}:
+        return "maven"
+    if head in {"gradle", "gradlew", "./gradlew"}:
+        return "gradle"
     return None
 
 
@@ -241,6 +251,13 @@ def _package_manager_from_evidence(*, language: str, package_managers: list[str]
     if language in {"go"}:
         if "go" in pm:
             return "go"
+        return None
+
+    if language in {"java"}:
+        if "maven" in pm:
+            return "maven"
+        if "gradle" in pm:
+            return "gradle"
         return None
 
     return None
@@ -381,6 +398,9 @@ def _install_command_for(*, root: Path, language: str, package_manager: str | No
     if language == "go" and package_manager == "go":
         return None
 
+    if language == "java":
+        return None
+
     return None
 
 
@@ -399,6 +419,8 @@ def _required_binaries_from_profile(profile: ToolchainProfile) -> list[str]:
         bins.add("cargo")
     elif lang == "go":
         bins.add("go")
+    elif lang == "java":
+        bins.add("java")
 
     if profile.package_manager:
         bins.add(profile.package_manager)
@@ -540,7 +562,46 @@ def _conventional_defaults(language: str, *, root: Path | None = None) -> Toolch
             package_manager="go",
             test_command=["go", "test", "./..."],
             typecheck_command=None,
-            build_command=None,
+            build_command=["go", "build", "./..."],
+            lint_command=None,
+            format_command=None,
+            install_command=None,
+            required_binaries=[],
+        )
+
+    if lang == "java":
+        gradle_wrapper = root / "gradlew" if root is not None else None
+        maven_wrapper = root / "mvnw" if root is not None else None
+        has_gradle = bool(
+            root is not None and ((root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file())
+        )
+        has_maven = bool(root is not None and (root / "pom.xml").is_file())
+        if gradle_wrapper is not None and gradle_wrapper.is_file():
+            pm = "gradle"
+            test = ["./gradlew", "test"]
+            build = ["./gradlew", "build"]
+        elif has_gradle:
+            pm = "gradle"
+            test = ["gradle", "test"]
+            build = ["gradle", "build"]
+        elif maven_wrapper is not None and maven_wrapper.is_file():
+            pm = "maven"
+            test = ["./mvnw", "test"]
+            build = ["./mvnw", "package"]
+        elif has_maven:
+            pm = "maven"
+            test = ["mvn", "test"]
+            build = ["mvn", "package"]
+        else:
+            pm = "maven"
+            test = ["mvn", "test"]
+            build = ["mvn", "package"]
+        return ToolchainProfile(
+            language="java",
+            package_manager=pm,
+            test_command=test,
+            typecheck_command=None,
+            build_command=build,
             lint_command=None,
             format_command=None,
             install_command=None,

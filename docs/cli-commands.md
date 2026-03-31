@@ -223,6 +223,8 @@ Operational notes:
 - If git flags are requested and `git` is unavailable, or `--apply-scope-root` is not a git repo, AKC fails closed instead of silently downgrading
 - Patch application still uses `patch(1)` with strict preflight and mutation-path confinement; Git is optional provenance and rollback hygiene around that path
 - Mixed and polyglot repositories are valid compile inputs; built-in authoritative backend materializers cover `typescript_node`, `python_fastapi`, `go`, `rust`, and `java`
+- Authoritative backend materialization is fail-closed unless the selected runtime matches detected repo languages, required native validation commands are available, repo anchors are present, and a materializer is available
+- Runtime policy can explicitly set `allow_runtime_language_override`, but that only relaxes the language/runtime mismatch check; missing native commands or materializer gaps still block authoritative output
 - External generator manifests under `.akc/backend_generators/` (or policy-configured manifest paths) remain the stable extension surface for custom runtimes and org-specific backend generators
 - Hosted LLM backends are opt-in; offline is still the default
 - Hosted backends fail closed unless `--llm-allow-network` or `AKC_LLM_ALLOW_NETWORK=1` is set

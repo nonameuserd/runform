@@ -1,7 +1,7 @@
 [project]
 name = "runform-akc"
 version = "0.1.0"
-description = "Agentic Knowledge Compiler — turn messy real-world information into executable knowledge"
+description = "A compiler that turns connected knowledge into code, workflows, and agents."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
