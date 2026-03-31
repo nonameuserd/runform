@@ -390,7 +390,7 @@ def test_practical_backend_context_blocks_typescript_authoritative_materializati
     assert result["status"] == "blocked"
     assert result["execution_workspace_role"] == "fallback_debug_reference"
     assert any(
-        "missing native validation commands required for authoritative materialization: typecheck" == reason
+        reason == "missing native validation commands required for authoritative materialization: typecheck"
         for reason in result["blocked_reasons"]
     )
 
@@ -402,7 +402,10 @@ def test_practical_backend_context_blocks_cross_language_runtime_without_policy_
         encoding="utf-8",
     )
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "api.py").write_text("def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n", encoding="utf-8")
+    (tmp_path / "src" / "api.py").write_text(
+        "def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n",
+        encoding="utf-8",
+    )
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'svc'\nversion = '0.1.0'\ndependencies = ['fastapi']\n",
         encoding="utf-8",
@@ -432,7 +435,10 @@ def test_practical_backend_context_allows_cross_language_override_only_when_poli
         encoding="utf-8",
     )
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "api.py").write_text("def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n", encoding="utf-8")
+    (tmp_path / "src" / "api.py").write_text(
+        "def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n",
+        encoding="utf-8",
+    )
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'svc'\nversion = '0.1.0'\ndependencies = ['fastapi']\n",
         encoding="utf-8",
@@ -452,7 +458,10 @@ def test_practical_backend_context_allows_cross_language_override_only_when_poli
         reason == "selected runtime plugin does not support detected project languages: python"
         for reason in result["blocked_reasons"]
     )
-    assert "policy allowed runtime/language override for authoritative materialization review" in profile["why_this_target"]
+    assert (
+        "policy allowed runtime/language override for authoritative materialization review"
+        in profile["why_this_target"]
+    )
 
 
 def test_practical_backend_context_selects_go_and_blocks_without_plugin(tmp_path: Path) -> None:
