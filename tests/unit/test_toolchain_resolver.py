@@ -110,6 +110,39 @@ def test_extracted_package_manager_infers_pnpm_install_command(tmp_path: Path) -
     assert resolved.install_command == ["pnpm", "install", "--frozen-lockfile"]
 
 
+def test_go_defaults_include_build_command(tmp_path: Path) -> None:
+    profile = _profile(
+        root=tmp_path,
+        languages=[LanguageEntry(language="go", percent=100.0, bytes=1, files=1)],
+        package_managers=["go"],
+        build_commands=[],
+    )
+
+    resolved = resolve_toolchain_profile(extracted_profile=profile, explicit_toolchain=None)
+    assert resolved.language == "go"
+    assert resolved.test_command == ["go", "test", "./..."]
+    assert resolved.build_command == ["go", "build", "./..."]
+
+
+def test_java_maven_defaults_resolve_from_manifest(tmp_path: Path) -> None:
+    (tmp_path / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+
+    profile = _profile(
+        root=tmp_path,
+        languages=[LanguageEntry(language="java", percent=100.0, bytes=1, files=1)],
+        package_managers=["maven"],
+        build_commands=[],
+    )
+
+    resolved = resolve_toolchain_profile(extracted_profile=profile, explicit_toolchain=None)
+    assert resolved.language == "java"
+    assert resolved.package_manager == "maven"
+    assert resolved.test_command == ["mvn", "test"]
+    assert resolved.build_command == ["mvn", "package"]
+    assert "java" in resolved.required_binaries
+    assert "mvn" in resolved.required_binaries
+
+
 def test_project_config_loads_toolchain_mapping(tmp_path: Path) -> None:
     (tmp_path / ".akc").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".akc" / "project.json").write_text(

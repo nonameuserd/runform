@@ -170,11 +170,12 @@ def test_build_execution_workspace_authoritative_mode_enriches_targets_and_contr
     (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
                 "name": "svc",
-                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint", "typecheck": "tsc --noEmit"},
                 "dependencies": {"express": "^4.0.0", "prisma": "^5.0.0", "pino": "^9.0.0"},
             }
         ),
@@ -236,11 +237,12 @@ def test_build_execution_workspace_generates_feature_modules_for_full_contracts(
     (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
                 "name": "svc",
-                "scripts": {"test": "pnpm test"},
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint", "typecheck": "tsc --noEmit"},
                 "dependencies": {"express": "^4.0.0"},
             }
         ),
@@ -323,11 +325,12 @@ def test_build_execution_workspace_uses_external_client_generator_when_configure
     (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
                 "name": "svc",
-                "scripts": {"test": "pnpm test"},
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint", "typecheck": "tsc --noEmit"},
                 "dependencies": {"express": "^4.0.0"},
             }
         ),
@@ -354,6 +357,111 @@ def test_build_execution_workspace_uses_external_client_generator_when_configure
         manifest["toolchain"]["client_binding_generator"]["additional_properties"]["useSingleRequestParameter"] is True
     )
     assert any(a.path.endswith("apps/universal/src/generated/api/api1/external/sdk.ts") for a in artifacts)
+
+
+def test_practical_backend_context_blocks_typescript_authoritative_materialization_without_typecheck(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "svc",
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "dependencies": {"express": "^4.0.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx = build_practical_backend_context(
+        run_id="run-ts-missing-typecheck",
+        ir_document=_ir(),
+        intent_spec=None,
+        project_root=tmp_path,
+        delivery_plan_obj={"targets": [{"target_id": "api1", "target_class": "backend_service"}]},
+        compile_succeeded=True,
+    )
+    result = ctx["practical_generation_result"]
+    assert result["status"] == "blocked"
+    assert result["execution_workspace_role"] == "fallback_debug_reference"
+    assert any(
+        reason == "missing native validation commands required for authoritative materialization: typecheck"
+        for reason in result["blocked_reasons"]
+    )
+
+
+def test_practical_backend_context_blocks_cross_language_runtime_without_policy_override(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "backend_generator_policy.json").write_text(
+        json.dumps({"runtime_preferences": ["go"]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "api.py").write_text(
+        "def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'svc'\nversion = '0.1.0'\ndependencies = ['fastapi']\n",
+        encoding="utf-8",
+    )
+
+    ctx = build_practical_backend_context(
+        run_id="run-cross-language-blocked",
+        ir_document=_ir(),
+        intent_spec=None,
+        project_root=tmp_path,
+        delivery_plan_obj={"targets": [{"target_id": "api1", "target_class": "backend_service"}]},
+        compile_succeeded=True,
+    )
+    decision = ctx["runtime_plugin_decision"]
+    result = ctx["practical_generation_result"]
+    assert decision["plugin_id"] == "go"
+    assert any(
+        reason == "selected runtime plugin does not support detected project languages: python"
+        for reason in result["blocked_reasons"]
+    )
+
+
+def test_practical_backend_context_allows_cross_language_override_only_when_policy_requests_it(tmp_path: Path) -> None:
+    (tmp_path / ".akc").mkdir(parents=True)
+    (tmp_path / ".akc" / "backend_generator_policy.json").write_text(
+        json.dumps({"runtime_preferences": ["go"], "allow_runtime_language_override": True}),
+        encoding="utf-8",
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "api.py").write_text(
+        "def handler() -> dict[str, str]:\n    return {'ok': 'yes'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'svc'\nversion = '0.1.0'\ndependencies = ['fastapi']\n",
+        encoding="utf-8",
+    )
+
+    ctx = build_practical_backend_context(
+        run_id="run-cross-language-override",
+        ir_document=_ir(),
+        intent_spec=None,
+        project_root=tmp_path,
+        delivery_plan_obj={"targets": [{"target_id": "api1", "target_class": "backend_service"}]},
+        compile_succeeded=True,
+    )
+    profile = ctx["backend_generation_profile"]
+    result = ctx["practical_generation_result"]
+    assert not any(
+        reason == "selected runtime plugin does not support detected project languages: python"
+        for reason in result["blocked_reasons"]
+    )
+    assert (
+        "policy allowed runtime/language override for authoritative materialization review"
+        in profile["why_this_target"]
+    )
 
 
 def test_practical_backend_context_selects_go_and_blocks_without_plugin(tmp_path: Path) -> None:

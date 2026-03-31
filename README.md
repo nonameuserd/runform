@@ -1,6 +1,6 @@
 # Agentic Knowledge Compiler (AKC)
 
-AKC is an **AI-native software factory** for turning project knowledge into buildable software.
+AKC is a compiler that turns connected knowledge into code, workflows, and agents.
 
 It grounds software generation in real project context: docs, codebases, OpenAPI specs, messaging exports, and MCP resources. Instead of stopping at a one-shot AI answer, AKC moves work through structured stages that can generate code and other artifacts, verify results, track evidence, and support runtime, delivery, and control-plane workflows.
 
