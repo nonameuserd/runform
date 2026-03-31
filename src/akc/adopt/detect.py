@@ -484,6 +484,10 @@ def _detect_package_managers(root: Path) -> list[str]:
         out.append("cargo")
     if _discover_repo_files(root, names=("go.mod",), max_files=24):
         out.append("go")
+    if _discover_repo_files(root, names=("pom.xml", "mvnw"), max_files=24):
+        out.append("maven")
+    if _discover_repo_files(root, names=("build.gradle", "build.gradle.kts", "gradlew"), max_files=24):
+        out.append("gradle")
     # De-duplicate while keeping order.
     seen: set[str] = set()
     deduped: list[str] = []

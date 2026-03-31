@@ -10,7 +10,26 @@ caller boundary; higher-level checks still constrain baselines and tenant scope.
 from __future__ import annotations
 
 import os.path
+import re
+from hashlib import sha256
 from pathlib import Path
+
+_ARTIFACT_TOKEN_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def sanitize_artifact_token(raw: str, *, label: str) -> str:
+    """Return a filesystem-safe single path segment for artifact names.
+
+    Values may originate from external inputs (plan_id, step_id, run_id).  Only
+    allowlisted tokens are used verbatim; otherwise a short stable hash replaces
+    the input so path construction cannot be steered via ``..`` or separators.
+    """
+
+    s = str(raw).strip()
+    if _ARTIFACT_TOKEN_RE.match(s) and "/" not in s and "\\" not in s:
+        return s
+    digest = sha256(s.encode("utf-8")).hexdigest()[:16]
+    return f"{label}_{digest}"
 
 
 def safe_resolve_path(raw: str | Path) -> Path:
@@ -41,6 +60,16 @@ def safe_resolve_scoped_path(root: str | Path, *segments: str) -> Path:
     root_prefix = str(root_resolved) + os.sep
     if final != str(root_resolved) and not final.startswith(root_prefix):
         raise ValueError("scoped path escapes allowed root")
+    return Path(final)
+
+
+def require_path_under_resolved_root(path: str | Path, *, root: str | Path) -> Path:
+    """Return ``realpath(path)`` if it stays under the resolved *root*, else raise."""
+    root_resolved = safe_resolve_path(root)
+    final = os.path.realpath(str(path))
+    root_prefix = str(root_resolved) + os.sep
+    if final != str(root_resolved) and not final.startswith(root_prefix):
+        raise ValueError("path escapes allowed root")
     return Path(final)
 
 

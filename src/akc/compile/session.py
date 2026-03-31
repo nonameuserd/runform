@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -89,7 +88,7 @@ from akc.memory.why_graph import WhyGraphStore
 from akc.outputs.emitters import Emitter, JsonManifestEmitter
 from akc.outputs.models import OutputArtifact, OutputBundle
 from akc.pass_registry import CONTROLLER_LOOP_PASS_ORDER, assert_expected_artifact_pass_order
-from akc.path_security import safe_resolve_path, safe_resolve_scoped_path
+from akc.path_security import safe_resolve_path, safe_resolve_scoped_path, sanitize_artifact_token
 from akc.promotion import (
     canonical_sha256,
     latest_allow_decision_for_action,
@@ -113,22 +112,7 @@ from akc.run.loader import find_latest_run_manifest, load_run_manifest
 from akc.run.time_compression import derive_time_compression_metrics
 from akc.utils.fingerprint import stable_json_fingerprint
 
-_ARTIFACT_TOKEN_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-def _sanitize_artifact_token(raw: str, *, label: str) -> str:
-    """Return a filesystem-safe token for artifact paths.
-
-    Tokens may be influenced by external inputs (e.g. plan_id, step_id). We avoid letting
-    those inputs shape filesystem paths by enforcing a strict allowlist. If a value does
-    not match the allowlist, we fall back to a short stable hash.
-    """
-    s = str(raw).strip()
-    if _ARTIFACT_TOKEN_RE.match(s) and "/" not in s and "\\" not in s:
-        return s
-    digest = sha256(s.encode("utf-8")).hexdigest()[:16]
-    return f"{label}_{digest}"
-
+_sanitize_artifact_token = sanitize_artifact_token
 
 logger = logging.getLogger(__name__)
 

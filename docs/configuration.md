@@ -125,7 +125,8 @@ AKC now separates backend detection from backend materialization:
 - mixed or polyglot repositories are valid compile inputs
 - built-in authoritative backend materializers now cover `typescript_node`, `python_fastapi`, `go`, `rust`, and `java`
 - external generator manifests remain the stable extension path for custom runtimes, organization-specific generators, or overriding the builtin output contract
-- when a requested runtime has no installed materializer, compile fails closed for authoritative materialization and emits fallback diagnostic artifacts instead of silently widening to another runtime
+- authoritative materialization now also requires detected-language alignment, the plugin's required native validation commands, repo anchors, and materializer support to line up
+- when a requested runtime has no installed materializer, or the repo cannot justify those readiness checks, compile fails closed for authoritative materialization and emits fallback diagnostic artifacts instead of silently widening to another runtime
 
 Repo-local external generator manifests are JSON files matched by `backend_generator_plugin_manifest.v1` and discovered from:
 
@@ -140,12 +141,17 @@ The policy file for this surface is `.akc/backend_generator_policy.json` (or the
 - `runtime_preferences`
 - `allowed_target_runtimes`
 - `disallowed_target_runtimes`
+- `allow_runtime_language_override`
 - `eligible_repo_paths`
 - `ignored_repo_paths`
 - `plugin_manifest_paths`
 - `plugin_manifest_dirs`
 - `minimum_adoption_confidence`
 - `fallback_mode`
+
+`allow_runtime_language_override` defaults to `false`. When left unset, an explicitly preferred runtime still fails closed for authoritative materialization if its supported languages do not match the repo's detected project languages.
+
+This override only relaxes the runtime-versus-language mismatch. It does **not** bypass missing required native validation commands, repo-anchor checks, confidence thresholds, or materializer availability.
 
 ## Infrastructure synthesis and provisioning
 

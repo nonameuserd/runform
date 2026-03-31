@@ -95,7 +95,12 @@ from akc.memory.models import (
 from akc.memory.plan_state import PlanStateStore
 from akc.memory.why_conflicts import enrich_conflict_reports_from_mediation
 from akc.memory.why_graph import ConflictDetector
-from akc.path_security import safe_resolve_scoped_path
+from akc.path_security import (
+    require_path_under_resolved_root,
+    safe_resolve_path,
+    safe_resolve_scoped_path,
+    sanitize_artifact_token,
+)
 from akc.promotion import intent_declares_deployable_objective
 from akc.run.intent_replay_mandates import mandatory_partial_replay_passes_for_success_criteria
 from akc.run.manifest import McpReplayEvent, ReplayMode, RunManifest
@@ -985,16 +990,20 @@ def run_compile_loop(
         and isinstance(plan.id, str)
         and isinstance(step_id, str)
     ):
+        plan_seg = sanitize_artifact_token(plan.id, label="plan_id")
+        step_seg = sanitize_artifact_token(step_id, label="step_id")
+        artifact_root = safe_resolve_path(knowledge_artifact_root)
         target = safe_resolve_scoped_path(
-            Path(knowledge_artifact_root),
+            artifact_root,
             ".akc",
             "knowledge",
             "memory_compaction",
-            f"{plan.id}_{step_id}.json",
+            f"{plan_seg}_{step_seg}.json",
         )
+        target = require_path_under_resolved_root(target, root=artifact_root)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(dict(compaction_payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        compaction_ref = str(target.relative_to(Path(knowledge_artifact_root))).replace("\\", "/")
+        compaction_ref = str(target.relative_to(artifact_root)).replace("\\", "/")
     plan = _set_step_outputs(
         plan=plan,
         step_id=step_id,

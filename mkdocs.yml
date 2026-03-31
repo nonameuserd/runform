@@ -1,6 +1,6 @@
 # MkDocs site for GitHub Pages — see .github/workflows/docs.yml
 site_name: Agentic Knowledge Compiler
-site_description: Documentation for the AKC CLI, architecture, and operator workflows
+site_description: A compiler that turns connected knowledge into code, workflows, and agents. Documentation for the AKC CLI, architecture, and operator workflows.
 site_url: https://nonameuserd.github.io/runform/
 repo_url: https://github.com/nonameuserd/runform
 repo_name: nonameuserd/runform
@@ -57,6 +57,10 @@ markdown_extensions:
 
 plugins:
   - search
+
+# Ensure ``pymdownx.superfences`` is ordered before ``fenced_code`` (see ``mkdocs_hooks.py``).
+hooks:
+  - mkdocs_hooks.py
 
 extra:
   social:

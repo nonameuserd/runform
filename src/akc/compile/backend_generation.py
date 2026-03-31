@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from akc.adopt.detect import detect_project_profile
 from akc.adopt.profile import BuildCommand, ProjectProfile
+from akc.adopt.toolchain import resolve_toolchain_profile
 from akc.ir import IRDocument, IRNode
 from akc.memory.models import JSONValue
 from akc.utils.fingerprint import stable_json_fingerprint
@@ -260,11 +261,103 @@ def _build_command_to_json(cmd: BuildCommand) -> dict[str, JSONValue]:
     }
 
 
+def _normalize_language_name(language: str) -> str:
+    raw = str(language).strip().lower()
+    if raw in {"py", "python3", "python"}:
+        return "python"
+    if raw in {"ts", "typescript"}:
+        return "typescript"
+    if raw in {"js", "javascript", "node"}:
+        return "javascript"
+    if raw in {"rs", "rust"}:
+        return "rust"
+    if raw in {"go", "golang"}:
+        return "go"
+    if raw in {"java", "jdk"}:
+        return "java"
+    return raw
+
+
+def _policy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _detected_language_names(project_profile: ProjectProfile | None) -> tuple[str, ...]:
+    if project_profile is None:
+        return ()
+    out: list[str] = []
+    for row in project_profile.languages:
+        normalized = _normalize_language_name(row.language)
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return tuple(out)
+
+
+def _effective_native_command_rows(project_profile: ProjectProfile | None) -> list[dict[str, JSONValue]]:
+    rows: list[dict[str, JSONValue]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    if project_profile is not None:
+        for cmd in project_profile.build_commands:
+            command = tuple(str(part).strip() for part in cmd.command if str(part).strip())
+            if not command:
+                continue
+            key = (str(cmd.kind).strip(), command)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(_build_command_to_json(cmd))
+        if project_profile.languages or project_profile.package_managers or project_profile.build_commands:
+            try:
+                resolved = resolve_toolchain_profile(extracted_profile=project_profile, explicit_toolchain=None)
+            except Exception:
+                resolved = None
+            if resolved is not None:
+                for kind, command in (
+                    ("test", resolved.test_command),
+                    ("typecheck", resolved.typecheck_command),
+                    ("build", resolved.build_command),
+                    ("lint", resolved.lint_command),
+                    ("format", resolved.format_command),
+                ):
+                    if not command:
+                        continue
+                    normalized_command = tuple(str(part).strip() for part in command if str(part).strip())
+                    if not normalized_command:
+                        continue
+                    key = (kind, normalized_command)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(
+                        {
+                            "kind": kind,
+                            "command": cast(JSONValue, list(normalized_command)),
+                            "source": "resolved_toolchain",
+                        }
+                    )
+    return rows
+
+
+def _required_native_command_kinds(
+    *,
+    plugin: BackendRuntimePlugin,
+    detected_languages: Sequence[str],
+) -> tuple[str, ...]:
+    required = [str(kind).strip() for kind in plugin.required_native_command_kinds if str(kind).strip()]
+    language_set = {str(language).strip() for language in detected_languages if str(language).strip()}
+    if plugin.plugin_id == "typescript_node" and "typescript" not in language_set and "javascript" in language_set:
+        required = [kind for kind in required if kind != "typecheck"]
+    return tuple(dict.fromkeys(required))
+
+
 def load_backend_generator_policy(*, project_root: Path | None) -> dict[str, Any]:
     default = {
         "runtime_preferences": [],
         "allowed_target_runtimes": [],
         "disallowed_target_runtimes": [],
+        "allow_runtime_language_override": False,
         "eligible_repo_paths": [],
         "ignored_repo_paths": [],
         "plugin_manifest_paths": [],
@@ -1604,6 +1697,9 @@ def build_practical_backend_context(
 ) -> dict[str, Any]:
     project_profile = detect_project_profile(root=project_root) if project_root is not None else None
     policy = load_backend_generator_policy(project_root=project_root)
+    detected_languages = _detected_language_names(project_profile)
+    allow_runtime_language_override = _policy_flag(policy.get("allow_runtime_language_override"))
+    effective_native_commands = _effective_native_command_rows(project_profile)
     text_markers = _project_text_markers(project_root)
     frameworks = _framework_rows(markers=text_markers)
     persistence = _marker_rows(markers=text_markers, source_markers=_PERSISTENCE_MARKERS)
@@ -1611,6 +1707,7 @@ def build_practical_backend_context(
     transport = _marker_rows(markers=text_markers, source_markers=_TRANSPORT_MARKERS)
     anchors = _repo_anchor_candidates(project_root=project_root, policy=policy)
     topology = _test_topology(project_root=project_root, project_profile=project_profile)
+    topology["native_commands"] = cast(JSONValue, effective_native_commands)
     selected_plugin, requested_by_policy = _select_runtime_plugin(
         project_profile=project_profile,
         frameworks=frameworks,
@@ -1634,8 +1731,30 @@ def build_practical_backend_context(
         plugin=plugin,
         persistence_strategy=persistence_strategy,
     )
+    required_native_command_kinds = _required_native_command_kinds(
+        plugin=plugin,
+        detected_languages=detected_languages,
+    )
+    available_native_command_kinds = {
+        str(row.get("kind", "")).strip()
+        for row in effective_native_commands
+        if isinstance(row, Mapping) and str(row.get("kind", "")).strip()
+    }
+    missing_required_native_command_kinds = [
+        kind for kind in required_native_command_kinds if kind not in available_native_command_kinds
+    ]
     min_conf = float(policy.get("minimum_adoption_confidence", 0.45) or 0.45)
     blocked_reasons: list[str] = []
+    if plugin.supported_languages:
+        supported_languages = {_normalize_language_name(language) for language in plugin.supported_languages}
+        if detected_languages and not supported_languages.intersection(detected_languages):
+            if allow_runtime_language_override and requested_by_policy:
+                pass
+            else:
+                blocked_reasons.append(
+                    "selected runtime plugin does not support detected project languages: "
+                    + ", ".join(detected_languages)
+                )
     if not anchors:
         blocked_reasons.append("no safe repo anchors detected")
     if persistence_strategy == "blocked":
@@ -1646,6 +1765,11 @@ def build_practical_backend_context(
         blocked_reasons.append(
             f"selected runtime plugin cannot emit authoritative workspaces: {selected_plugin.plugin_id}"
         )
+    if missing_required_native_command_kinds:
+        blocked_reasons.append(
+            "missing native validation commands required for authoritative materialization: "
+            + ", ".join(missing_required_native_command_kinds)
+        )
     blocked_reasons.extend(materializer.diagnostics)
     if confidence < min_conf:
         blocked_reasons.append("repo adoption confidence below configured minimum")
@@ -1654,6 +1778,10 @@ def build_practical_backend_context(
     why_this_target = [*persistence_reasons]
     if requested_by_policy:
         why_this_target.append("selected runtime plugin requested by policy")
+    if allow_runtime_language_override and requested_by_policy and plugin.supported_languages:
+        supported_languages = {_normalize_language_name(language) for language in plugin.supported_languages}
+        if detected_languages and not supported_languages.intersection(detected_languages):
+            why_this_target.append("policy allowed runtime/language override for authoritative materialization review")
     if frameworks:
         why_this_target.append("framework markers align with selected runtime plugin")
     if anchors:
@@ -1664,6 +1792,7 @@ def build_practical_backend_context(
         "repo_id": ir_document.repo_id,
         "goal_statement": _goal_statement(intent_spec),
         "project_root": str(project_root) if project_root is not None else None,
+        "detected_language_set": list(detected_languages),
         "detected_languages": (
             [
                 {
@@ -1676,11 +1805,7 @@ def build_practical_backend_context(
                 for row in (project_profile.languages if project_profile is not None else [])
             ]
         ),
-        "native_build_commands": (
-            [_build_command_to_json(cmd) for cmd in project_profile.build_commands]
-            if project_profile is not None
-            else []
-        ),
+        "native_build_commands": effective_native_commands,
         "detected_frameworks": frameworks,
         "persistence_markers": persistence,
         "observability_markers": observability,
@@ -1693,6 +1818,8 @@ def build_practical_backend_context(
         "adoption_confidence_score": confidence,
         "adoption_readiness": readiness,
         "blocked_reasons": blocked_reasons,
+        "required_native_command_kinds": list(required_native_command_kinds),
+        "missing_required_native_command_kinds": missing_required_native_command_kinds,
         "why_this_target": why_this_target,
         "generator_policy": dict(policy),
         "plugin_manifest_diagnostics": list(materializer.diagnostics),
@@ -1872,7 +1999,7 @@ def build_practical_backend_context(
     required_commands = [
         row
         for row in native_commands
-        if str(row.get("kind", "")).strip() in set(plugin.required_native_command_kinds).union({"test"})
+        if str(row.get("kind", "")).strip() in set(required_native_command_kinds).union({"test"})
     ]
     proof_command: list[str] | None = None
     if required_commands:
@@ -1898,6 +2025,7 @@ def build_practical_backend_context(
         "repo_id": ir_document.repo_id,
         **plugin.to_json_obj(),
         **materializer.to_json_obj(),
+        "required_native_command_kinds": list(required_native_command_kinds),
         "selected_because": why_this_target,
         "adoption_confidence_score": confidence,
         "adoption_readiness": readiness,

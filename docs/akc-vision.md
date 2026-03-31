@@ -2,7 +2,7 @@
 
 ## One-Line Definition
 
-**Software that compiles intent and knowledge into fully working, evolving systems.**
+**A compiler that turns connected knowledge into code, workflows, and agents.**
 
 ---
 
@@ -275,6 +275,6 @@ Define what agents are allowed to do
 
 ## Final Framing
 
-> Software that compiles intent and knowledge into fully working, evolving systems.
+> A compiler that turns connected knowledge into code, workflows, and agents.
 
 ---

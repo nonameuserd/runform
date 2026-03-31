@@ -790,11 +790,12 @@ def test_run_practical_backend_generation_pass_emits_profile_ir_and_acceptance(t
     (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
                 "name": "svc",
-                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint", "typecheck": "tsc --noEmit"},
                 "dependencies": {"express": "^4.0.0", "prisma": "^5.0.0", "pino": "^9.0.0"},
             }
         ),
@@ -843,11 +844,12 @@ def test_run_runtime_bundle_pass_v5_carries_practical_backend_generation_summary
     (tmp_path / "src" / "userController.ts").write_text("export const x = 1;\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "api_smoke.test.ts").write_text("it('smoke', () => {});\n", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"target":"ES2022"}}\n', encoding="utf-8")
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
                 "name": "svc",
-                "scripts": {"test": "pnpm test", "lint": "pnpm lint"},
+                "scripts": {"test": "pnpm test", "lint": "pnpm lint", "typecheck": "tsc --noEmit"},
                 "dependencies": {"express": "^4.0.0", "prisma": "^5.0.0", "pino": "^9.0.0"},
             }
         ),
