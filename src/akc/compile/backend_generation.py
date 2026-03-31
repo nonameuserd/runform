@@ -314,16 +314,16 @@ def _effective_native_command_rows(project_profile: ProjectProfile | None) -> li
             except Exception:
                 resolved = None
             if resolved is not None:
-                for kind, command in (
+                for kind, raw_command in (
                     ("test", resolved.test_command),
                     ("typecheck", resolved.typecheck_command),
                     ("build", resolved.build_command),
                     ("lint", resolved.lint_command),
                     ("format", resolved.format_command),
                 ):
-                    if not command:
+                    if not raw_command:
                         continue
-                    normalized_command = tuple(str(part).strip() for part in command if str(part).strip())
+                    normalized_command = tuple(str(part).strip() for part in raw_command if str(part).strip())
                     if not normalized_command:
                         continue
                     key = (kind, normalized_command)
